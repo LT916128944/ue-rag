@@ -1,0 +1,193 @@
+{
+  "stamp": "20261015-213308",
+  "profile": "pipeline",
+  "heads": {
+    "ue": {
+      "ok": true,
+      "head": "dadda2ca5400ab4a1ab3ad4099244ca0b30119b6",
+      "error": ""
+    },
+    "rag": {
+      "ok": true,
+      "head": "739850706725a12c26057379a06aece3d251d9d3",
+      "error": ""
+    }
+  },
+  "editor_open": true,
+  "source_clean": true,
+  "rag_clean": true,
+  "counted_ran": 3,
+  "counted_ok": 3,
+  "ran": [
+    "bp-sphere-compile",
+    "bp-gamemode-compile",
+    "bp-testpawn-compile"
+  ],
+  "not_built": [
+    "读属性：editor_assert 只比对 location，没有属性裁判，不编一条过不了的任务。",
+    "放置：新实例会让 find_actors 不唯一，现有裁判停在「Actor 不唯一」，不编。",
+    "材质、通用改蓝图图：开关缺省关闭，不编。",
+    "更多蓝图编译：索引里的蓝图只有 BP_Gun、BP_Sphere、BP_GameMode、BP_TestPawn。",
+    "第二处编译错误：inject_typo 写死 TestActor.cpp 的 TestPrintDebugInfo，不复制一条假修复。"
+  ],
+  "notes": [],
+  "rows": [
+    {
+      "id": "bp-gun-compile",
+      "category": "blueprint_compile",
+      "counts": true,
+      "reset": "readonly",
+      "human_compare": true,
+      "profile": "agent",
+      "ok": null,
+      "retry_count": null,
+      "tool_calls": null,
+      "elapsed": null,
+      "prompt_tokens": null,
+      "completion_tokens": null
+    },
+    {
+      "id": "bp-sphere-compile",
+      "category": "blueprint_compile",
+      "counts": true,
+      "reset": "readonly",
+      "human_compare": true,
+      "profile": "pipeline",
+      "ok": true,
+      "retry_count": 0,
+      "tool_calls": 0,
+      "elapsed": 1.115,
+      "prompt_tokens": null,
+      "completion_tokens": null,
+      "error": null
+    },
+    {
+      "id": "bp-gamemode-compile",
+      "category": "blueprint_compile",
+      "counts": true,
+      "reset": "readonly",
+      "human_compare": false,
+      "profile": "pipeline",
+      "ok": true,
+      "retry_count": 0,
+      "tool_calls": 0,
+      "elapsed": 0.27,
+      "prompt_tokens": null,
+      "completion_tokens": null,
+      "error": null
+    },
+    {
+      "id": "bp-testpawn-compile",
+      "category": "blueprint_compile",
+      "counts": true,
+      "reset": "readonly",
+      "human_compare": false,
+      "profile": "pipeline",
+      "ok": true,
+      "retry_count": 0,
+      "tool_calls": 0,
+      "elapsed": 0.327,
+      "prompt_tokens": null,
+      "completion_tokens": null,
+      "error": null
+    },
+    {
+      "id": "cpp-build-existing",
+      "category": "cpp_build",
+      "counts": true,
+      "reset": "readonly",
+      "human_compare": true,
+      "profile": "slow",
+      "ok": null,
+      "retry_count": null,
+      "tool_calls": null,
+      "elapsed": null,
+      "prompt_tokens": null,
+      "completion_tokens": null
+    },
+    {
+      "id": "cpp-typo",
+      "category": "cpp_fix",
+      "counts": true,
+      "reset": "self_restore",
+      "human_compare": true,
+      "profile": "agent",
+      "ok": null,
+      "retry_count": null,
+      "tool_calls": null,
+      "elapsed": null,
+      "prompt_tokens": null,
+      "completion_tokens": null
+    },
+    {
+      "id": "editor-cube",
+      "category": "actor_move",
+      "counts": false,
+      "reset": "unsaved_level",
+      "human_compare": true,
+      "profile": "agent",
+      "ok": null,
+      "retry_count": null,
+      "tool_calls": null,
+      "elapsed": null,
+      "prompt_tokens": null,
+      "completion_tokens": null
+    },
+    {
+      "id": "move-plane",
+      "category": "actor_move",
+      "counts": false,
+      "reset": "unsaved_level",
+      "human_compare": false,
+      "profile": "agent",
+      "ok": null,
+      "retry_count": null,
+      "tool_calls": null,
+      "elapsed": null,
+      "prompt_tokens": null,
+      "completion_tokens": null
+    },
+    {
+      "id": "move-player-start",
+      "category": "actor_move",
+      "counts": false,
+      "reset": "unsaved_level",
+      "human_compare": false,
+      "profile": "agent",
+      "ok": null,
+      "retry_count": null,
+      "tool_calls": null,
+      "elapsed": null,
+      "prompt_tokens": null,
+      "completion_tokens": null
+    },
+    {
+      "id": "move-directional-light",
+      "category": "actor_move",
+      "counts": false,
+      "reset": "unsaved_level",
+      "human_compare": false,
+      "profile": "agent",
+      "ok": null,
+      "retry_count": null,
+      "tool_calls": null,
+      "elapsed": null,
+      "prompt_tokens": null,
+      "completion_tokens": null
+    },
+    {
+      "id": "move-bp-gun-test",
+      "category": "actor_move",
+      "counts": false,
+      "reset": "unsaved_level",
+      "human_compare": false,
+      "profile": "agent",
+      "ok": null,
+      "retry_count": null,
+      "tool_calls": null,
+      "elapsed": null,
+      "prompt_tokens": null,
+      "completion_tokens": null
+    }
+  ]
+}

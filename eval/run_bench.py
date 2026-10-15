@@ -163,9 +163,11 @@ def _select(tasks: list[dict], profile: str) -> list[dict]:
     return []
 
 
-def _blank(value) -> str:
-    if value is None or value == "":
+def _metric(ran: bool, value) -> str:
+    if not ran:
         return "未跑"
+    if value is None or value == "":
+        return ""
     return str(value)
 
 
@@ -190,10 +192,11 @@ def write_report(payload: dict) -> Path:
         "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
     for row in payload["rows"]:
+        ran = row.get("ok") is not None
         lines.append(
             f"| {row['id']} | {row['category']} | {row['counts']} | {row['reset']} | "
-            f"{_blank(row.get('ok'))} | {_blank(row.get('retry_count'))} | {_blank(row.get('tool_calls'))} | "
-            f"{_blank(row.get('elapsed'))} | {_blank(row.get('prompt_tokens'))} | {_blank(row.get('completion_tokens'))} |"
+            f"{_metric(ran, row.get('ok'))} | {_metric(ran, row.get('retry_count'))} | {_metric(ran, row.get('tool_calls'))} | "
+            f"{_metric(ran, row.get('elapsed'))} | {_metric(ran, row.get('prompt_tokens'))} | {_metric(ran, row.get('completion_tokens'))} |"
         )
     lines.extend(["", "## 没编进清单的", ""])
     for item in payload.get("not_built") or []:
@@ -213,8 +216,9 @@ def write_report(payload: dict) -> Path:
         if not row.get("human_compare"):
             continue
         token = row.get("prompt_tokens")
+        ran = row.get("ok") is not None
         lines.append(
-            f"| {row['id']} | {_blank(row.get('ok'))} | {_blank(token)} | {_blank(row.get('tool_calls'))} | 待填写 | 待填写 | 待填写 |"
+            f"| {row['id']} | {_metric(ran, row.get('ok'))} | {_metric(ran, token)} | {_metric(ran, row.get('tool_calls'))} | 待填写 | 待填写 | 待填写 |"
         )
     if payload.get("notes"):
         lines.extend(["", "## 备注", ""])
