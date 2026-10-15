@@ -1,0 +1,15 @@
+{
+  "id": "cpp-fix-keep",
+  "query": "Private/TestActor.cpp 的 ATestActor::TestPrintDebugInfo 里调用了不存在的 ThisFunctionDoesNotExist，编译会报 error C。用 read_source 读这个函数，再用 apply_unified_diff 删掉这一行调用。不要新增函数，不要改别的文件。",
+  "verify": [
+    {"kind": "cpp_build"}
+  ],
+  "allow_writes": [],
+  "save": false,
+  "pie": false,
+  "max_retries": 3,
+  "judge_first": true,
+  "inject_typo": true,
+  "keep_source": true,
+  "typo_path": "Private/TestActor.cpp"
+}

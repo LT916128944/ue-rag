@@ -1,0 +1,14 @@
+.venv/
+data/chroma/
+data/traces/
+data/runs/
+data/events/
+data/archive/
+data/snapshots/
+data/briefs/
+data/ledger.json
+data/ue_mcp_index.json
+.env
+__pycache__/
+*.pyc
+agent_checkpoints.db

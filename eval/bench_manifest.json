@@ -1,0 +1,111 @@
+{
+  "note": "默认三条仍只在 eval/run_eval.py。本清单是可恢复评测。counts 为 true 的任务才进成功率。改关卡且不保存的任务不进分子分母。",
+  "not_built": [
+    "读属性：editor_assert 只比对 location，没有属性裁判，不编一条过不了的任务。",
+    "放置：新实例会让 find_actors 不唯一，现有裁判停在「Actor 不唯一」，不编。",
+    "材质、通用改蓝图图：开关缺省关闭，不编。",
+    "更多蓝图编译：索引里的蓝图只有 BP_Gun、BP_Sphere、BP_GameMode、BP_TestPawn。",
+    "第二处编译错误：inject_typo 写死 TestActor.cpp 的 TestPrintDebugInfo，不复制一条假修复。"
+  ],
+  "tasks": [
+    {
+      "id": "bp-gun-compile",
+      "path": "eval/tasks/bp-gun-compile.json",
+      "category": "blueprint_compile",
+      "reset": "readonly",
+      "counts": true,
+      "profile": "agent",
+      "human_compare": true
+    },
+    {
+      "id": "bp-sphere-compile",
+      "path": "eval/tasks/bench/bp-sphere-compile.json",
+      "category": "blueprint_compile",
+      "reset": "readonly",
+      "counts": true,
+      "profile": "pipeline",
+      "human_compare": true
+    },
+    {
+      "id": "bp-gamemode-compile",
+      "path": "eval/tasks/bench/bp-gamemode-compile.json",
+      "category": "blueprint_compile",
+      "reset": "readonly",
+      "counts": true,
+      "profile": "pipeline",
+      "human_compare": false
+    },
+    {
+      "id": "bp-testpawn-compile",
+      "path": "eval/tasks/bench/bp-testpawn-compile.json",
+      "category": "blueprint_compile",
+      "reset": "readonly",
+      "counts": true,
+      "profile": "pipeline",
+      "human_compare": false
+    },
+    {
+      "id": "cpp-build-existing",
+      "path": "eval/tasks/side/cpp-build-existing.json",
+      "category": "cpp_build",
+      "reset": "readonly",
+      "counts": true,
+      "profile": "slow",
+      "human_compare": true
+    },
+    {
+      "id": "cpp-typo",
+      "path": "eval/tasks/cpp-typo.json",
+      "category": "cpp_fix",
+      "reset": "self_restore",
+      "counts": true,
+      "profile": "agent",
+      "human_compare": true
+    },
+    {
+      "id": "editor-cube",
+      "path": "eval/tasks/editor-cube.json",
+      "category": "actor_move",
+      "reset": "unsaved_level",
+      "counts": false,
+      "profile": "agent",
+      "human_compare": true
+    },
+    {
+      "id": "move-plane",
+      "path": "eval/tasks/bench/move-plane.json",
+      "category": "actor_move",
+      "reset": "unsaved_level",
+      "counts": false,
+      "profile": "agent",
+      "human_compare": false
+    },
+    {
+      "id": "move-player-start",
+      "path": "eval/tasks/bench/move-player-start.json",
+      "category": "actor_move",
+      "reset": "unsaved_level",
+      "counts": false,
+      "profile": "agent",
+      "human_compare": false
+    },
+    {
+      "id": "move-directional-light",
+      "path": "eval/tasks/bench/move-directional-light.json",
+      "category": "actor_move",
+      "reset": "unsaved_level",
+      "counts": false,
+      "profile": "agent",
+      "human_compare": false
+    },
+    {
+      "id": "move-bp-gun-test",
+      "path": "eval/tasks/bench/move-bp-gun-test.json",
+      "category": "actor_move",
+      "reset": "unsaved_level",
+      "counts": false,
+      "profile": "agent",
+      "human_compare": false
+    }
+  ]
+}

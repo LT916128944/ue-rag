@@ -1,0 +1,12 @@
+{
+  "id": "bp-testpawn-compile",
+  "query": "编译蓝图 /Game/BP_TestPawn.BP_TestPawn 并确认没有编译错误。不要修改任何资产，不要调用写工具。直接结束工具调用，让裁判去编译。",
+  "verify": [
+    {"kind": "blueprint_compile", "refPath": "/Game/BP_TestPawn.BP_TestPawn"}
+  ],
+  "allow_writes": [],
+  "save": false,
+  "pie": false,
+  "judge_first": true,
+  "max_retries": 1
+}

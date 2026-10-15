@@ -1,0 +1,33 @@
+{
+  "routes": [
+    {
+      "id": "mark-interactable",
+      "when": [
+        "可交互"
+      ],
+      "roles": [
+        "target",
+        "picker"
+      ],
+      "windows": [
+        {
+          "action": "set_pickable",
+          "slots": {
+            "target": "target"
+          }
+        },
+        {
+          "action": "judge_pickup",
+          "slots": {
+            "target": "target",
+            "picker": "picker"
+          },
+          "depends_on": [
+            "W1"
+          ],
+          "max_retries": 1
+        }
+      ]
+    }
+  ]
+}

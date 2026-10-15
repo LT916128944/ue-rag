@@ -1,0 +1,10 @@
+{
+  "id": "cpp-build-existing",
+  "query": "编译游戏目标 AIAgentProject，不要改源码，不要保存，不要启动 PIE。",
+  "verify": [{"kind": "cpp_build"}],
+  "allow_writes": [],
+  "save": false,
+  "pie": false,
+  "judge_first": true,
+  "max_retries": 1
+}

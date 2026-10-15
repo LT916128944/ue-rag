@@ -1,0 +1,6 @@
+{
+  "query": "编译工程后启动UE编辑器，然后测试ATestActor能否被ATestPawn拾取",
+  "unknown_query": "测试ANoSuchActor能否被AAlsoMissing拾取",
+  "pawn_ref": "/Game/BP_TestPawn.BP_TestPawn",
+  "note": "离线拆句期望。不放进 run_eval.py。Actor 蓝图不在索引里，这一格暂停，不创建蓝图。"
+}

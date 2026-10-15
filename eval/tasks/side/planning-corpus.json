@@ -1,0 +1,96 @@
+{
+  "note": "2026-10-15 五次失败的离线拆句期望（Plan/20261015-1705 第 1 节、P1 验收）。按 20261014-195443 到 20261015-165155 的原话配 stub 理解器注入期望 intent，断言拆出的窗口动作序列；不进 run_eval.py，不编译、不写场景。expect_actions 里括号中的 create_blueprint 表示蓝图为索引 miss 且类可推导时由 L2 归地自动插的前置扇；索引已命中时该扇不出现。注意：多数原句现在会被手写规则（含磁盘兜底）强命中走 L0，测试扇由代码补（_ensure_requested_test），stub 意图此时不生效——专门验 L1→L2 的是 l1-novel-phrasing 这类规则接不住的说法。",
+  "cases": [
+    {
+      "id": "compile-then-place",
+      "query": "编译代码后启动编辑器，将蓝图 /Game/BP_TestEnemy 放到场景中实现巡逻，发现玩家后追击，近距离攻击玩家的逻辑，并最后测试",
+      "origin": "20261014-215234 起，同句 20261015-163239 跑通",
+      "failure": "规则把「编译代码」误绑成「编译那张蓝图」，多出一扇必停的编译蓝图扇",
+      "intent": {
+        "goals": [
+          {"action": "compile_project", "slots": {}},
+          {"action": "place_actor", "slots": {"blueprint": "BP_TestEnemy"}}
+        ],
+        "constraints": {"editor": true, "pie": false, "save": false},
+        "unresolved": ["实现巡逻", "发现玩家后追击", "近距离攻击玩家的逻辑"]
+      },
+      "expect_actions": ["compile_project", "create_blueprint", "place_actor", "probe_play"]
+    },
+    {
+      "id": "brief-inherit-candidates",
+      "query": "确认任务书后的范围窗口必须原样继承快路径候选，不叫生成器重编动作与槽位",
+      "origin": "20261015 任务书确认后窗口被 LLM 重编",
+      "failure": "生成器产出直接替换候选，丢掉快路径解析好的创建/放置",
+      "fixed": "brief.materialize_scopes 按 id 原样继承候选（check_upgrade.check_brief 覆盖）",
+      "intent": null,
+      "expect_actions": []
+    },
+    {
+      "id": "brief-scope-cycle",
+      "query": "范围依赖换算不指向自己",
+      "origin": "20261015 环：W2→W2",
+      "failure": "候选可能排到最后才补跑，提前换算把候选 id 错当新 id，撞出自环",
+      "fixed": "两遍换算（先填全新旧 id 对照表再重映射），check_upgrade.check_cycle_dangling 覆盖",
+      "intent": null,
+      "expect_actions": []
+    },
+    {
+      "id": "place-one-more",
+      "query": "编译代码后启动编辑器，将蓝图 /Game/BP_TestEnemy 再放一个到场景中实现巡逻，发现玩家后追击，近距离攻击玩家的逻辑，并最后测试",
+      "origin": "20261015-165155",
+      "failure": "「再放一个到场景中」在 _PLACE_RE 四种措辞之外，放置路由不触发，规则拆出扇停在 写不出唯一的蓝图",
+      "intent": {
+        "goals": [
+          {"action": "compile_project", "slots": {}},
+          {"action": "place_actor", "slots": {"blueprint": "BP_TestEnemy"}, "args": {"数量": "再放一个"}}
+        ],
+        "constraints": {"editor": true, "pie": false, "save": false},
+        "unresolved": ["实现巡逻", "发现玩家后追击", "近距离攻击玩家的逻辑"]
+      },
+      "expect_actions": ["compile_project", "create_blueprint", "place_actor", "probe_play"]
+    },
+    {
+      "id": "blueprint-graph-demand",
+      "query": "编译代码后启动编辑器，将蓝图 /Game/BP_TestEnemy 放一个到场景中实现巡逻，蓝图内实现生成位置在pawn周围10米内随机出现。发现玩家后追击，近距离攻击玩家的逻辑，并最后测试",
+      "origin": "20261015-181645",
+      "failure": "需求半句（蓝图内生成位置随机、追击、攻击）没有任何窗口接住，被规则静默丢掉；PIE 只测「实例存在」照样报成功。需求词兜底后这类句子必须弱命中走 L1，unresolved 非空再触发任务书把需求记进「尚未完成」",
+      "intent": {
+        "goals": [
+          {"action": "compile_project", "slots": {}},
+          {"action": "place_actor", "slots": {"blueprint": "BP_TestEnemy"}, "args": {"数量": "再放一个", "位置": "与场景里已有的错开"}}
+        ],
+        "constraints": {"editor": true, "pie": false, "save": false},
+        "unresolved": ["蓝图内实现生成位置在pawn周围10米内随机出现", "发现玩家后追击", "近距离攻击玩家的逻辑"]
+      },
+      "expect_actions": ["compile_project", "create_blueprint", "place_actor", "probe_play"]
+    },
+    {
+      "id": "place-not-overlapping",
+      "query": "将蓝图 /Game/BP_TestEnemy 再放一个到场景中，位置不要与场景里已有的叠一起",
+      "origin": "20261015-165155",
+      "failure": "动作参数没有「约束」槽，固定放 (0,0,100)；执行侧已按已有同名实例错开 50 uu，缺的是把这句话接进意图层",
+      "intent": {
+        "goals": [
+          {"action": "place_actor", "slots": {"blueprint": "BP_TestEnemy"}, "args": {"数量": "再放一个", "位置": "与场景里已有的错开，不叠一起"}}
+        ],
+        "constraints": {"editor": false, "pie": false, "save": false},
+        "unresolved": []
+      },
+      "expect_actions": ["create_blueprint", "place_actor"]
+    },
+    {
+      "id": "l1-novel-phrasing",
+      "query": "给当前关卡添一个 BP_TestEnemy 的实例并测试，蓝图在 /Game/Blueprints",
+      "origin": "20261015-180219 的理解器路径：放置措辞在 _PLACE_RE 之外，规则接不住，必须 L1→L2",
+      "failure": "旧正则只认丢/放/拖到场景等四种说法，换个动词就整句掉规划者",
+      "intent": {
+        "goals": [
+          {"action": "place_actor", "slots": {"blueprint": "BP_TestEnemy"}}
+        ],
+        "constraints": {"editor": false, "pie": false, "save": false},
+        "unresolved": []
+      },
+      "expect_actions": ["create_blueprint", "place_actor", "probe_play"]
+    }
+  ]
+}

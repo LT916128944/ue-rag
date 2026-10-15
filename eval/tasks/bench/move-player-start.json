@@ -1,0 +1,18 @@
+{
+  "id": "move-player-start",
+  "query": "把当前关卡 L_NewTest 里名字为 PlayerStart 的 Actor 移动到世界坐标 x=400 y=80 z=52。先用 find_actors（name、tag、collision_channels 都要传，tag 传空字符串，collision_channels 传空数组）拿到 refPath，再调用 set_actor_transform，只改 location，worldspace 为 true。不要保存，不要启动 PIE。",
+  "verify": [
+    {
+      "kind": "editor_assert",
+      "toolset": "editor_toolset.toolsets.actor.ActorTools",
+      "tool": "get_actor_transform",
+      "actor_name": "PlayerStart",
+      "expect": {"location": {"x": 400, "y": 80, "z": 52}}
+    }
+  ],
+  "allow_writes": ["set_actor_transform"],
+  "save": false,
+  "pie": false,
+  "max_retries": 3,
+  "require_level": "L_NewTest"
+}
