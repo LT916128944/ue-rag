@@ -227,6 +227,17 @@ def run_task(task: dict, trace_path: Path | None = None, thread_id: str | None =
             saved = _snapshot_typo(task)
 
         thread_id = thread_id or new_thread_id()
+        emit({
+            "task_id": task["id"],
+            "node": "task",
+            "tool": "",
+            "ok": True,
+            "elapsed": 0,
+            "retry_count": 0,
+            "prompt_tokens": None,
+            "completion_tokens": None,
+            "query": task.get("query") or "",
+        })
         config = {"configurable": {"thread_id": thread_id}, "recursion_limit": 80}
         final_state = None
         retry = 0
@@ -260,6 +271,8 @@ def run_task(task: dict, trace_path: Path | None = None, thread_id: str | None =
                         }
                         if (item or {}).get("judge_kind"):
                             row["judge_kind"] = item["judge_kind"]
+                        if (item or {}).get("summary"):
+                            row["summary"] = str(item["summary"])[:500]
                         if (item or {}).get("error"):
                             row["error"] = str(item["error"])[:200]
                         emit(row)
@@ -329,8 +342,13 @@ def run_task(task: dict, trace_path: Path | None = None, thread_id: str | None =
         if (final_state or {}).get("source_written"):
             summary["source_written"] = True
         if summary["ok"] and summary.get("index_note") in ("", "未更新"):
+            test = summary.get("test") or {}
             build = summary.get("build") or {}
-            text = str(build.get("summary") or "") if isinstance(build, dict) and build.get("ok") else ""
+            text = ""
+            if isinstance(test, dict) and test.get("kind") in ("automation", "editor_assert"):
+                text = str(test.get("summary") or "")
+            elif isinstance(build, dict) and build.get("ok"):
+                text = str(build.get("summary") or "")
             summary["summary"] = (text or "裁判通过")[:500]
         if not summary["ok"] and not summary.get("error"):
             build = summary.get("build") or {}

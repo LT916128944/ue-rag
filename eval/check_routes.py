@@ -12,6 +12,13 @@ from agent.roles import plan_role, tool_allowed
 
 
 def main() -> int:
+    from core.judge import _box_mismatches
+    box = {"min": {"x": 0, "y": 0, "z": 100}, "max": {"x": 200, "y": 0, "z": 100}}
+    assert _box_mismatches({"x": 0, "y": 0, "z": 100}, box) == []
+    assert _box_mismatches({"x": 200, "y": 0, "z": 100}, box) == []
+    assert _box_mismatches({"x": -1, "y": 0, "z": 100}, box) == []
+    assert _box_mismatches({"x": -1.2, "y": 0, "z": 100}, box)
+
     assert route_after_build({"build_judge": {"ok": True}}) == "test"
     assert route_after_build({"build_judge": {"ok": False}}) == "observe"
     failed = {
@@ -145,6 +152,20 @@ def main() -> int:
             task={"allow_writes": ["create_node"]},
         )
         assert blocked.get("error") == "blueprint edit disabled"
+        one_graph = exec_tool(
+            "editor_toolset.toolsets.blueprint.BlueprintTools",
+            "create_node",
+            {"blueprint": {"refPath": "/Game/BP_TestEnemy.BP_TestEnemy"}},
+            task={"allow_writes": [], "allow_blueprint_ref": "/Game/BP_TestEnemy.BP_TestEnemy"},
+        )
+        assert one_graph.get("error") == "write refused"
+        other_graph = exec_tool(
+            "editor_toolset.toolsets.blueprint.BlueprintTools",
+            "create_node",
+            {"blueprint": {"refPath": "/Game/BP_Gun.BP_Gun"}},
+            task={"allow_writes": ["create_node"], "allow_blueprint_ref": "/Game/BP_TestEnemy.BP_TestEnemy"},
+        )
+        assert other_graph.get("error") == "blueprint edit disabled"
         os.environ["UE_ALLOW_BLUEPRINT"] = "true"
         opened = supervise("在 BP_Cube 的事件图里加一个节点")
         assert "改蓝图已关闭" not in (opened.get("error") or "")

@@ -1,0 +1,22 @@
+{
+  "id": "demo-b-bp-testenemy",
+  "query": "只改已经存在的蓝图 /Game/BP_TestEnemy.BP_TestEnemy 这一张事件图。编译之后必须跑 Automation 过滤器 AIAgent.Enemy.Patrol，读巡逻位移、追击距离和近战次数。蓝图编译返回空本身不算完成。不要改别的图，不要保存，不要启动 PIE。全局 UE_ALLOW_BLUEPRINT 保持 false，允许改图的只有本任务写明的这一张。",
+  "verify": [
+    {"kind": "blueprint_compile", "refPath": "/Game/BP_TestEnemy.BP_TestEnemy"},
+    {"kind": "automation", "filter": "AIAgent.Enemy.Patrol"}
+  ],
+  "automation_filter": "AIAgent.Enemy.Patrol",
+  "allow_blueprint_ref": "/Game/BP_TestEnemy.BP_TestEnemy",
+  "allow_writes": [
+    "write_graph_dsl",
+    "create_node",
+    "connect_pins",
+    "add_event",
+    "set_pin_value",
+    "add_variable"
+  ],
+  "save": false,
+  "pie": false,
+  "judge_first": true,
+  "max_retries": 1
+}

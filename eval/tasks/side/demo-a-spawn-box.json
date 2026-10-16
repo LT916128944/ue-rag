@@ -1,0 +1,22 @@
+{
+  "id": "demo-a-spawn-box",
+  "query": "读当前关卡 L_NewTest 里已点名的出生点，确认世界坐标落在给定盒子内。容差 1 uu。不要移动，不要保存，不要启动 PIE。这条任务不进默认三条。",
+  "verify": [
+    {
+      "kind": "editor_assert",
+      "actor_names": ["PlayerStart"],
+      "expect": {
+        "box": {
+          "min": {"x": 1120, "y": 30, "z": 52},
+          "max": {"x": 1120, "y": 30, "z": 52}
+        }
+      }
+    }
+  ],
+  "allow_writes": [],
+  "save": false,
+  "pie": false,
+  "judge_first": true,
+  "max_retries": 1,
+  "require_level": "L_NewTest"
+}

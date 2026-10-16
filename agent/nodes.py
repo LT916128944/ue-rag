@@ -501,7 +501,12 @@ def test_node(state: AgentState):
     return {
         "test_judge": verdict,
         "test_result": json.dumps(verdict, ensure_ascii=False),
-        "step_log": [{"tool": verdict.get("kind") or "test", "ok": verdict.get("ok") is True}],
+        "step_log": [{
+            "tool": verdict.get("kind") or "test",
+            "ok": verdict.get("ok") is True,
+            "judge_kind": verdict.get("kind") or "",
+            "summary": verdict.get("summary") or "",
+        }],
     }
 
 
@@ -555,7 +560,12 @@ def observe_node(state: AgentState):
                 "is_completed": True,
                 "final_success": True,
                 "messages": [{"role": "assistant", "content": summary}],
-                "step_log": [{"tool": "", "ok": True, "judge_kind": kind, "error": ""}],
+                "step_log": [{
+                    "tool": "",
+                    "ok": True,
+                    "judge_kind": kind,
+                    "summary": summary,
+                }],
             }
         return {}
 

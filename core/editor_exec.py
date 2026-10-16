@@ -94,6 +94,29 @@ def _mock_tool(tool: str, args: dict) -> dict:
     return {"ok": False, "error": f"Unknown tool: {tool}"}
 
 
+def _blueprint_ref(args: dict) -> str:
+    blueprint = args.get("blueprint") if isinstance(args, dict) else None
+    if isinstance(blueprint, dict):
+        return str(blueprint.get("refPath") or "").strip()
+    if isinstance(blueprint, str):
+        return blueprint.strip()
+    return ""
+
+
+def _blueprint_edit_error(tool: str, args: dict, task: dict) -> str:
+    """全局开关缺省关闭。任务文件写明的那一张图可以改，其它图仍拒绝。"""
+    if tool not in BLUEPRINT_EDIT_TOOLS:
+        return ""
+    allowed = str(task.get("allow_blueprint_ref") or "").strip()
+    if allowed:
+        if _blueprint_ref(args) != allowed:
+            return "blueprint edit disabled"
+        return ""
+    if not allow_blueprint():
+        return "blueprint edit disabled"
+    return ""
+
+
 def exec_tool(toolset: str, tool: str, args: dict | None, *, task: dict | None = None, timeout: float | None = None) -> dict:
     """执行一个编辑器工具。返回完整 {ok, data|error}，不在这里截断。"""
     task = task or {}
@@ -102,8 +125,9 @@ def exec_tool(toolset: str, tool: str, args: dict | None, *, task: dict | None =
     blocked = _domain_blocked(toolset, tool)
     if blocked:
         return {"ok": False, "error": blocked}
-    if tool in BLUEPRINT_EDIT_TOOLS and not allow_blueprint():
-        return {"ok": False, "error": "blueprint edit disabled"}
+    blueprint_error = _blueprint_edit_error(tool, args, task)
+    if blueprint_error:
+        return {"ok": False, "error": blueprint_error}
     if tool in BLUEPRINT_EDIT_TOOLS and tool not in allow:
         return {"ok": False, "error": "write refused"}
     if UE_EXEC_MODE == "mock":

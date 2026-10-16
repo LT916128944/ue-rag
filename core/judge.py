@@ -69,42 +69,135 @@ def _read_task(task: dict | None) -> dict:
     return task
 
 
+def _actor_names(spec: dict) -> list[str]:
+    names = []
+    for item in spec.get("actor_names") or []:
+        text = str(item or "").strip()
+        if text and text not in names:
+            names.append(text)
+    one = str(spec.get("actor_name") or "").strip()
+    if one and one not in names:
+        names.insert(0, one)
+    return names
+
+
+def _location_text(name: str, loc: dict) -> str:
+    return f"{name} x={loc.get('x')} y={loc.get('y')} z={loc.get('z')}"
+
+
+def _box_mismatches(loc: dict, box: dict, tolerance: float = 1.0) -> list[str]:
+    """点落在盒子内。容差 1 uu：出界不超过 1 uu 仍算在里面。"""
+    bounds = box or {}
+    low = bounds.get("min") or {}
+    high = bounds.get("max") or {}
+    mismatches = []
+    for axis in ("x", "y", "z"):
+        try:
+            actual = float(loc[axis])
+            lo = float(low[axis])
+            hi = float(high[axis])
+        except (KeyError, TypeError, ValueError):
+            mismatches.append(f"{axis} 缺失")
+            continue
+        if actual < lo - tolerance or actual > hi + tolerance:
+            mismatches.append(f"{axis}={actual} 不在 [{lo}, {hi}]")
+    return mismatches
+
+
+def _find_unique_actor(name: str, task: dict) -> tuple[str, dict | None]:
+    found = exec_tool(
+        _SCENE_TOOLSET,
+        "find_actors",
+        {"name": name, "tag": "", "collision_channels": []},
+        task=task,
+    )
+    if not found.get("ok"):
+        return "", _result(False, "editor_assert", "find_actors 失败", [{"file": "", "line": 0, "message": str(found.get("error"))}])
+    actors = _unwrap(found.get("data"))
+    if isinstance(actors, dict):
+        actors = actors.get("returnValue") or actors.get("actors") or []
+    if not isinstance(actors, list):
+        actors = [actors]
+    paths = []
+    for actor in actors:
+        if isinstance(actor, dict):
+            paths.append(actor.get("refPath") or actor.get("path") or json.dumps(actor, ensure_ascii=False))
+        else:
+            paths.append(str(actor))
+    if len(paths) != 1:
+        listed = ", ".join(paths) or "(空)"
+        return "", _result(False, "editor_assert", "Actor 不唯一", [{"file": "", "line": 0, "message": f"{name} 候选: {listed}"}])
+    return paths[0], None
+
+
+def _read_actor_location(spec: dict, ref: str, task: dict) -> tuple[dict | None, dict | None]:
+    tool = spec.get("tool") or "get_actor_transform"
+    toolset = spec.get("toolset") or _ACTOR_TOOLSET
+    args = dict(spec.get("args") or {})
+    args["actor"] = {"refPath": ref}
+    called = exec_tool(toolset, tool, args, task=task)
+    if not called.get("ok"):
+        return None, _result(False, "editor_assert", "读工具失败", [{"file": "", "line": 0, "message": str(called.get("error"))}])
+    loc = _location(called.get("data"))
+    if loc is None:
+        return None, _result(False, "editor_assert", "没有 location", [{"file": "", "line": 0, "message": "editor 返回里没有 location"}])
+    return loc, None
+
+
 def _editor_assert(spec: dict, task: dict) -> dict:
+    names = _actor_names(spec)
+    box = ((spec.get("expect") or {}).get("box"))
     if UE_EXEC_MODE == "mock":
-        name = spec.get("actor_name") or (spec.get("args") or {}).get("actor", {}).get("refPath", "")
+        if not names:
+            names = [spec.get("actor_name") or (spec.get("args") or {}).get("actor", {}).get("refPath", "")]
+        if box:
+            readings = []
+            mismatches = []
+            for name in names:
+                loc = (MOCK_ACTORS.get(name) or {}).get("location")
+                if loc is None:
+                    return _result(False, "editor_assert", "没有 location", [{"file": "", "line": 0, "message": f"mock 没有 {name}"}])
+                readings.append(_location_text(name, loc))
+                mismatches.extend(_box_mismatches(loc, box))
+            summary = "; ".join(readings)
+            if mismatches:
+                message = f"{summary} {'; '.join(mismatches)}".strip()
+                return _result(False, "editor_assert", message, [{"file": "", "line": 0, "message": message}])
+            return _result(True, "editor_assert", f"在盒子内 {summary}")
+        name = names[0] if names else ""
         loc = (MOCK_ACTORS.get(name) or {}).get("location")
         return _compare_location(spec, loc, "mock")
+
+    if box:
+        if not names:
+            return _result(False, "editor_assert", "缺少 actor", [{"file": "", "line": 0, "message": "editor_assert 没有 actor"}])
+        readings = []
+        mismatches = []
+        for name in names:
+            ref, error = _find_unique_actor(name, task)
+            if error:
+                return error
+            loc, error = _read_actor_location(spec, ref, task)
+            if error:
+                return error
+            readings.append(_location_text(name, loc))
+            mismatches.extend(_box_mismatches(loc, box))
+        summary = "; ".join(readings)
+        if mismatches:
+            message = f"{summary} {'; '.join(mismatches)}".strip()
+            return _result(False, "editor_assert", message, [{"file": "", "line": 0, "message": message}])
+        return _result(True, "editor_assert", f"在盒子内 {summary}")
 
     tool = spec.get("tool") or "get_actor_transform"
     toolset = spec.get("toolset") or _ACTOR_TOOLSET
     args = dict(spec.get("args") or {})
     if tool == "get_actor_transform" and "actor" not in args:
-        name = spec.get("actor_name")
-        if not name:
+        if len(names) != 1:
             return _result(False, "editor_assert", "缺少 actor", [{"file": "", "line": 0, "message": "editor_assert 没有 actor"}])
-        found = exec_tool(
-            _SCENE_TOOLSET,
-            "find_actors",
-            {"name": name, "tag": "", "collision_channels": []},
-            task=task,
-        )
-        if not found.get("ok"):
-            return _result(False, "editor_assert", "find_actors 失败", [{"file": "", "line": 0, "message": str(found.get("error"))}])
-        actors = _unwrap(found.get("data"))
-        if isinstance(actors, dict):
-            actors = actors.get("returnValue") or actors.get("actors") or []
-        if not isinstance(actors, list):
-            actors = [actors]
-        paths = []
-        for actor in actors:
-            if isinstance(actor, dict):
-                paths.append(actor.get("refPath") or actor.get("path") or json.dumps(actor, ensure_ascii=False))
-            else:
-                paths.append(str(actor))
-        if len(paths) != 1:
-            listed = ", ".join(paths) or "(空)"
-            return _result(False, "editor_assert", "Actor 不唯一", [{"file": "", "line": 0, "message": f"候选: {listed}"}])
-        args["actor"] = {"refPath": paths[0]}
+        ref, error = _find_unique_actor(names[0], task)
+        if error:
+            return error
+        args["actor"] = {"refPath": ref}
 
     called = exec_tool(toolset, tool, args, task=task)
     if not called.get("ok"):
@@ -128,10 +221,11 @@ def _compare_location(spec: dict, loc: dict | None, source: str) -> dict:
             continue
         if abs(actual - wanted) > 1.0:
             mismatches.append(f"{axis}={actual} 期望 {wanted}")
+    shown = _location_text(spec.get("actor_name") or "actor", loc)
     if mismatches:
-        message = "; ".join(mismatches)
+        message = f"{shown} " + "; ".join(mismatches)
         return _result(False, "editor_assert", message, [{"file": "", "line": 0, "message": message}])
-    return _result(True, "editor_assert", "location 匹配")
+    return _result(True, "editor_assert", f"location 匹配 {shown}")
 
 
 def _blueprint_compile(spec: dict, task: dict) -> dict:
@@ -292,6 +386,33 @@ def _walk_tests(data) -> list:
     return found
 
 
+def _note_text(entry) -> str:
+    if isinstance(entry, str):
+        return entry.strip()
+    if isinstance(entry, dict):
+        for key in ("message", "text", "warning", "error"):
+            value = entry.get(key)
+            if value:
+                return str(value).strip()
+        return json.dumps(entry, ensure_ascii=False)
+    return str(entry or "").strip()
+
+
+def _result_notes(data) -> list[str]:
+    notes = []
+    for item in _walk_tests(data):
+        for key in ("warnings", "messages", "entries"):
+            value = item.get(key)
+            if isinstance(value, str) and value.strip():
+                notes.append(value.strip())
+            elif isinstance(value, list):
+                for entry in value:
+                    text = _note_text(entry)
+                    if text:
+                        notes.append(text)
+    return notes[:8]
+
+
 def _automation(spec: dict, task: dict) -> dict:
     global _discovered
     if UE_EXEC_MODE == "mock":
@@ -326,8 +447,15 @@ def _automation(spec: dict, task: dict) -> dict:
         names = _failed_names(results.get("data"))
         shown = ",".join(names[:8])
         message = f"failed={failed} filter={filt} tests={shown}".strip()
+        notes = _result_notes(results.get("data"))
+        if notes:
+            message = f"{message} {' '.join(notes)}".strip()
         return _result(False, "automation", message, [{"file": "", "line": 0, "message": message}])
-    return _result(True, "automation", "失败数 0")
+    notes = _result_notes(results.get("data"))
+    summary = "失败数 0"
+    if notes:
+        summary = f"{summary} {' '.join(notes)}".strip()
+    return _result(True, "automation", summary[:500])
 
 
 def judge(spec: dict, task: dict | None = None) -> dict:

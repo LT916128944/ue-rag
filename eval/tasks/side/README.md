@@ -6,6 +6,6 @@
 
 索引里能编译的蓝图只有四张，裁判只打 location、蓝图编译和 C++ 编译。读属性、放置、材质没有对应裁判，清单里不编假任务。手工 Cursor 对照表在 `eval/reports/`，手工列仍是待填写。
 
-`automation-existing.json` 没有写。2026-10-13 编辑器已开，`DiscoverTests` 只返回 `{"status":"ready"}`，结果里没有过滤器。没有合格过滤器就停，不编名字。
+`DiscoverTests` 的返回仍然只有 `{"status":"ready"}`，名字不在这一步。接着 `ListTests` 才能看到过滤器。2026-10-16 抄到的是 `AIAgent.Pawn.Look`、`AIAgent.Pawn.Wasd`、`AIAgent.Enemy.Patrol`。巡逻任务是 `demo-c-patrol.json`，用最后这一条，不进默认三条。`demo-a-spawn-box.json` 读出生点盒子。`demo-b-blueprint.json` 只允许改 `/Game/BP_TestEnemy.BP_TestEnemy` 这一张，编译之后仍要跑同一条 Automation。
 
 `pickup-sentence.json` 只给 `check_routes.py` 对一句原话做离线拆句，不编译、不进默认三条。

@@ -1,0 +1,13 @@
+{
+  "id": "demo-c-patrol",
+  "query": "检索、改 C++、编译、读错误、再改、再测由闭环做。行为树、动画、受击表现仍由人绑。用 Automation 读这三件事：敌人相对出生点发生了位移，玩家进入距离后敌人与玩家的距离在缩小，距离阈值内 OnMeleeAttack 被调用过。过滤器是 ListTests 返回的 AIAgent.Enemy.Patrol。不要保存，不要启动 PIE。这条任务不进默认三条。",
+  "verify": [
+    {"kind": "automation", "filter": "AIAgent.Enemy.Patrol"}
+  ],
+  "automation_filter": "AIAgent.Enemy.Patrol",
+  "allow_writes": [],
+  "save": false,
+  "pie": false,
+  "judge_first": true,
+  "max_retries": 1
+}
