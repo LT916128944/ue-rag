@@ -20,5 +20,13 @@
   {"query": "湖面物品生成系统", "expect_source_path": "E:\\UEProject\\AIWork\\AIAgentProject\\documents\\MeetVRLakeItem湖面物品生成系统.md"},
   {"query": "MeetVRDanmaku 弹幕系统计划", "expect_source_path": "E:\\UEProject\\AIWork\\AIAgentProject\\documents\\MeetVRDanmakuSystemPlan.md"},
   {"query": "MeetVRTentacleConnector 触手连接器", "expect_source_path": "E:\\UEProject\\AIWork\\AIAgentProject\\documents\\MeetVRTentacleConnector.md"},
-  {"query": "关卡里的 SkyLight 位置", "expect_id": "actor:/Game/Maps/L_NewTest.L_NewTest:PersistentLevel.SkyLight_0"}
+  {"query": "关卡里的 SkyLight 位置", "expect_id": "actor:/Game/Maps/L_NewTest.L_NewTest:PersistentLevel.SkyLight_0"},
+  {"query": "ATestEnemy 类在哪个头文件", "expect_id": "cpp:ATestEnemy", "expect_source_path": "E:\\UEProject\\AIWork\\AIAgentProject\\Source\\AIAgentProject\\Public\\TestEnemy.h"},
+  {"query": "UTestEnemyPatrolComponent 近战距离", "expect_id": "cpp:UTestEnemyPatrolComponent", "expect_source_path": "E:\\UEProject\\AIWork\\AIAgentProject\\Source\\AIAgentProject\\Public\\TestEnemyPatrolComponent.h"},
+  {"query": "error C2039 PatrolSpeed 不是成员", "expect_id": "error:9bb6822e2b331d9259fd1e259e135cabbe338fe8", "expect_source_path": "E:\\UEProject\\AIWork\\AIAgentProject\\Source\\AIAgentProject\\Private\\TestEnemy.cpp"},
+  {"query": "关卡里的 Cube 位置", "expect_id": "actor:/Game/Maps/L_NewTest.L_NewTest:PersistentLevel.StaticMeshActor_2"},
+  {"query": "关卡里的 PlayerStart 出生点", "expect_id": "actor:/Game/Maps/L_NewTest.L_NewTest:PersistentLevel.PlayerStart_1"},
+  {"query": "UMeetVRHeartbeatSubsystem 心跳上报子系统", "expect_source_path": "E:\\UEProject\\AIWork\\AIAgentProject\\documents\\HeartbeatSubsystem_Plan.md"},
+  {"query": "SuckerStatistics 吸盘统计系统定位", "expect_source_path": "E:\\UEProject\\AIWork\\AIAgentProject\\documents\\SuckerStatistics系统详解.md"},
+  {"query": "触手波包传播 高斯波包", "expect_source_path": "E:\\UEProject\\AIWork\\AIAgentProject\\documents\\tentacle-pulse-propagation.md"}
 ]

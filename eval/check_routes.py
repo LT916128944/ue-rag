@@ -280,6 +280,9 @@ ASecond : public AActor
     )
     assert blocked_mat.get("error") == "UE_ALLOW_MATERIAL 不是 true"
 
+    from core.editor_launch import launch_command
+    assert launch_command()[-1] == "-AutoDeclinePackageRecovery"
+
     from eval.report import classify_row
     assert classify_row({"ok": False, "judge_kind": "cpp_build", "error": "error C1"}) == "编译"
     assert classify_row({"ok": False, "node": "precheck", "error": "请打开关卡 L"}) == "关卡预检"
@@ -289,6 +292,8 @@ ASecond : public AActor
     assert classify_row({"ok": False, "retry_count": 3, "error": "still"}) == "超过重试"
     assert classify_row({"ok": False, "error": "unknown"}) == "其他"
     assert classify_row({"ok": True, "judge_kind": "cpp_build"}) is None
+    check_build_cancel()
+    check_observability()
 
     import tempfile
     from core.history_log import append_history
@@ -360,9 +365,43 @@ ASecond : public AActor
 
     bench_errors = validate_manifest()
     assert not bench_errors, bench_errors
+    check_skill_registry()
 
     print("routes ok")
     return 0
+
+
+def check_skill_registry() -> None:
+    from agent.skill_prompt import CARD_BUDGET, project_rules_suffix, skill_card_line
+    from config import AGENT_SKILL_PATH, PROJECT_CONTEXT_PATH, SKILL_CARDS_PATH
+    from pipelines.export_project_context import validate_project_context
+    from pipelines.export_skill_cards import build_cards, validate_skill_cards
+
+    cards, errors = build_cards()
+    assert not errors, errors
+    assert not validate_skill_cards(cards), validate_skill_cards(cards)
+    on_disk = json.loads(SKILL_CARDS_PATH.read_text(encoding="utf-8"))
+    assert on_disk == cards
+    sample = next(card for card in cards if card["name"] == "ue-blueprint-skill")
+    line = skill_card_line(sample)
+    assert sample["description"] in line
+    assert "triggers" not in line
+    assert "UE_ALLOW_BLUEPRINT" not in line
+    long_prompt = "规矩" * (CARD_BUDGET + 20)
+    attached = project_rules_suffix(True, long_prompt)
+    assert attached.startswith("\n项目规矩：")
+    assert len(attached.split("：", 1)[1]) == CARD_BUDGET
+    assert project_rules_suffix(False, long_prompt) == ""
+
+    context = json.loads(PROJECT_CONTEXT_PATH.read_text(encoding="utf-8"))
+    assert not validate_project_context(context), context
+    skill = json.loads(AGENT_SKILL_PATH.read_text(encoding="utf-8"))
+    prompt = skill.get("prompt") or ""
+    assert "100 uu" in prompt
+    assert "AIAgentProjectEditor" in prompt
+    assert "不唯一就停" in prompt
+    assert "裁判不由模型宣布" in prompt
+    assert str(skill.get("path") or "").startswith("/Game/")
 
 
 def _cleanup_run(path) -> None:
@@ -671,6 +710,191 @@ def check_windows() -> None:
                 os.environ.pop("UE_LEARNED_ROUTES", None)
             else:
                 os.environ["UE_LEARNED_ROUTES"] = previous
+
+
+def check_build_cancel() -> None:
+    """第 7 段：超时和停止都记失败，即使退出码是 0。确认事件带选项和补上的路径。不关编辑器，不跑 Build.bat。"""
+    import tempfile
+    import threading
+    import time
+    from datetime import datetime
+
+    from core import build_job
+    from core.judge import cpp_build_verdict
+
+    forced = cpp_build_verdict({
+        "reason": "timeout", "returncode": 0, "timeout_s": 300, "stdout": "", "stderr": "",
+    })
+    assert forced["ok"] is False and forced["summary"] == "编译超时", forced
+    assert forced["errors"][0]["message"] == "timeout 300s"
+    stopped = cpp_build_verdict({"reason": "stopped", "returncode": 0, "stdout": "", "stderr": ""})
+    assert stopped["ok"] is False and stopped["summary"] == "编译已停止", stopped
+
+    saved_job, saved_stop = build_job.JOB_PATH, build_job.STOP_PATH
+    sleeper = [sys.executable, "-c", "import time; time.sleep(30)"]
+    try:
+        with tempfile.TemporaryDirectory() as tmp_name:
+            tmp = Path(tmp_name)
+            build_job.JOB_PATH = tmp / "job.json"
+            build_job.STOP_PATH = tmp / "stop"
+            quick = build_job.run_command([sys.executable, "-c", "raise SystemExit(0)"], 10)
+            assert quick["reason"] == "exit" and quick["returncode"] == 0, quick
+            assert cpp_build_verdict(quick)["ok"] is True
+            job = json.loads(build_job.JOB_PATH.read_text(encoding="utf-8"))
+            assert job["pid"] and job["started_at"] and job["deadline"]
+
+            timed = build_job.run_command(sleeper, 1)
+            assert timed["reason"] == "timeout", timed
+            verdict = cpp_build_verdict(timed)
+            assert verdict["ok"] is False and verdict["summary"] == "编译超时"
+            assert "timeout 1" in verdict["errors"][0]["message"]
+            started = datetime.fromisoformat(timed["started_at"])
+            deadline = datetime.fromisoformat(timed["deadline"])
+            assert abs((deadline - started).total_seconds() - 1) < 1.5
+
+            box: dict = {}
+
+            def _run() -> None:
+                box["outcome"] = build_job.run_command(sleeper, 30)
+
+            thread = threading.Thread(target=_run, daemon=True)
+            thread.start()
+            seen = {}
+            for _ in range(50):
+                if build_job.JOB_PATH.is_file():
+                    try:
+                        seen = json.loads(build_job.JOB_PATH.read_text(encoding="utf-8"))
+                    except (OSError, json.JSONDecodeError):
+                        seen = {}
+                    if seen.get("status") == "running" and seen.get("timeout_s") == 30:
+                        break
+                time.sleep(0.05)
+            assert seen.get("status") == "running" and seen.get("timeout_s") == 30, seen
+            assert build_job.request_stop() is True
+            thread.join(timeout=10)
+            assert not thread.is_alive()
+            outcome = box["outcome"]
+            assert outcome["reason"] == "stopped", outcome
+            halted = cpp_build_verdict(outcome)
+            assert halted["ok"] is False and halted["summary"] == "编译已停止"
+    finally:
+        build_job.JOB_PATH = saved_job
+        build_job.STOP_PATH = saved_stop
+
+    from agent import run_windows as rw
+
+    with tempfile.TemporaryDirectory() as tmp_name:
+        tmp = Path(tmp_name)
+        saved_runs, saved_events = rw.RUNS_DIR, rw.EVENTS_DIR
+        rw.RUNS_DIR = tmp / "runs"
+        rw.EVENTS_DIR = tmp / "events"
+        windows = [{
+            "id": "W1",
+            "title": "编译蓝图",
+            "action": "compile_blueprint",
+            "realizable": False,
+            "error": "写不出唯一的蓝图 refPath，不猜。",
+            "depends_on": [],
+        }]
+        brief = {"review": {"rounds": 1, "status": "通过"}}
+        try:
+            code, run_path = rw.execute_windows(
+                "补一条蓝图路径",
+                planned={"source": "rules", "windows": windows},
+                windows=windows,
+                brief=brief,
+                echo=lambda *_args, **_kwargs: None,
+                decide=lambda _window, _entry: "/Game/NotAReal",
+            )
+            assert code == 1, code
+            events_path = tmp / "events" / f"{run_path.stem}.jsonl"
+            events = [json.loads(line) for line in events_path.read_text(encoding="utf-8").splitlines()]
+        finally:
+            rw.RUNS_DIR = saved_runs
+            rw.EVENTS_DIR = saved_events
+    confirms = [event for event in events if event.get("type") == "confirm"]
+    assert any(event.get("option") == "确认" and event.get("path") == "" for event in confirms), confirms
+    chosen = next(event for event in confirms if event.get("option") == "r")
+    assert chosen.get("window") == "W1" and chosen.get("path") == "/Game/NotAReal", chosen
+    assert chosen.get("run_id") and chosen.get("ts")
+
+
+def check_observability() -> None:
+    """第 6 段：用量字段、路由计数、HTML 缓存留空、四个路由、契约外工具拒绝。不叫模型，不写场景。"""
+    import tempfile
+
+    from core.contract_tools import call_named
+    from core.llm_call import usage_record
+    from eval.report import percentile, render_html, route_counts, summarize_traces
+    from fastapi.testclient import TestClient
+    from server.gateway import app
+
+    plain = usage_record({"prompt_tokens": 3, "completion_tokens": 1})
+    assert "prompt_cache_hit_tokens" not in plain
+    assert "cached_tokens" not in plain
+    rich = usage_record({
+        "prompt_tokens": 3,
+        "completion_tokens": 1,
+        "prompt_cache_hit_tokens": 2,
+        "prompt_cache_miss_tokens": 1,
+        "prompt_tokens_details": {"cached_tokens": 2},
+    })
+    assert rich["prompt_cache_hit_tokens"] == 2
+    assert rich["cached_tokens"] == 2
+    assert abs(percentile([1, 2, 3, 4], 50) - 2.5) < 1e-9
+    assert abs(percentile([1, 2, 3, 4], 95) - 3.85) < 1e-9
+    assert percentile([], 50) is None
+
+    with tempfile.TemporaryDirectory() as tmp:
+        events = Path(tmp)
+        (events / "a.jsonl").write_text(
+            "\n".join([
+                '{"type":"run_start","source":"rules"}',
+                '{"type":"run_start","source":"learned"}',
+                '{"type":"intent","source":"understood"}',
+                '{"type":"run_start","source":"understood"}',
+                '{"type":"run_start","source":"planner"}',
+                '{"type":"run_start","source":"resume"}',
+            ]),
+            encoding="utf-8",
+        )
+        counts = route_counts(events)
+    assert counts["l0"] == 2 and counts["rules"] == 1 and counts["learned"] == 1
+    assert counts["understood"] == 1 and counts["planner"] == 1 and counts["other"] == 1
+    assert counts["runs"] == 5
+
+    raw = [
+        {"ok": False, "judge_kind": "cpp_build", "error": "error C1", "prompt_cache_hit_tokens": 4, "prompt_cache_miss_tokens": 6},
+        {"ok": True, "node": "observe"},
+    ]
+    tasks = [
+        {"ok": True, "elapsed": 1, "retry_count": 1, "prompt_tokens": 10, "completion_tokens": 2},
+        {"ok": False, "elapsed": 3, "retry_count": 0},
+    ]
+    stats = summarize_traces(raw, tasks, counts)
+    assert stats["retries"] == 1
+    assert stats["avg_prompt"] == 10
+    assert stats["cache"]["hit"] == 4
+    assert abs(stats["cache"]["rate"] - 0.4) < 1e-9
+    blank = dict(stats)
+    blank["cache"] = {"hit": None, "miss": None, "cached": None, "rows": 0, "rate": None}
+    page = render_html(blank)
+    assert "<th>命中率</th><td></td>" in page
+    assert "估算" not in page
+    filled = render_html(stats)
+    assert "<th>命中率</th><td>0.4</td>" in filled
+    assert "Ollama" in filled and "vLLM" in filled
+
+    refused = call_named("save_assets", {})
+    assert refused["ok"] is False and "不在契约里" in refused["error"]
+    client = TestClient(app)
+    health = client.get("/api/health").json()
+    assert health.get("model") and "mcp_up" in health and health.get("mcp_url")
+    bad = client.post("/api/tool-call", json={"name": "save_assets", "arguments": {}}).json()
+    assert bad["ok"] is False
+    paths = {getattr(route, "path", "") for route in app.routes}
+    for path in ("/api/health", "/api/chat", "/api/structured", "/api/tool-call"):
+        assert path in paths, path
 
 
 if __name__ == "__main__":

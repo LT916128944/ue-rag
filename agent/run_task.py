@@ -269,6 +269,16 @@ def run_task(task: dict, trace_path: Path | None = None, thread_id: str | None =
                             "prompt_tokens": usage.get("prompt_tokens"),
                             "completion_tokens": usage.get("completion_tokens"),
                         }
+                        for key in (
+                            "model",
+                            "llm_elapsed",
+                            "prompt_cache_hit_tokens",
+                            "prompt_cache_miss_tokens",
+                            "cached_tokens",
+                            "llm_error",
+                        ):
+                            if key in usage and usage.get(key) is not None:
+                                row[key] = usage[key]
                         if (item or {}).get("judge_kind"):
                             row["judge_kind"] = item["judge_kind"]
                         if (item or {}).get("summary"):

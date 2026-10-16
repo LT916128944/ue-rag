@@ -7,6 +7,10 @@ data/archive/
 data/snapshots/
 data/briefs/
 data/ledger.json
+data/costs.jsonl
+data/cpp_build_job.json
+data/cpp_build_job.json.tmp
+data/cpp_build.stop
 data/ue_mcp_index.json
 .env
 __pycache__/

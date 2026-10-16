@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>观测</title>
+<style>
+body { font-family: sans-serif; margin: 2rem; color: #1a1a1a; }
+table { border-collapse: collapse; margin: 0.5rem 0 1.5rem; }
+td, th { border: 1px solid #ccc; padding: 0.3rem 0.7rem; text-align: left; }
+h1 { font-size: 1.4rem; }
+h2 { font-size: 1.05rem; margin-top: 1.6rem; }
+.note { max-width: 42rem; line-height: 1.5; }
+</style>
+</head>
+<body>
+<h1>观测</h1>
+<p>数据来自已有 trace：data\traces。没有采集服务。空着的格子是这次没有读数。</p>
+<table>
+<tr><th>任务数</th><td>70</td></tr>
+<tr><th>ok</th><td>60</td></tr>
+<tr><th>耗时 P50</th><td>15.461</td></tr>
+<tr><th>耗时 P95</th><td>67.873</td></tr>
+<tr><th>平均 prompt_tokens</th><td>81199.5</td></tr>
+<tr><th>平均 completion_tokens</th><td>1903.3</td></tr>
+<tr><th>有 prompt 读数的任务</th><td>40</td></tr>
+<tr><th>重试合计</th><td>17</td></tr>
+</table>
+<h2>失败分类</h2>
+<table>
+<tr><th>类</th><th>次数</th></tr>
+<tr><td>编译</td><td>8</td></tr><tr><td>测试</td><td>0</td></tr><tr><td>工具拒绝</td><td>0</td></tr><tr><td>MCP 连不上</td><td>0</td></tr><tr><td>超过重试</td><td>1</td></tr><tr><td>关卡预检</td><td>1</td></tr><tr><td>其他</td><td>121</td></tr>
+</table>
+<h2>路由</h2>
+<p>只数 <code>data/events</code> 里的 <code>run_start</code>。L0 是手写规则和已学句式，不叫模型。</p>
+<table>
+<tr><th>L0 直接归地</th><td>19</td></tr>
+<tr><th>其中 rules</th><td>19</td></tr>
+<tr><th>其中 learned</th><td>0</td></tr>
+<tr><th>L1 理解器</th><td>2</td></tr>
+<tr><th>老规划者</th><td>2</td></tr>
+<tr><th>其他 source</th><td>0</td></tr>
+<tr><th>run_start</th><td>23</td></tr>
+<tr><th>L0 占比</th><td>0.8261</td></tr>
+</table>
+<h2>缓存</h2>
+<table>
+<tr><th>prompt_cache_hit_tokens</th><td>195072</td></tr>
+<tr><th>prompt_cache_miss_tokens</th><td>26385</td></tr>
+<tr><th>cached_tokens</th><td>195072</td></tr>
+<tr><th>命中率</th><td>0.8809</td></tr>
+<tr><th>带回缓存字段的行</th><td>52</td></tr>
+</table>
+<h2>本地推理</h2>
+<p class="note">Ollama 适合在这一台机器上先看一个小模型的延迟，不放进现在这条闭环：工具调用和 strict JSON 还没在默认三条任务上量过。vLLM 适合多卡把同一个权重做成服务，本机没有这组卡，也不把引擎和推理服务放进同一个进程。两条都不部署。换模型仍然只改 <code>UE_LLM_MODEL</code>，供应商和 <code>base_url</code> 不动。</p>
+</body>
+</html>

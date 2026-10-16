@@ -1011,13 +1011,28 @@ def _write(path: Path, query: str, rows: list[dict]) -> None:
     path.write_text("\n".join(lines), encoding="utf-8")
 
 
-def run_sequence(query: str, decide) -> tuple[int, Path]:
-    """decide(step, summary) -> stop / skip / retry。summary 为空表示这一步还跑不了。"""
+def _emit_choice(events, window: str, decision, path: str = "") -> None:
+    if events is None:
+        return
+    from agent.run_windows import confirm_fields
+
+    option, supplied = confirm_fields(decision, path)
+    events.emit("confirm", window=window, option=option, path=supplied)
+
+
+def run_sequence(query: str, decide, *, choices: bool = False) -> tuple[int, Path]:
+    """decide(step, summary) -> stop / skip / retry。summary 为空表示这一步还跑不了。
+    choices 为真时，每次 s/c/r 写一条 confirm 事件。"""
     from agent.run_task import run_task
     from agent.supervise import plan_sequence
 
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     path = RUNS_DIR / stamp.split("-", 1)[0] / f"{stamp}.md"
+    events = None
+    if choices:
+        from agent.run_windows import _EventBus
+
+        events = _EventBus(stamp)
     steps = plan_sequence(query)
     rows = []
     print(f"拆成 {len(steps)} 步。记录写在 {path}")
@@ -1034,6 +1049,7 @@ def run_sequence(query: str, decide) -> tuple[int, Path]:
             print(detail)
             decision = decide(step, None)
             supplied = _taken_path(step, decision)
+            _emit_choice(events, f"S{number}", decision, supplied)
             if supplied:
                 filled = apply_supplied_path(query, step, supplied)
                 if filled is None:
@@ -1078,6 +1094,7 @@ def run_sequence(query: str, decide) -> tuple[int, Path]:
             index += 1
             continue
         decision = decide(step, summary)
+        _emit_choice(events, f"S{number}", decision, "")
         rows.append({"index": number, "title": title, "status": "失败", "detail": detail, "decision": decision})
         _write(path, query, rows)
         if decision == "retry":

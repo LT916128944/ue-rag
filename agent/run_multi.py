@@ -61,7 +61,7 @@ def main() -> None:
         if query in (":quit", ":q", "exit", "quit"):
             print("退出")
             return
-        code, path = run_sequence(query, _decide)
+        code, path = run_sequence(query, _decide, choices=True)
         print(f"\n序列结束，退出码 {code}。记录：{path}\n")
 
 

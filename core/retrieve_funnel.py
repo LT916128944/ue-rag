@@ -295,6 +295,23 @@ def _row(corpus: dict, index: int, distance: float) -> dict:
     }
 
 
+def retrieve_bm25(
+    query: str,
+    top_k: int = 5,
+    where: dict | None = None,
+    collection: str = "ue_assets",
+) -> list[dict]:
+    """评测用的纯 BM25。不走专有名词路由，也不走向量。热路径仍是 retrieve_funnel。"""
+    corpus = _corpus(collection)
+    if not corpus["ids"]:
+        return []
+    indexes = [i for i in range(len(corpus["ids"])) if _match_where(corpus["metas"][i], where)]
+    if not indexes:
+        return []
+    ranked = corpus["bm25"].top(query, indexes, max(1, int(top_k)))
+    return [_row(corpus, index, 1.0) for index in ranked]
+
+
 def retrieve_funnel(
     query: str,
     top_k: int = 5,

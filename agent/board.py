@@ -92,6 +92,13 @@ class Board:
                 window["state"] = state
             if event.get("attempt"):
                 window["attempt"] = event.get("attempt")
+        elif etype == "confirm":
+            wid = str(event.get("window") or "")
+            if wid:
+                label = str(event.get("option") or "")
+                if event.get("path"):
+                    label = f"{label} {event.get('path')}"
+                self._window(wid)["note"] = "确认 " + label
         elif etype in ("tool_call", "judge"):
             window = self._window(event.get("window"))
             if event.get("node"):

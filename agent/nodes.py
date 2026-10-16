@@ -5,19 +5,14 @@ import json
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from config import SKILL_CARDS_PATH, UE_LLM_MODEL
+from config import SKILL_CARDS_PATH
+from agent.skill_prompt import load_agent_skill_prompt, project_rules_suffix, skill_card_line
 from dotenv import load_dotenv
 load_dotenv()
 
-from openai import OpenAI
 from core.tool_router import build_agent_prompt, retrieve_tools, get_local_tools, tool_schema
 
 from agent.state import AgentState
-
-client = OpenAI(
-    api_key=os.getenv("DEEPSEEK_API_KEY"),
-    base_url="https://api.deepseek.com",
-)
 
 FINISH_TOOL = {
     "type": "function",
@@ -43,14 +38,6 @@ _TEST_KINDS = {"editor_assert", "automation"}
 _skill_vectors = {"mtime": None, "matrix": None, "cards": None}
 
 
-def _usage(response) -> dict:
-    usage = getattr(response, "usage", None)
-    if usage is None:
-        return {}
-    return {
-        "prompt_tokens": getattr(usage, "prompt_tokens", None),
-        "completion_tokens": getattr(usage, "completion_tokens", None),
-    }
 
 
 def _ok_from_payload(text: str) -> bool:
@@ -154,7 +141,7 @@ def _nearest_skill(query: str) -> str:
             scoped = True
     if len(cards) == 1:
         card = cards[0]
-        return _attach_solution(query, f"相关 Skill：{card.get('name', '')}：{card.get('description', '')}")
+        return _attach_solution(query, _skill_context(card, scoped))
     try:
         import numpy as np
         from core.rag_core import _get_model
@@ -178,7 +165,11 @@ def _nearest_skill(query: str) -> str:
             card = _skill_vectors["cards"][int(scores.argmax())]
     except Exception:
         card = cards[0]
-    return _attach_solution(query, f"相关 Skill：{card.get('name', '')}：{card.get('description', '')}")
+    return _attach_solution(query, _skill_context(card, scoped))
+
+
+def _skill_context(card: dict, scoped: bool) -> str:
+    return skill_card_line(card) + project_rules_suffix(scoped, load_agent_skill_prompt())
 
 
 def _attach_solution(query: str, line: str) -> str:
@@ -351,12 +342,14 @@ def plan_node(state: AgentState):
     prompt += _role_constraints(state, role)
 
     from agent.context import visible_messages
+    from core.llm_call import complete, usage_for_trace
+
     messages = [{"role": "system", "content": prompt}] + visible_messages(state["messages"], task)
-    response = client.chat.completions.create(
-        model=UE_LLM_MODEL,
-        messages=messages,
+    response, record = complete(
+        messages,
         tools=state["available_tools"],
         tool_choice="auto",
+        caller="plan",
     )
     msg = response.choices[0].message
     tool_calls_dict = []
@@ -370,7 +363,7 @@ def plan_node(state: AgentState):
     msg_dict = {"role": "assistant", "content": msg.content or ""}
     if tool_calls_dict:
         msg_dict["tool_calls"] = tool_calls_dict
-    return {"messages": [msg_dict], "tool_calls": tool_calls_dict, "llm_usage": _usage(response)}
+    return {"messages": [msg_dict], "tool_calls": tool_calls_dict, "llm_usage": usage_for_trace(record)}
 
 
 def execute_node(state: AgentState):

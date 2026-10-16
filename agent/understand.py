@@ -4,7 +4,6 @@
 三条铁律：只选表内动作／只填槽位名不编路径／分类推不出的写进 unresolved。
 模型不碰工具 schema、不发规划窗口清单、不宣布成功。"""
 import json
-import os
 import re
 
 from agent.catalog import CATALOG, INTEGRATE_ACTION
@@ -58,25 +57,72 @@ def _titles(query: str) -> list[str]:
         return []
 
 
-def _complete_live_usage(messages: list[dict]) -> tuple[str, dict | None]:
-    """与 plan_windows._complete_live 同一供应商同一模型；多带回 usage 记进事件。"""
-    from openai import OpenAI
+_TOKEN_KEYS = (
+    "prompt_tokens",
+    "completion_tokens",
+    "prompt_cache_hit_tokens",
+    "prompt_cache_miss_tokens",
+    "cached_tokens",
+)
 
-    from config import UE_LLM_MODEL
 
-    key = os.getenv("DEEPSEEK_API_KEY") or ""
-    if not key.strip():
-        raise RuntimeError("没有 DEEPSEEK_API_KEY")
-    client = OpenAI(api_key=key, base_url="https://api.deepseek.com")
-    response = client.chat.completions.create(model=UE_LLM_MODEL, messages=messages, temperature=0)
-    usage = getattr(response, "usage", None)
-    tokens = None
-    if usage is not None:
-        tokens = {
-            "prompt_tokens": getattr(usage, "prompt_tokens", None),
-            "completion_tokens": getattr(usage, "completion_tokens", None),
-        }
-    return response.choices[0].message.content or "", tokens
+def _messages(query: str) -> list[dict]:
+    return [
+        {"role": "system", "content": system_prompt()},
+        {"role": "user", "content": user_prompt(query, _titles(query))},
+    ]
+
+
+def _parse_intent(text: str, query: str) -> tuple[dict | None, str | None]:
+    match = re.search(r"\{.*\}", str(text or ""), re.S)
+    if not match:
+        return None, "没有 JSON"
+    try:
+        data = json.loads(match.group(0))
+    except json.JSONDecodeError:
+        return None, "JSON 解析失败"
+    intent = validate_intent(data if isinstance(data, dict) else {}, query)
+    if not intent.get("ok"):
+        return intent, "validate_intent 未通过"
+    return intent, None
+
+
+def understand_once(query: str) -> dict:
+    """一次真实调用。ok 表示 JSON 通过 validate_intent。不回退规划者。"""
+    from core.llm_call import complete_logged, model_name
+
+    query = (query or "").strip()
+    out = {
+        "ok": False,
+        "intent": None,
+        "error": None,
+        "model": model_name(),
+        "elapsed": 0,
+        "prompt_tokens": None,
+        "completion_tokens": None,
+    }
+    if not query:
+        out["error"] = "原句为空"
+        return out
+    response, record = complete_logged(_messages(query), temperature=0, caller="understand")
+    out["model"] = record.get("model")
+    out["elapsed"] = record.get("elapsed")
+    out["prompt_tokens"] = record.get("prompt_tokens")
+    out["completion_tokens"] = record.get("completion_tokens")
+    for key in ("prompt_cache_hit_tokens", "prompt_cache_miss_tokens", "cached_tokens"):
+        if key in record:
+            out[key] = record[key]
+    if record.get("error"):
+        out["error"] = record["error"]
+        return out
+    text = ""
+    if response is not None:
+        text = response.choices[0].message.content or ""
+    intent, error = _parse_intent(text, query)
+    out["intent"] = intent
+    out["error"] = error
+    out["ok"] = error is None and bool(intent and intent.get("ok"))
+    return out
 
 
 def understand(query: str, complete=None) -> dict | None:
@@ -85,29 +131,22 @@ def understand(query: str, complete=None) -> dict | None:
     query = (query or "").strip()
     if not query:
         return None
-    messages = [
-        {"role": "system", "content": system_prompt()},
-        {"role": "user", "content": user_prompt(query, _titles(query))},
-    ]
-    text = ""
-    tokens = None
+    if complete is None:
+        detail = understand_once(query)
+        if not detail.get("ok"):
+            return None
+        intent = detail.get("intent") or {}
+        tokens = {key: detail[key] for key in _TOKEN_KEYS if key in detail}
+        if detail.get("model"):
+            tokens["model"] = detail["model"]
+        if tokens:
+            intent["tokens"] = tokens
+        return intent
     try:
-        if complete is not None:
-            text = complete(messages)
-        else:
-            text, tokens = _complete_live_usage(messages)
+        text = complete(_messages(query))
     except Exception:
         return None
-    match = re.search(r"\{.*\}", str(text or ""), re.S)
-    if not match:
+    intent, error = _parse_intent(text, query)
+    if error or not intent or not intent.get("ok"):
         return None
-    try:
-        data = json.loads(match.group(0))
-    except json.JSONDecodeError:
-        return None
-    intent = validate_intent(data if isinstance(data, dict) else {}, query)
-    if not intent.get("ok"):
-        return None
-    if tokens:
-        intent["tokens"] = tokens
     return intent

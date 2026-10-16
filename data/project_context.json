@@ -1,0 +1,13 @@
+{
+  "module": "AIAgentProject",
+  "switches": {
+    "UE_ALLOW_BLUEPRINT": true,
+    "UE_ALLOW_MATERIAL": false,
+    "UE_ALLOW_UMG": false,
+    "UE_ALLOW_ANIM": false,
+    "UE_ALLOW_NIAGARA": false
+  },
+  "model": "deepseek-chat",
+  "source_root": "E:\\UEProject\\AIWork\\AIAgentProject\\Source\\AIAgentProject",
+  "level_name": "L_NewTest"
+}

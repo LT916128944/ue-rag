@@ -2,7 +2,6 @@
 """真裁判。返回 {ok, kind, summary, errors:[{file, line, message}]}。"""
 import json
 import re
-import subprocess
 
 from config import UE_ENGINE_ROOT, UE_EXEC_MODE, UE_MCP_TIMEOUT, UE_PROJECT
 from core.editor_exec import MOCK_ACTORS, exec_tool
@@ -281,6 +280,25 @@ def _parse_cpp_errors(log: str) -> list[dict]:
     return found
 
 
+def cpp_build_verdict(outcome: dict) -> dict:
+    """超时和停止先记失败。不看退出码，避免杀掉进程后被写成编译成功。"""
+    reason = str(outcome.get("reason") or "")
+    if reason == "timeout":
+        message = f"timeout {outcome.get('timeout_s')}s"
+        return _result(False, "cpp_build", "编译超时", [{"file": "", "line": 0, "message": message}])
+    if reason == "stopped":
+        return _result(False, "cpp_build", "编译已停止", [{"file": "", "line": 0, "message": "stopped"}])
+    log = (outcome.get("stdout") or "") + "\n" + (outcome.get("stderr") or "")
+    errors = _parse_cpp_errors(log)
+    code = outcome.get("returncode")
+    if code == 0 and not errors:
+        return _result(True, "cpp_build", "exit 0")
+    if not errors:
+        tail = "\n".join(log.strip().splitlines()[-5:])
+        errors = [{"file": "", "line": 0, "message": f"exit {code} {tail}".strip()}]
+    return _result(False, "cpp_build", errors[0]["message"], errors)
+
+
 def _cpp_build() -> dict:
     if UE_EXEC_MODE == "mock":
         return _result(True, "cpp_build", "mock")
@@ -293,25 +311,12 @@ def _cpp_build() -> dict:
         argv = cpp_build_argv()
     except RuntimeError as exc:
         return _result(False, "cpp_build", str(exc), [{"file": "", "line": 0, "message": str(exc)}])
+    from core.build_job import run_command
     try:
-        proc = subprocess.run(
-            argv,
-            capture_output=True,
-            timeout=UE_MCP_TIMEOUT,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-        )
-    except subprocess.TimeoutExpired:
-        return _result(False, "cpp_build", "编译超时", [{"file": "", "line": 0, "message": f"timeout {UE_MCP_TIMEOUT}s"}])
-    log = (proc.stdout or "") + "\n" + (proc.stderr or "")
-    errors = _parse_cpp_errors(log)
-    if proc.returncode == 0 and not errors:
-        return _result(True, "cpp_build", "exit 0")
-    if not errors:
-        tail = "\n".join(log.strip().splitlines()[-5:])
-        errors = [{"file": "", "line": 0, "message": f"exit {proc.returncode} {tail}".strip()}]
-    return _result(False, "cpp_build", errors[0]["message"], errors)
+        outcome = run_command(argv, UE_MCP_TIMEOUT)
+    except OSError as exc:
+        return _result(False, "cpp_build", str(exc), [{"file": "", "line": 0, "message": str(exc)}])
+    return cpp_build_verdict(outcome)
 
 
 def _fail_count(data) -> int | None:

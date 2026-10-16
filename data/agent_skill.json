@@ -1,0 +1,5 @@
+{
+  "path": "/Game/Skills/AIAgentProjectRules.AIAgentProjectRules_C",
+  "description": "本项目已经踩过的规矩：单位、编译目标、路径唯一、裁判。",
+  "prompt": "1 米 = 100 uu。\n编的是 AIAgentProjectEditor。\n路径不唯一就停。\n裁判不由模型宣布。"
+}

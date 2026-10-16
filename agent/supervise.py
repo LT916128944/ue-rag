@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from config import UE_LLM_MODEL, UE_PROJECT_DIR, UE_SOURCE_ROOT, allow_blueprint
+from config import UE_PROJECT_DIR, UE_SOURCE_ROOT, allow_blueprint
 from core.retrieve_funnel import _corpus
 
 _BP_RE = re.compile(r"(?<![A-Za-z0-9_])BP_[A-Za-z0-9_]+(?![A-Za-z0-9_])")
@@ -756,12 +756,10 @@ def _from_model(query: str) -> dict:
     key = os.getenv("DEEPSEEK_API_KEY") or ""
     if not key.strip():
         return _fail("这句话套不上规则，且没有 DEEPSEEK_API_KEY。")
-    from openai import OpenAI
+    from core.llm_call import complete
 
-    client = OpenAI(api_key=key, base_url="https://api.deepseek.com")
-    response = client.chat.completions.create(
-        model=UE_LLM_MODEL,
-        messages=[
+    response, _record = complete(
+        [
             {
                 "role": "system",
                 "content": (
@@ -772,6 +770,7 @@ def _from_model(query: str) -> dict:
             {"role": "user", "content": query},
         ],
         temperature=0,
+        caller="supervise",
     )
     text = response.choices[0].message.content or ""
     match = re.search(r"\{.*\}", text, re.S)

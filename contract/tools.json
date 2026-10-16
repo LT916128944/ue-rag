@@ -1,0 +1,198 @@
+{
+  "tools": [
+    {
+      "name": "query_actor",
+      "summary": "按名字读当前关卡里唯一 Actor 的位置，零个或多个就停。",
+      "permission": "读",
+      "timeout": 60,
+      "input_schema": {
+        "type": "object",
+        "properties": {"name": {"type": "string"}},
+        "required": ["name"]
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "ok": {"type": "boolean"},
+          "name": {"type": "string"},
+          "ref_path": {"type": "string"},
+          "location": {
+            "type": "object",
+            "properties": {
+              "x": {"type": "number"},
+              "y": {"type": "number"},
+              "z": {"type": "number"}
+            },
+            "required": ["x", "y", "z"]
+          }
+        },
+        "required": ["ok", "name", "ref_path", "location"]
+      },
+      "error_schema": {
+        "type": "object",
+        "properties": {
+          "ok": {"type": "boolean"},
+          "error": {"type": "string"}
+        },
+        "required": ["ok", "error"]
+      }
+    },
+    {
+      "name": "query_blueprint",
+      "summary": "读一张已有蓝图的图名、变量名和事件名，不改图。",
+      "permission": "读",
+      "timeout": 60,
+      "input_schema": {
+        "type": "object",
+        "properties": {"ref_path": {"type": "string"}},
+        "required": ["ref_path"]
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "ok": {"type": "boolean"},
+          "ref_path": {"type": "string"},
+          "graphs": {"type": "array", "items": {"type": "string"}},
+          "variables": {"type": "array", "items": {"type": "string"}},
+          "events": {"type": "array", "items": {"type": "string"}}
+        },
+        "required": ["ok", "ref_path", "graphs", "variables", "events"]
+      },
+      "error_schema": {
+        "type": "object",
+        "properties": {
+          "ok": {"type": "boolean"},
+          "error": {"type": "string"}
+        },
+        "required": ["ok", "error"]
+      }
+    },
+    {
+      "name": "find_asset",
+      "summary": "在 /Game 里按名字找资产，不是唯一就停。",
+      "permission": "读",
+      "timeout": 60,
+      "input_schema": {
+        "type": "object",
+        "properties": {"name": {"type": "string"}},
+        "required": ["name"]
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "ok": {"type": "boolean"},
+          "name": {"type": "string"},
+          "ref_path": {"type": "string"}
+        },
+        "required": ["ok", "name", "ref_path"]
+      },
+      "error_schema": {
+        "type": "object",
+        "properties": {
+          "ok": {"type": "boolean"},
+          "error": {"type": "string"},
+          "candidates": {"type": "array", "items": {"type": "string"}}
+        },
+        "required": ["ok", "error"]
+      }
+    },
+    {
+      "name": "build_project",
+      "summary": "关掉编辑器后编译 AIAgentProjectEditor，并留下错误原文。",
+      "permission": "编译",
+      "timeout": 300,
+      "input_schema": {"type": "object", "properties": {}},
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "ok": {"type": "boolean"},
+          "summary": {"type": "string"},
+          "errors": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "file": {"type": "string"},
+                "line": {"type": "integer"},
+                "message": {"type": "string"}
+              },
+              "required": ["file", "line", "message"]
+            }
+          }
+        },
+        "required": ["ok", "summary", "errors"]
+      },
+      "error_schema": {
+        "type": "object",
+        "properties": {
+          "ok": {"type": "boolean"},
+          "error": {"type": "string"},
+          "errors": {"type": "array"}
+        },
+        "required": ["ok", "error"]
+      }
+    },
+    {
+      "name": "run_automation_test",
+      "summary": "按过滤器跑 Automation，失败数不是 0 就不算通过。",
+      "permission": "测试",
+      "timeout": 300,
+      "input_schema": {
+        "type": "object",
+        "properties": {"filter": {"type": "string"}},
+        "required": ["filter"]
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "ok": {"type": "boolean"},
+          "summary": {"type": "string"}
+        },
+        "required": ["ok", "summary"]
+      },
+      "error_schema": {
+        "type": "object",
+        "properties": {
+          "ok": {"type": "boolean"},
+          "error": {"type": "string"}
+        },
+        "required": ["ok", "error"]
+      }
+    },
+    {
+      "name": "get_build_error",
+      "summary": "读上一次 build_project 留下的编译错误，没有记录就停。",
+      "permission": "读",
+      "timeout": 60,
+      "input_schema": {"type": "object", "properties": {}},
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "ok": {"type": "boolean"},
+          "summary": {"type": "string"},
+          "errors": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "file": {"type": "string"},
+                "line": {"type": "integer"},
+                "message": {"type": "string"}
+              },
+              "required": ["file", "line", "message"]
+            }
+          }
+        },
+        "required": ["ok", "summary", "errors"]
+      },
+      "error_schema": {
+        "type": "object",
+        "properties": {
+          "ok": {"type": "boolean"},
+          "error": {"type": "string"}
+        },
+        "required": ["ok", "error"]
+      }
+    }
+  ]
+}

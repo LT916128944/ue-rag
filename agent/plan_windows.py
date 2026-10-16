@@ -962,15 +962,9 @@ def windows_from_rules(steps: list[dict]) -> list[dict]:
 
 
 def _complete_live(messages: list[dict]) -> str:
-    from openai import OpenAI
+    from core.llm_call import complete
 
-    from config import UE_LLM_MODEL
-
-    key = os.getenv("DEEPSEEK_API_KEY") or ""
-    if not key.strip():
-        raise RuntimeError("没有 DEEPSEEK_API_KEY")
-    client = OpenAI(api_key=key, base_url="https://api.deepseek.com")
-    response = client.chat.completions.create(model=UE_LLM_MODEL, messages=messages, temperature=0)
+    response, _record = complete(messages, temperature=0, caller="planner")
     return response.choices[0].message.content or ""
 
 

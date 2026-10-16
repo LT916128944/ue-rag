@@ -104,6 +104,8 @@ BP_GRAPH_JSONL = DATA_DIR / "ue_bp_graph.jsonl"
 DOCS_JSONL = DATA_DIR / "ue_docs.jsonl"
 ERRORS_JSONL = DATA_DIR / "ue_errors.jsonl"
 SKILL_CARDS_PATH = DATA_DIR / "skill_cards.json"
+PROJECT_CONTEXT_PATH = DATA_DIR / "project_context.json"
+AGENT_SKILL_PATH = DATA_DIR / "agent_skill.json"
 
 DOCS_DIR = UE_PROJECT_DIR / "documents"
 CONVENTIONS_PATH = UE_PROJECT_DIR / ".cursor" / "memory" / "conventions.md"

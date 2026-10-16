@@ -65,6 +65,18 @@ def _now() -> str:
     return datetime.now().isoformat(timespec="seconds")
 
 
+def confirm_fields(decision, path: str = "") -> tuple[str, str]:
+    """人的选择：s 停止 / c 跳过 / r 补路径或重试。路径只在补路径时有字。"""
+    text = decision if isinstance(decision, str) else ""
+    if text == "skip":
+        return "c", ""
+    if text == "retry":
+        return "r", ""
+    if text in ("", "stop"):
+        return "s", ""
+    return "r", path or text
+
+
 # ---------- 编辑器闸门：读并行、写独占 ----------
 
 class _EditorGate:
@@ -878,6 +890,10 @@ def execute_windows(query: str, complete=None, echo=print, emit=None, planned=No
 
     path = runs_md_path(run_id)
     events = _EventBus(run_id, emit=emit)
+    if resume_state is None:
+        review = (brief or {}).get("review") or {}
+        if str(review.get("status") or "").startswith("通过"):
+            events.emit("confirm", window="", option="确认", path="")
     # P4 观测：理解器一开口就记一条 intent 事件（只存决策字段）；run_start 的 source 带 understood
     if isinstance(planned, dict) and planned.get("intent"):
         fields = {key: value for key, value in dict(planned["intent"]).items()}
@@ -931,6 +947,8 @@ def execute_windows(query: str, complete=None, echo=print, emit=None, planned=No
             echo(f"\n{entry['id']} 暂停：{err_text}")
             echo(f"{entry['id']} 等人工裁决，在终端里输入：s 停止 / c 跳过 / r /Game/目录 或 r Public/类名.h")
             decision = decide(entry.get("window") or {}, entry)
+            option, supplied = confirm_fields(decision)
+            events.emit("confirm", window=entry["id"], option=option, path=supplied)
             note = str(decision) if isinstance(decision, str) else ""
             echo(f"{entry['id']} 裁决收到：{note if note else '停止'}")
             if decision == "skip":
@@ -1024,6 +1042,9 @@ def execute_windows(query: str, complete=None, echo=print, emit=None, planned=No
                         summary = {"id": wid, "ok": False, "summary": f"{type(exc).__name__}: {exc}", "error": str(exc)}
                     _absorb_result(state, events, echo, wid, summary)
     except KeyboardInterrupt:
+        from core.build_job import request_stop
+
+        request_stop()
         interrupted = True
         state.data["status"] = "interrupted"
         state.save()

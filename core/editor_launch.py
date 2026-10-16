@@ -79,6 +79,11 @@ def close_editor() -> dict:
     return {"ok": False, "closed": False, "note": "编辑器未能关闭"}
 
 
+def launch_command() -> list[str]:
+    """跳过 Restore Packages。taskkill 不是正常退出，下次启动会模态询问是否恢复自动保存，MCP 因此等不到。"""
+    return [str(editor_exe()), str(UE_PROJECT), "-AutoDeclinePackageRecovery"]
+
+
 def launch_editor() -> dict:
     if editor_running():
         return {
@@ -90,7 +95,7 @@ def launch_editor() -> dict:
     if not exe.is_file():
         return {"ok": False, "started": False, "note": f"找不到 {exe}"}
     subprocess.Popen(
-        [str(exe), str(UE_PROJECT)],
+        launch_command(),
         creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP,
         close_fds=True,
     )

@@ -6,14 +6,11 @@ import sys
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from dotenv import load_dotenv
-from openai import OpenAI
 
 load_dotenv()
 
-from config import UE_LLM_MODEL
+from core.llm_call import complete
 from core.rag_core import retrieve
-
-client = OpenAI(api_key=os.getenv("DEEPSEEK_API_KEY"), base_url="https://api.deepseek.com")
 
 SYSTEM = """你是 Unreal 项目的检索助手。只根据给出的资料回答。
 资料不够就说资料里没有。不要声称自己已经改了文件、编译或移动了 Actor。
@@ -37,12 +34,12 @@ def _context(query: str) -> str:
 
 def answer(query: str) -> str:
     context = _context(query)
-    response = client.chat.completions.create(
-        model=UE_LLM_MODEL,
-        messages=[
+    response, _record = complete(
+        [
             {"role": "system", "content": SYSTEM},
             {"role": "user", "content": f"资料：\n{context}\n\n问题：{query}"},
         ],
+        caller="chat",
     )
     return response.choices[0].message.content or ""
 
