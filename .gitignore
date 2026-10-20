@@ -7,6 +7,11 @@ data/archive/
 data/snapshots/
 data/briefs/
 data/ledger.json
+data/index_queue.jsonl
+data/index_status.json
+data/skills/action_candidates.json
+data/skills/promoted_actions.json
+data/distill/*.jsonl
 data/costs.jsonl
 data/cpp_build_job.json
 data/cpp_build_job.json.tmp

@@ -1,0 +1,14 @@
+{
+  "entries": [
+    {
+      "file": "core/editor_exec.py",
+      "import": "agent.harness",
+      "reason": "拒绝结果要带 policy_snapshot。本窗口不搬这个函数"
+    },
+    {
+      "file": "server/gateway.py",
+      "import": "agent.understand",
+      "reason": "/api/structured 包理解器。本窗口不拆网关"
+    }
+  ]
+}

@@ -94,9 +94,12 @@ def execute_ue_tool(tool_name: str, arguments: str, task: dict | None = None) ->
             return json.dumps(result, ensure_ascii=False)
         if short_name == "apply_unified_diff":
             if not (task.get("verify") or []):
+                from agent.harness import policy_snapshot
+
                 return json.dumps({
                     "ok": False,
                     "error": "write refused。改 C++ 用 start.bat 菜单 3，确认后会编译；源码留下后启动编辑器。",
+                    "policy": policy_snapshot(task),
                 }, ensure_ascii=False)
             from core.source_edit import apply_unified_diff
             result = apply_unified_diff(args.get("path", ""), args.get("diff", ""))
@@ -341,10 +344,11 @@ def plan_node(state: AgentState):
     prompt = build_agent_prompt(state["user_query"], context, require_verify=bool(state.get("require_build")))
     prompt += _role_constraints(state, role)
 
-    from agent.context import visible_messages
+    from agent.context import slice_counts, visible_messages
     from core.llm_call import complete, usage_for_trace
 
     messages = [{"role": "system", "content": prompt}] + visible_messages(state["messages"], task)
+    counts = slice_counts(state["messages"], task)
     response, record = complete(
         messages,
         tools=state["available_tools"],
@@ -363,7 +367,12 @@ def plan_node(state: AgentState):
     msg_dict = {"role": "assistant", "content": msg.content or ""}
     if tool_calls_dict:
         msg_dict["tool_calls"] = tool_calls_dict
-    return {"messages": [msg_dict], "tool_calls": tool_calls_dict, "llm_usage": usage_for_trace(record)}
+    return {
+        "messages": [msg_dict],
+        "tool_calls": tool_calls_dict,
+        "llm_usage": usage_for_trace(record),
+        "step_log": [{"tool": "context_slice", "ok": True, "context_slice": counts}],
+    }
 
 
 def execute_node(state: AgentState):
@@ -388,12 +397,15 @@ def execute_node(state: AgentState):
         full_name = get_full_name(tool_name) or tool_name
         _, short_name = split_full_name(full_name)
         if tool_name != "finish" and not tool_allowed(short_name, task):
-            result = json.dumps({"ok": False, "error": "role refused"}, ensure_ascii=False)
+            from agent.harness import policy_snapshot
+
+            policy = policy_snapshot(task)
+            result = json.dumps({"ok": False, "error": "role refused", "policy": policy}, ensure_ascii=False)
             results.append(result)
             new_messages.append({"role": "tool", "tool_call_id": call_id, "content": result})
             tools_used.append(short_name)
             tool_outcomes.append({"tool": short_name, "ok": False, "error": "role refused"})
-            step_log.append({"tool": short_name, "ok": False, "error": "role refused"})
+            step_log.append({"tool": short_name, "ok": False, "error": "role refused", "policy": policy})
             continue
 
         if tool_name == "finish":
@@ -425,6 +437,9 @@ def execute_node(state: AgentState):
         logged = {"tool": short_name, "ok": ok}
         if err:
             logged["error"] = err
+        policy = _policy_from_payload(result)
+        if policy:
+            logged["policy"] = policy
         step_log.append(logged)
         if short_name == "apply_unified_diff" and ok:
             source_written = True
@@ -503,6 +518,26 @@ def test_node(state: AgentState):
     }
 
 
+def _policy_from_payload(result: str) -> dict | None:
+    try:
+        data = json.loads(result)
+    except (TypeError, json.JSONDecodeError):
+        return None
+    policy = data.get("policy") if isinstance(data, dict) else None
+    return policy if isinstance(policy, dict) else None
+
+
+def _criteria_update(state: AgentState, *judges) -> dict | None:
+    task = dict(state.get("task") or {})
+    criteria = task.get("criteria")
+    if not isinstance(criteria, list) or not criteria:
+        return None
+    from agent.harness import apply_judges
+
+    task["criteria"] = apply_judges(criteria, *judges)
+    return task
+
+
 def _format_errors(errors: list[dict]) -> str:
     if not errors:
         return "(没有结构化错误)"
@@ -545,11 +580,14 @@ def observe_node(state: AgentState):
             if (state.get("task") or {}).get("freeze_source"):
                 failed["is_completed"] = True
                 print("  [Observe] freeze_source，留下裁判原文，不进入改文件")
+            criteria_task = _criteria_update(state, build_judge, test_judge)
+            if criteria_task is not None:
+                failed["task"] = criteria_task
             return failed
         if build_judge.get("ok") is True and test_judge.get("ok") is True:
             print("  [Observe] 裁判通过")
             summary = f"裁判通过\nBuild: {build_judge.get('summary')}\nTest: {test_judge.get('summary')}"
-            return {
+            passed = {
                 "is_completed": True,
                 "final_success": True,
                 "messages": [{"role": "assistant", "content": summary}],
@@ -560,6 +598,10 @@ def observe_node(state: AgentState):
                     "summary": summary,
                 }],
             }
+            criteria_task = _criteria_update(state, build_judge, test_judge)
+            if criteria_task is not None:
+                passed["task"] = criteria_task
+            return passed
         return {}
 
     for msg in reversed(state["messages"][-20:]):
@@ -589,13 +631,22 @@ def fix_node(state: AgentState):
     memory = ""
     message = errors[0]["message"] if errors else ""
     if message:
+        # 症状对上的失败模式优先。对不上不编造，再查 ue_error。
+        try:
+            from agent.failure_memory import hint_text, lookup_pattern
+
+            pattern = lookup_pattern(message)
+        except Exception:
+            pattern = None
+        if pattern:
+            memory = "\n\n失败模式：" + hint_text(pattern)
         try:
             from core.rag_core import retrieve as rag_retrieve
             hits = rag_retrieve(message, top_k=1, where={"source_type": "ue_error"})
         except Exception:
             hits = []
         if hits:
-            memory = "\n\n以往同类错误：\n" + (hits[0].get("content") or "")
+            memory += "\n\n以往同类错误：\n" + (hits[0].get("content") or "")
     text = "裁判失败。下一轮必须调用工具修改工程，不要只回复说明。\n\n" + _format_errors(errors) + memory
     failure_log = list(state.get("failure_log") or [])
     failure_log.append({"errors": errors})

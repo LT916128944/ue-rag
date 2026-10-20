@@ -27,6 +27,11 @@ _ACTION_ESTIMATE = {
     "set_pickable": (1.0, 4.0),
     "move_actor": (0.5, 2.0),
     "judge_pickup": (0.5, 2.0),
+    "query_actor": (0.5, 2.0),
+    "run_automation_test": (0.5, 2.0),
+    "set_scalar_param": (0.5, 2.0),
+    "query_material": (0.5, 1.0),
+    "place_batch": (1.0, 4.0),
     "probe_move": (1.0, 4.0),
     "probe_look": (1.0, 4.0),
     "probe_play": (1.0, 4.0),
@@ -347,7 +352,42 @@ def render_brief_md(brief: dict) -> str:
     if brief.get("dropped"):
         lines += ["", "## 代码验收丢弃的内容", ""]
         lines.extend("- " + str(x) for x in brief["dropped"])
+    pending = unfinished_text(unresolved=brief.get("unresolved") if isinstance(brief.get("unresolved"), list) else None)
+    if pending:
+        lines += ["", "## 尚未完成清单", "", pending]
     return "\n".join(lines) + "\n"
+
+
+def unfinished_text(ledger_path: Path | None = None, unresolved=None) -> str:
+    """台账范围、未提升技能、unresolved 合成尚未完成清单。人不审不执行。"""
+    from agent.ledger import read_ledger
+
+    bits = []
+    try:
+        data = read_ledger(ledger_path)
+    except Exception:
+        data = {"scopes": []}
+    for scope in data.get("scopes") or []:
+        if not isinstance(scope, dict) or not scope.get("id"):
+            continue
+        status = str(scope.get("status") or "pending")
+        label = {"done": "完成", "partial": "部分完成", "pending": "未完成"}.get(status, status)
+        bits.append(f"{scope.get('id')} {label}")
+    lines = []
+    if bits:
+        lines.append("；".join(bits))
+    try:
+        from agent.skill_memory import unfinished_skills
+
+        for skill in unfinished_skills():
+            lines.append(f"技能 {skill.get('id')} 尚未提升")
+    except Exception:
+        pass
+    for item in unresolved or []:
+        text = str(item or "").strip()
+        if text:
+            lines.append(text)
+    return "\n".join(lines)
 
 
 def write_brief(brief: dict, directory: Path | None = None) -> tuple[Path, Path]:
@@ -744,4 +784,13 @@ def materialize_scopes(brief: dict, candidates: list[dict] | None = None) -> tup
             "pending_note": "",
             "kind": "integration",
         })
+    try:
+        from agent.harness import build_criteria
+
+        origin = str(brief.get("query") or "")
+        for meta in scopes_meta:
+            scoped = [win_by_id[wid] for wid in (meta.get("window_ids") or []) if wid in win_by_id]
+            meta["criteria"] = build_criteria(origin, scoped)
+    except Exception:
+        pass
     return windows, scopes_meta

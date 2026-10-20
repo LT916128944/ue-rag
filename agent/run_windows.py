@@ -366,7 +366,7 @@ def _lookup_artifact(artifacts: dict, name: str) -> dict | None:
     return artifacts.get("target")
 
 
-def _prepare_task(window: dict, origin: str, artifacts: dict) -> dict:
+def _prepare_task(window: dict, origin: str, artifacts: dict, run_id: str = "") -> dict:
     if window.get("task"):
         task = dict(window["task"])
         task["id"] = window["id"]
@@ -402,6 +402,9 @@ def _prepare_task(window: dict, origin: str, artifacts: dict) -> dict:
             task[key] = True
     if window.get("pie"):
         task["pie"] = True
+    # 一次性人授权保存（阶段 D 关卡组装）：手写窗口显式 save: True 才穿透，默认仍不保存
+    if window.get("save"):
+        task["save"] = True
     if action in ("judge_pickup", "check_pickup"):
         entry_ref = _lookup_artifact(artifacts, str(task.get("actor_name") or window.get("actor_name") or ""))
         if entry_ref:
@@ -409,6 +412,22 @@ def _prepare_task(window: dict, origin: str, artifacts: dict) -> dict:
             task["target_in_level"] = bool(entry_ref.get("in_level", True))
     task.setdefault("save", False)
     task.setdefault("pie", False)
+    if run_id:
+        task["run_id"] = run_id
+    if window.get("criteria"):
+        task["criteria"] = list(window.get("criteria") or [])
+    elif window.get("automation_filter") and not task.get("automation_filter"):
+        task["automation_filter"] = window.get("automation_filter")
+    if window.get("automation_filter"):
+        task["automation_filter"] = window.get("automation_filter")
+    try:
+        from agent.harness import handoff_note
+
+        note = handoff_note(run_id, window.get("depends_on") or [])
+    except Exception:
+        note = ""
+    if note:
+        task["query"] = note + "\n" + str(task.get("query") or window.get("title") or origin)
     return task
 
 
@@ -437,12 +456,24 @@ def _make_on_row(events: _EventBus, wid: str):
     """把一扇的 trace 行转发成 run 级事件：build/test/precheck 算 judge，其余算 tool_call。"""
 
     def on_row(row: dict) -> None:
+        if row.get("context_slice") or str(row.get("tool") or "") == "context_slice":
+            counts = row.get("context_slice") if isinstance(row.get("context_slice"), dict) else {}
+            events.emit(
+                "context_slice",
+                window=wid,
+                user=int(counts.get("user") or 0),
+                judge_fail=int(counts.get("judge_fail") or 0),
+                tool_kept=int(counts.get("tool_kept") or 0),
+                tool_dropped=int(counts.get("tool_dropped") or 0),
+            )
+            return
         node = str(row.get("node") or "")
         etype = "judge" if node in ("build", "test", "precheck") else "tool_call"
         events.emit(
             etype, window=wid, node=node, tool=str(row.get("tool") or ""),
             ok=bool(row.get("ok")), note=str(row.get("error") or "")[:120] or None,
             elapsed=row.get("elapsed"),
+            policy=row.get("policy"),
         )
 
     return on_row
@@ -509,7 +540,9 @@ def _restore_source(run_id: str, wid: str, snapshot: dict) -> list[str]:
 def _run_window(entry: dict, state: _RunState, query: str, artifacts: dict, events: _EventBus, echo) -> dict:
     from agent.run_task import new_thread_id
 
-    window = entry.get("window") or {}
+    window = dict(entry.get("window") or {})
+    if state.data.get("criteria") and not window.get("criteria"):
+        window["criteria"] = list(state.data.get("criteria") or [])
     action = str(entry.get("action") or window.get("action") or "")
     if action == INTEGRATE_ACTION:
         return _run_integrate(entry, state, query, artifacts, events)
@@ -526,7 +559,7 @@ def _run_window(entry: dict, state: _RunState, query: str, artifacts: dict, even
     started = time.perf_counter()
     for attempt in range(1, attempts + 1):
         events.emit("window_state", window=entry["id"], state="running" if attempt == 1 else "retry", attempt=attempt)
-        task = _prepare_task(window, query, artifacts)
+        task = _prepare_task(window, query, artifacts, state.run_id)
         if task.get("ok") is False and not task.get("verify") and task.get("action") not in DIRECT_ACTIONS:
             summary = {
                 "id": entry["id"], "ok": False,
@@ -551,12 +584,20 @@ def _run_window(entry: dict, state: _RunState, query: str, artifacts: dict, even
     retries = max(0, attempt - 1)
     elapsed = round(time.perf_counter() - started, 3)
     snapshot = snap_box.get("snap")
-    if snapshot is not None and not summary.get("ok"):
-        keep = bool((window.get("task") or {}).get("keep_source"))
-        if not keep:
-            restored = _restore_source(state.run_id, entry["id"], snapshot)
-            if restored:
-                summary["restored"] = restored
+    keep = bool((window.get("task") or {}).get("keep_source"))
+    if snapshot is not None and not summary.get("ok") and not keep:
+        restored = _restore_source(state.run_id, entry["id"], snapshot)
+        if restored:
+            summary["restored"] = restored
+    if not summary.get("ok") and not keep and action in ("set_pickable", "move_actor"):
+        try:
+            from agent.prop_snapshot import restore_props
+
+            props = restore_props(state.run_id)
+            if props:
+                summary["props_restored"] = props
+        except Exception:
+            pass
     out = dict(summary)
     if out.get("elapsed") is None:
         out["elapsed"] = elapsed
@@ -586,6 +627,36 @@ def _absorb_result(state: _RunState, events: _EventBus, echo, wid: str, summary:
     if summary.get("snapshot"):
         entry["snapshot"] = summary["snapshot"]
     entry["summary"] = str(summary.get("summary") or "")[:200]
+    criteria = list(state.data.get("criteria") or [])
+    try:
+        from agent.harness import apply_judges, classify_stop
+
+        judges = [summary.get("build"), summary.get("test")]
+        if isinstance(summary.get("criteria"), list):
+            criteria = apply_judges(criteria, *judges)
+            by_id = {str(item.get("id")): item for item in criteria if isinstance(item, dict)}
+            for item in summary["criteria"]:
+                if isinstance(item, dict) and item.get("passed") and str(item.get("id")) in by_id:
+                    by_id[str(item["id"])]["passed"] = True
+            criteria = list(by_id.values())
+        else:
+            criteria = apply_judges(criteria, *judges)
+        state.data["criteria"] = criteria
+        for scope in state.data.get("scopes") or []:
+            if isinstance(scope, dict) and wid in (scope.get("window_ids") or []):
+                scope["criteria"] = apply_judges(scope.get("criteria") or criteria, *judges)
+        reason = classify_stop(
+            ok=ok,
+            paused=paused,
+            retries=int(summary.get("retries") or entry.get("retries") or 0),
+            max_retries=int((entry.get("window") or {}).get("max_retries") or 0),
+            summary=str(summary.get("summary") or ""),
+            error=str(summary.get("error") or ""),
+            unresolved=(entry.get("window") or {}).get("unresolved"),
+        )
+    except Exception:
+        reason = "ok" if ok else ("paused" if paused else "judge_failed")
+    entry["stop_reason"] = reason
     if ok and summary.get("ref"):
         _publish_artifacts(
             state.data["artifacts"],
@@ -597,7 +668,30 @@ def _absorb_result(state: _RunState, events: _EventBus, echo, wid: str, summary:
     state.save()
     events.emit("window_state", window=wid, state=entry["state"])
     events.emit("window_result", window=wid, ok=ok, state=entry["state"], summary=entry["summary"],
-                elapsed=entry.get("elapsed"), retries=entry.get("retries"))
+                elapsed=entry.get("elapsed"), retries=entry.get("retries"), stop_reason=entry.get("stop_reason"))
+    try:
+        from agent.harness import build_handoff, write_handoff
+
+        nxt = ""
+        for other in state.entries():
+            if wid in (other.get("depends_on") or []):
+                nxt = str(other.get("title") or other.get("id") or "")
+                break
+        payload = build_handoff(
+            did=str(entry.get("title") or entry.get("action") or wid),
+            judges=[item for item in (summary.get("build"), summary.get("test")) if isinstance(item, dict)],
+            summary=str(summary.get("summary") or ""),
+            error=str(summary.get("error") or ""),
+            ok=ok,
+            criteria=state.data.get("criteria") or [],
+            next_title=nxt,
+            artifacts=state.data.get("artifacts") or {},
+        )
+        write_handoff(state.run_id, wid, payload)
+        if payload.get("unmet"):
+            events.emit("handoff", window=wid, unmet=payload.get("unmet"), next=payload.get("next"))
+    except Exception:
+        pass
     echo(f"\n{wid} {_MD_STATUS.get(entry['state'], entry['state'])}。{json.dumps(entry['result'], ensure_ascii=False)}")
 
 
@@ -859,6 +953,23 @@ def _rows(state: _RunState) -> list[dict]:
 
 # ---------- 主执行 ----------
 
+def _emit_action_candidates(events, planned: dict, windows: list) -> None:
+    """表外动作只记候选事件，不交给执行器。"""
+    names = []
+    for name in (planned or {}).get("action_candidates") or []:
+        text = str(name or "").strip()
+        if text and text not in names:
+            names.append(text)
+    for window in windows or []:
+        if not isinstance(window, dict):
+            continue
+        text = str(window.get("action_candidate") or "").strip()
+        if text and text not in names:
+            names.append(text)
+    for name in names:
+        events.emit("action_candidate", action=name, status="review")
+
+
 def execute_windows(query: str, complete=None, echo=print, emit=None, planned=None, windows=None,
                     brief=None, scopes=None, resume_state=None, decide=None, max_workers=3):
     """拆窗口 → 事件流与机读状态 → 只读并行调度 → 矩阵集成 → 台账与归档。
@@ -878,6 +989,27 @@ def execute_windows(query: str, complete=None, echo=print, emit=None, planned=No
         if windows is None:
             windows = planned.get("windows") or []
         windows = [dict(window) for window in windows]
+        try:
+            from agent.harness import ensure_patrol_window
+
+            windows = ensure_patrol_window(query, windows)
+        except Exception:
+            pass
+        try:
+            from agent.harness import ensure_platform_window
+
+            windows = ensure_platform_window(query, windows)
+        except Exception:
+            pass
+        try:
+            from agent.umg_manual import maybe_write_hud_plan
+
+            manual_note = maybe_write_hud_plan(query)
+            if manual_note:
+                events.emit("manual_doc", window="", path=manual_note)
+                echo(f"UMG 人工步骤已写出：{manual_note}")
+        except Exception:
+            pass
         if planned.get("planner_text"):
             echo("规划者原文：" + str(planned["planner_text"]).replace("\n", " ")[:500])
         source = str(planned.get("source") or ("brief" if brief else ""))
@@ -899,6 +1031,8 @@ def execute_windows(query: str, complete=None, echo=print, emit=None, planned=No
         fields = {key: value for key, value in dict(planned["intent"]).items()}
         fields.pop("source", None)
         events.emit("intent", source=str(planned.get("source") or source), **fields)
+    if resume_state is None:
+        _emit_action_candidates(events, planned if isinstance(planned, dict) else {}, windows)
     entries = state.entries()
 
     # 环依赖前置诊断：不拖到集成段
@@ -924,14 +1058,45 @@ def execute_windows(query: str, complete=None, echo=print, emit=None, planned=No
         state.save()
         _write(path, query, source, _rows(state), integrated, pie=False)
         events.emit("integration", ok=False, status="失败", summary=integrated["summary"])
-        events.emit("run_end", status="失败", ok=False)
+        events.emit("run_end", status="失败", ok=False, stop_reason="paused")
         echo(f"\n拆成 {len(entries)} 扇。来源：{_SOURCE_LABEL.get(source, source)}。记录写在 {path}")
         echo(f"\n集成：{integrated['summary']}")
         return 1, path
 
+    if not state.data.get("criteria"):
+        try:
+            from agent.harness import build_criteria
+
+            state.data["criteria"] = build_criteria(query, [entry.get("window") or {} for entry in entries])
+        except Exception:
+            state.data["criteria"] = []
+    for scope in state.data.get("scopes") or []:
+        if isinstance(scope, dict) and not scope.get("criteria"):
+            scoped = [
+                (state.window(wid).get("window") or {})
+                for wid in (scope.get("window_ids") or [])
+                if wid in state.data["windows"]
+            ]
+            try:
+                from agent.harness import build_criteria
+
+                scope["criteria"] = build_criteria(query, scoped)
+            except Exception:
+                scope["criteria"] = []
     events.emit("run_start", query=query, source=source,
                 windows=[{"id": e["id"], "title": e["title"], "action": e["action"],
                           "depends_on": list(e.get("depends_on") or [])} for e in entries])
+    if resume_state is not None:
+        try:
+            from agent.harness import read_handoff
+
+            for entry in entries:
+                doc = read_handoff(state.run_id, entry["id"])
+                if doc and doc.get("unmet"):
+                    events.emit("handoff", window=entry["id"], unmet=doc.get("unmet"), next=doc.get("next"))
+                    echo(f"\n{entry['id']} 交接未完成：{'；'.join(str(item) for item in doc.get('unmet') or [])}")
+        except Exception:
+            pass
     state.save()
     echo(f"拆成 {len(entries)} 扇。来源：{_SOURCE_LABEL.get(source, source)}。记录写在 {path}")
 
@@ -1084,6 +1249,16 @@ def execute_windows(query: str, complete=None, echo=print, emit=None, planned=No
         note += "。集成不调用模型。"
     else:
         status, note = "失败", "有窗口没完成。集成不调用模型。"
+    try:
+        from agent.harness import contract_status
+
+        adjusted = contract_status(state.data.get("criteria") or [], status)
+    except Exception:
+        adjusted = status
+    if adjusted == "部分完成" and status == "成功":
+        status = adjusted
+        ok = False
+        note = "自动条款已通过，仍有人工条款。集成不调用模型。"
     integrated = {"ok": ok, "status": status, "summary": note}
 
     # 范围行（任务书 run 才有）+ 台账回写
@@ -1155,18 +1330,68 @@ def execute_windows(query: str, complete=None, echo=print, emit=None, planned=No
     if stale_hint:
         events.emit("index_stale", note=stale_hint)
         echo(f"\n{stale_hint}")
+        try:
+            from agent.index_refresh import mark_stale, schedule_index_refresh
+
+            try:
+                from core.editor_launch import editor_running
+
+                editor_open = bool(editor_running())
+            except Exception:
+                editor_open = True
+            mark_stale(stale_hint, path=EVENTS_DIR.parent / "index_status.json")
+            info = schedule_index_refresh(
+                editor_open=editor_open,
+                queue_path=EVENTS_DIR.parent / "index_queue.jsonl",
+            )
+            events.emit(
+                "index_auto_refresh",
+                mode=info.get("mode"),
+                editor_open=editor_open,
+                command=info.get("command"),
+                note=stale_hint,
+            )
+        except Exception:
+            pass
     if ok and isinstance(planned, dict) and planned.get("intent_full"):
         # P3 L3：整句集成成功才把意图归一成句式模板写回 learned_routes（unresolved 非空不回写）
         learned_id = ""
         try:
             from agent.plan_windows import remember_intent_route
 
-            learned_id = remember_intent_route(query, planned["intent_full"], planned.get("windows") or []) or ""
+            learned_id = remember_intent_route(query, planned["intent_full"], planned.get("windows") or [], source_run=run_id) or ""
         except Exception:
             learned_id = ""
         if learned_id:
-            events.emit("learned_route", route_id=learned_id, query=query[:120])
-    events.emit("run_end", status=status, ok=ok)
+            version = 1
+            skill_status = "shadow"
+            try:
+                from agent.skill_memory import load_skills
+
+                for item in load_skills():
+                    if str(item.get("id") or "") == learned_id:
+                        version = int(item.get("version") or 1)
+                        skill_status = str(item.get("status") or "shadow")
+                        break
+            except Exception:
+                skill_status = "shadow"
+            events.emit(
+                "learned_route", route_id=learned_id, skill_id=learned_id,
+                version=version, status=skill_status, query=query[:120],
+            )
+            if skill_status == "promoted":
+                events.emit(
+                    "skill_promoted", skill_id=learned_id, route_id=learned_id,
+                    version=version, status="promoted", query=query[:120],
+                )
+    reasons = [entry.get("stop_reason") for entry in entries if entry.get("stop_reason")]
+    try:
+        from agent.harness import run_stop
+
+        stop = run_stop(reasons, ok)
+    except Exception:
+        stop = "ok" if ok else "judge_failed"
+    events.emit("run_end", status=status, ok=ok, stop_reason=stop)
     state.data["integration"] = integrated
     state.data["status"] = "interrupted" if interrupted else status
     state.save()

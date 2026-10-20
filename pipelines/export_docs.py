@@ -45,6 +45,9 @@ def main() -> None:
     files = []
     if DOCS_DIR.is_dir():
         files.extend(sorted(DOCS_DIR.glob("*.md")))
+        harness = DOCS_DIR / "harness"
+        if harness.is_dir():
+            files.extend(sorted(harness.glob("*.md")))
     if CONVENTIONS_PATH.is_file():
         files.append(CONVENTIONS_PATH)
     records = []

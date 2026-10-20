@@ -283,6 +283,7 @@ ASecond : public AActor
     from core.editor_launch import launch_command
     assert launch_command()[-1] == "-AutoDeclinePackageRecovery"
 
+    from core.failure_class import FAILURE_CODES, stamp_failure
     from eval.report import classify_row
     assert classify_row({"ok": False, "judge_kind": "cpp_build", "error": "error C1"}) == "编译"
     assert classify_row({"ok": False, "node": "precheck", "error": "请打开关卡 L"}) == "关卡预检"
@@ -292,6 +293,20 @@ ASecond : public AActor
     assert classify_row({"ok": False, "retry_count": 3, "error": "still"}) == "超过重试"
     assert classify_row({"ok": False, "error": "unknown"}) == "其他"
     assert classify_row({"ok": True, "judge_kind": "cpp_build"}) is None
+    stamped = stamp_failure({"ok": False, "judge_kind": "cpp_build", "error": "error C1"})
+    assert stamped["failure_class"] == "compile"
+    assert classify_row(stamped) == "编译"
+    assert classify_row({"ok": False, "failure_class": "test", "error": "error C1"}) == "测试"
+    assert "failure_class" not in stamp_failure({"ok": True, "judge_kind": "cpp_build"})
+    assert FAILURE_CODES == (
+        "compile",
+        "test",
+        "tool_refused",
+        "mcp_down",
+        "retry_exceeded",
+        "level_precheck",
+        "other",
+    )
     check_build_cancel()
     check_observability()
 

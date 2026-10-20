@@ -1,0 +1,26 @@
+{
+  "did": "按设计图放进度中枢，保存关卡一次（人授权）",
+  "evidence": [
+    {
+      "kind": "editor_assert",
+      "ok": true,
+      "summary": "BP_Progress 按设计图 20261020-progress.json 复核 1 条唯一（放置 0，幂等跳过 1）；已保存当前关卡 /Game/Maps/L_NewTest（一次性人授权）"
+    }
+  ],
+  "unmet": [
+    "Automation 过滤器失败数为 0",
+    "HUD（左上角计数、90 秒倒计时、通关/失败显示）由人按 Plan/ 人工步骤文档做"
+  ],
+  "next": "平台玩法 Automation",
+  "artifacts": {
+    "by_name": {
+      "ref": null,
+      "in_level": null
+    },
+    "target": {
+      "ref": "/Game/BP_Progress",
+      "in_level": true
+    }
+  },
+  "goal": "自然语言落到可验证的 UE 修改；完成与否由合同和 feature_list 决定，不由模型宣布"
+}

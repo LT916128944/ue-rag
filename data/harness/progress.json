@@ -1,0 +1,12 @@
+{
+  "goal": "自然语言落到可验证的 UE 修改；完成与否由合同和 feature_list 决定，不由模型宣布",
+  "goal_anchor": "目标字段在压缩时保留",
+  "updated": "2026-10-20",
+  "phase": "automation",
+  "next_action": "平台跳跃四阶段已过（material-domain/umg-domain/platform-automation/level-assembly 均 done，见 feature_list 各 evidence）；HUD 人工条款待侑按 Plan/20261020-平台跳跃HUD-UMG人工步骤.md 做 WBP_HUD，做完后平台需求整句即可全绿；下一条 pending 是 patrol-presentation（行为树/动画/受击人工绑定）",
+  "last_upgrade": "平台跳跃四阶段（Plan/20261020-1553-平台跳跃关卡需求差距与下一目标.md）",
+  "risks": [
+    "project_context.json 的开关可能与 config.py 不一致，升级 2 用测试钉住",
+    "资产索引（ue_assets/ue_cpp jsonl）落后于编辑器内存：BP_Coin/M_Coin/MI_Coin/BP_Progress/BP_Door/BP_Platform 已存盘但索引未刷新，名字归地会失败；跑一次 shortcuts\\asset.bat（关编辑器）后恢复。见 Plan/20261020-1553 验收注"
+  ]
+}

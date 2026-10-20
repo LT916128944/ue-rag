@@ -54,6 +54,7 @@ class Board:
             self.integration = ""
             self.resumable: list[str] = []
             self.expanded = False
+            self.distill_count = 0
             self._notes.clear()
 
     def set_review(self, text: str) -> None:
@@ -109,6 +110,13 @@ class Board:
                 window["note"] = str(event.get("note") or window.get("note") or "")
         elif etype == "files_modified":
             self.files_modified = True
+        elif etype == "handoff":
+            window = self._window(event.get("window"))
+            unmet = [str(item) for item in (event.get("unmet") or []) if str(item).strip()]
+            if unmet:
+                window["note"] = ("未完成：" + "；".join(unmet))[:120]
+        elif etype == "context_slice":
+            return
         elif etype == "window_result":
             window = self._window(event.get("window"))
             window["state"] = "done" if event.get("ok") else str(event.get("state") or "failed")
@@ -121,6 +129,8 @@ class Board:
             self.phase = "集成：" + str(event.get("status") or "")
         elif etype == "run_end":
             self.phase = "结束：" + str(event.get("status") or "")
+        elif etype == "distill_candidate":
+            self.distill_count = int(getattr(self, "distill_count", 0) or 0) + 1
 
     def _window(self, wid, **fields) -> dict:
         key = str(wid or "?")
@@ -201,6 +211,8 @@ class Board:
             head.add_row(Text(f"指令：{self.query[:76]}", style="bold"))
             line = Text()
             line.append(f"阶段：{self.phase}")
+            if getattr(self, "distill_count", 0):
+                line.append(f"    蒸馏候选 {self.distill_count}", style="dim")
             if self.review:
                 line.append(f"    审阅：{self.review}")
             if self.resumable:

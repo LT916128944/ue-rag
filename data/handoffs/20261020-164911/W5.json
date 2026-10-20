@@ -1,0 +1,25 @@
+{
+  "did": "平台玩法 Automation",
+  "evidence": [
+    {
+      "kind": "automation",
+      "ok": true,
+      "summary": "失败数 0"
+    }
+  ],
+  "unmet": [
+    "HUD（左上角计数、90 秒倒计时、通关/失败显示）由人按 Plan/ 人工步骤文档做"
+  ],
+  "next": "",
+  "artifacts": {
+    "by_name": {
+      "ref": null,
+      "in_level": null
+    },
+    "target": {
+      "ref": "/Game/BP_Progress",
+      "in_level": true
+    }
+  },
+  "goal": "自然语言落到可验证的 UE 修改；完成与否由合同和 feature_list 决定，不由模型宣布"
+}

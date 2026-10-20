@@ -3,6 +3,7 @@
 import random
 
 from config import UE_EXEC_MODE, allow_anim, allow_blueprint, allow_material, allow_niagara, allow_umg
+from core import risk
 from core.ue_mcp_client import get_ue_mcp_client
 
 # 与原先 nodes.py 的 WRITE_HINTS 同一份。
@@ -117,28 +118,36 @@ def _blueprint_edit_error(tool: str, args: dict, task: dict) -> str:
     return ""
 
 
+def _refused(task: dict, error: str) -> dict:
+    from agent.harness import policy_snapshot
+
+    return {"ok": False, "error": error, "policy": policy_snapshot(task)}
+
+
 def exec_tool(toolset: str, tool: str, args: dict | None, *, task: dict | None = None, timeout: float | None = None) -> dict:
     """执行一个编辑器工具。返回完整 {ok, data|error}，不在这里截断。"""
     task = task or {}
     args = args or {}
+    # 追加的熔断拒绝：只在现有拒绝之前，不动下面的现有文案。
+    if not risk.decide(tool, task)["allow"]:
+        return _refused(task, "circuit open")
     allow = set(task.get("allow_writes") or [])
     blocked = _domain_blocked(toolset, tool)
     if blocked:
-        return {"ok": False, "error": blocked}
+        return _refused(task, blocked)
     blueprint_error = _blueprint_edit_error(tool, args, task)
     if blueprint_error:
-        return {"ok": False, "error": blueprint_error}
+        return _refused(task, blueprint_error)
     if tool in BLUEPRINT_EDIT_TOOLS and tool not in allow:
-        return {"ok": False, "error": "write refused"}
+        return _refused(task, "write refused")
+    if tool in SAVE_TOOLS and not task.get("save"):
+        return _refused(task, "write refused")
+    if tool in PIE_TOOLS and not task.get("pie"):
+        return _refused(task, "write refused")
+    if is_write_tool(tool) and tool not in allow:
+        return _refused(task, "write refused")
     if UE_EXEC_MODE == "mock":
         return _mock_tool(tool, args)
-
-    if tool in SAVE_TOOLS and not task.get("save"):
-        return {"ok": False, "error": "write refused"}
-    if tool in PIE_TOOLS and not task.get("pie"):
-        return {"ok": False, "error": "write refused"}
-    if is_write_tool(tool) and tool not in allow:
-        return {"ok": False, "error": "write refused"}
 
     client = get_ue_mcp_client()
     result = client.call_ue_tool(toolset, tool, args, timeout=timeout)

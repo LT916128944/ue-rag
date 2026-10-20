@@ -2,12 +2,13 @@
   "tools": [
     {
       "name": "query_actor",
-      "summary": "按名字读当前关卡里唯一 Actor 的位置，零个或多个就停。",
+      "summary": "适用：按名字读当前关卡里唯一 Actor 的位置。不适用：零个或多个同名 Actor，就停。",
       "permission": "读",
       "timeout": 60,
+      "retryable": false,
       "input_schema": {
         "type": "object",
-        "properties": {"name": {"type": "string"}},
+        "properties": {"name": {"type": "string", "maxLength": 200, "description": "Actor 名字，用于在当前关卡里定位唯一实例。"}},
         "required": ["name"]
       },
       "output_schema": {
@@ -39,12 +40,13 @@
     },
     {
       "name": "query_blueprint",
-      "summary": "读一张已有蓝图的图名、变量名和事件名，不改图。",
+      "summary": "适用：读一张已有蓝图的图名、变量名和事件名，不改图。不适用：图不存在或需要改图的场合。",
       "permission": "读",
       "timeout": 60,
+      "retryable": false,
       "input_schema": {
         "type": "object",
-        "properties": {"ref_path": {"type": "string"}},
+        "properties": {"ref_path": {"type": "string", "maxLength": 300, "description": "蓝图的 /Game 路径，如 /Game/BP_Gun.BP_Gun。"}},
         "required": ["ref_path"]
       },
       "output_schema": {
@@ -69,12 +71,13 @@
     },
     {
       "name": "find_asset",
-      "summary": "在 /Game 里按名字找资产，不是唯一就停。",
+      "summary": "适用：在 /Game 里按名字找唯一资产。不适用：不唯一的资产名，就停。",
       "permission": "读",
       "timeout": 60,
+      "retryable": false,
       "input_schema": {
         "type": "object",
-        "properties": {"name": {"type": "string"}},
+        "properties": {"name": {"type": "string", "maxLength": 200, "description": "资产名，在 /Game 里查找唯一匹配。"}},
         "required": ["name"]
       },
       "output_schema": {
@@ -98,9 +101,10 @@
     },
     {
       "name": "build_project",
-      "summary": "关掉编辑器后编译 AIAgentProjectEditor，并留下错误原文。",
+      "summary": "适用：关掉编辑器后编译 AIAgentProjectEditor，并留下错误原文。不适用：需要编辑器内编译的场合。",
       "permission": "编译",
       "timeout": 300,
+      "retryable": true,
       "input_schema": {"type": "object", "properties": {}},
       "output_schema": {
         "type": "object",
@@ -134,12 +138,13 @@
     },
     {
       "name": "run_automation_test",
-      "summary": "按过滤器跑 Automation，失败数不是 0 就不算通过。",
+      "summary": "适用：按过滤器跑 Automation，失败数不是 0 就不算通过。不适用：不带过滤器的全量跑法。",
       "permission": "测试",
       "timeout": 300,
+      "retryable": true,
       "input_schema": {
         "type": "object",
-        "properties": {"filter": {"type": "string"}},
+        "properties": {"filter": {"type": "string", "maxLength": 200, "description": "Automation 过滤器，只跑匹配的测试。"}},
         "required": ["filter"]
       },
       "output_schema": {
@@ -161,9 +166,10 @@
     },
     {
       "name": "get_build_error",
-      "summary": "读上一次 build_project 留下的编译错误，没有记录就停。",
+      "summary": "适用：读上一次 build_project 留下的编译错误。不适用：没有留下记录时，就停。",
       "permission": "读",
       "timeout": 60,
+      "retryable": false,
       "input_schema": {"type": "object", "properties": {}},
       "output_schema": {
         "type": "object",

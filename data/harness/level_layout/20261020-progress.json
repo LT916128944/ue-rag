@@ -1,0 +1,7 @@
+{
+  "blueprint": "BP_Progress",
+  "note": "平台跳跃关卡 · 进度中枢一枚（起点旁）",
+  "actors": [
+    {"name": "Progress_1", "x": 100, "y": 30, "z": 60}
+  ]
+}

@@ -1,10 +1,20 @@
 # agent/state.py
 from typing import TypedDict, Annotated
-from operator import add
+
+
+def merge_messages(left, right, *_args):
+    """追加消息，并把更早的工具正文换成可再读的占位。"""
+    combined = list(left or []) + list(right or [])
+    try:
+        from agent.context import compact_tool_bodies
+
+        return compact_tool_bodies(combined)
+    except Exception:
+        return combined
 
 
 class AgentState(TypedDict):
-    messages: Annotated[list, add]   # 对话历史（全部为可序列化 dict）
+    messages: Annotated[list, merge_messages]   # 对话历史（全部为可序列化 dict）
     user_query: str                  # 用户原始需求
     available_tools: list            # RAG 检索出的工具 Schema
     tool_calls: list                 # LLM 打算调用的工具（dict 列表）

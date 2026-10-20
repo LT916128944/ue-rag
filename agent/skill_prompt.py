@@ -7,15 +7,8 @@ from config import AGENT_SKILL_PATH
 # 与 matching_solution 附在 plan 上的那一截同一上限。
 CARD_BUDGET = 1200
 
-SKILL_DESCRIPTION = "本项目已经踩过的规矩：单位、编译目标、路径唯一、裁判。"
-SKILL_FOLDER = "/Game/Skills"
-SKILL_ASSET_NAME = "AIAgentProjectRules"
-PROJECT_RULES = (
-    "1 米 = 100 uu。\n"
-    "编的是 AIAgentProjectEditor。\n"
-    "路径不唯一就停。\n"
-    "裁判不由模型宣布。"
-)
+# 常量住 core/project_rules.py，这里只再导出，原调用方行为不变。
+from core.project_rules import PROJECT_RULES, SKILL_ASSET_NAME, SKILL_DESCRIPTION, SKILL_FOLDER  # noqa: F401
 
 
 def skill_card_line(card: dict) -> str:

@@ -1,0 +1,18 @@
+{
+  "patterns": [
+    {
+      "id": "err-c3861-undeclared",
+      "symptom": "error C3861",
+      "symptom_detail": "找不到标识符",
+      "error_kind": "compile",
+      "root_cause": "调用了不存在的函数",
+      "fix_tools": ["read_source", "apply_unified_diff"],
+      "validation": "退出码 0 且无 error C",
+      "confidence": 0.88,
+      "source_runs": ["cpp-typo"],
+      "successes": 2,
+      "status": "promoted",
+      "conflicts": []
+    }
+  ]
+}

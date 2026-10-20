@@ -6,15 +6,13 @@
 import json
 import re
 
-from agent.catalog import CATALOG, INTEGRATE_ACTION
+from agent.catalog import iter_prompt_specs
 from agent.intent import INTENT_SCHEMA, validate_intent
 
 
 def _action_cards() -> list[str]:
     lines = []
-    for name, spec in CATALOG.items():
-        if name == INTEGRATE_ACTION:
-            continue
+    for name, spec in iter_prompt_specs():
         slots = "、".join(spec["slots"]) if spec["slots"] else "无"
         if spec.get("mode") == "one":
             slots += "（有一个即可）"

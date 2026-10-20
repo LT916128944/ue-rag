@@ -1,0 +1,20 @@
+{
+  "policies": [
+    {
+      "missing_slot": "asset_refPath",
+      "question_template": "只给一次：r /Game/某目录，或 r /Game/某目录/BP_名字。",
+      "accepted_forms": ["/Game/...", "BP_..."],
+      "resolution": "索引唯一命中则直连，否则新建蓝图前置扇",
+      "confidence": 0.9,
+      "source_runs": ["20261014-121440"]
+    },
+    {
+      "missing_slot": "source_file",
+      "question_template": "只给一次：r Public/类名.h 或 r Private/类名.cpp。",
+      "accepted_forms": ["Public/类名.h", "Private/类名.cpp"],
+      "resolution": "路径唯一才改这一份源文件",
+      "confidence": 0.9,
+      "source_runs": []
+    }
+  ]
+}

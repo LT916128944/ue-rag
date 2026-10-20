@@ -1,0 +1,23 @@
+{
+  "did": "给 BP_Coin 的 MID 设 Emissive=5",
+  "evidence": [
+    {
+      "kind": "blueprint_compile",
+      "ok": true,
+      "summary": "compile_blueprint 返回空"
+    }
+  ],
+  "unmet": [],
+  "next": "",
+  "artifacts": {
+    "by_name": {
+      "ref": null,
+      "in_level": null
+    },
+    "target": {
+      "ref": "/Game/MI_Coin.MI_Coin",
+      "in_level": false
+    }
+  },
+  "goal": "自然语言落到可验证的 UE 修改；完成与否由合同和 feature_list 决定，不由模型宣布"
+}

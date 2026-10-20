@@ -1,0 +1,18 @@
+{
+  "did": "裁决 B",
+  "evidence": [],
+  "unmet": [
+    "编辑器读数与期望一致"
+  ],
+  "next": "",
+  "artifacts": {
+    "by_name": {
+      "ref": null,
+      "in_level": null
+    },
+    "target": {
+      "ref": "ref-BP_Sphere",
+      "in_level": true
+    }
+  }
+}

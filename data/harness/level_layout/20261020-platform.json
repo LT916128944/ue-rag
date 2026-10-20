@@ -1,0 +1,7 @@
+{
+  "blueprint": "BP_Platform",
+  "note": "平台跳跃关卡 · 后段移动平台一枚（路径第 5 跳处）",
+  "actors": [
+    {"name": "Platform_1", "x": 700, "y": -30, "z": 360}
+  ]
+}

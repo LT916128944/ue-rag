@@ -5,7 +5,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from agent.skill_prompt import PROJECT_RULES, SKILL_ASSET_NAME, SKILL_DESCRIPTION, SKILL_FOLDER
+from core.project_rules import PROJECT_RULES, SKILL_ASSET_NAME, SKILL_DESCRIPTION, SKILL_FOLDER
 from config import AGENT_SKILL_PATH
 from core.editor_exec import exec_tool
 from core.ue_mcp_client import get_ue_mcp_client

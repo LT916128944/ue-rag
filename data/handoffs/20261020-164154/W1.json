@@ -1,0 +1,23 @@
+{
+  "did": "读 MI_Coin 的 Emissive",
+  "evidence": [
+    {
+      "kind": "editor_assert",
+      "ok": true,
+      "summary": "MI_Coin.Emissive=5"
+    }
+  ],
+  "unmet": [],
+  "next": "",
+  "artifacts": {
+    "by_name": {
+      "ref": null,
+      "in_level": null
+    },
+    "target": {
+      "ref": "/Game/MI_Coin.MI_Coin",
+      "in_level": false
+    }
+  },
+  "goal": "自然语言落到可验证的 UE 修改；完成与否由合同和 feature_list 决定，不由模型宣布"
+}

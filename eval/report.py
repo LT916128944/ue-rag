@@ -8,6 +8,10 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from core.failure_class import FAILURE_CLASSES, failure_code, failure_label
+
 
 def _load(path: Path) -> list[dict]:
     rows = []
@@ -38,33 +42,12 @@ def _cell(value) -> str:
     return str(value)
 
 
-_CLASSES = ("编译", "测试", "工具拒绝", "MCP 连不上", "超过重试", "关卡预检", "其他")
+_CLASSES = tuple(label for _code, label in FAILURE_CLASSES)
 
 
 def classify_row(row: dict) -> str | None:
-    """失败行归到固定类。对不上就是其他。成功行不分类。"""
-    if row.get("ok") is not False:
-        return None
-    error = str(row.get("error") or "")
-    kind = str(row.get("judge_kind") or "")
-    node = str(row.get("node") or "")
-    if node == "precheck" or "请打开关卡" in error:
-        return "关卡预检"
-    if any(token in error for token in ("WinError 10061", "10061", "拒绝连接", "Connection refused")):
-        return "MCP 连不上"
-    if any(token in error for token in ("write refused", "role refused", "blueprint edit disabled")):
-        return "工具拒绝"
-    if kind in ("cpp_build", "blueprint_compile") or "error C" in error:
-        return "编译"
-    if kind in ("editor_assert", "automation") or error.startswith("failed="):
-        return "测试"
-    try:
-        retry = int(row.get("retry_count") or 0)
-    except (TypeError, ValueError):
-        retry = 0
-    if retry >= 3:
-        return "超过重试"
-    return "其他"
+    """失败行归到固定类。对不上就是其他。成功行不分类。trace 里已有的枚举优先。"""
+    return failure_label(row)
 
 
 def class_counts(rows: list[dict]) -> dict[str, int]:
@@ -345,8 +328,8 @@ def render_html(stats: dict, *, trace_dir: str = "") -> str:
     cache = stats.get("cache") or {}
     classes = stats.get("classes") or {}
     class_rows = "".join(
-        f"<tr><td>{html.escape(name)}</td><td>{classes.get(name, 0)}</td></tr>"
-        for name in _CLASSES
+        f"<tr><td><code>{html.escape(code)}</code></td><td>{html.escape(label)}</td><td>{classes.get(label, 0)}</td></tr>"
+        for code, label in FAILURE_CLASSES
     )
     cache_rate = "" if cache.get("rate") is None else _fmt(cache.get("rate"), 4)
     return f"""<!DOCTYPE html>
@@ -378,7 +361,7 @@ h2 {{ font-size: 1.05rem; margin-top: 1.6rem; }}
 </table>
 <h2>失败分类</h2>
 <table>
-<tr><th>类</th><th>次数</th></tr>
+<tr><th>枚举</th><th>类</th><th>次数</th></tr>
 {class_rows}
 </table>
 <h2>路由</h2>
@@ -416,6 +399,76 @@ def write_observability_html(stats: dict, trace_dir: Path, reports_dir: Path) ->
     return path
 
 
+_REFUSAL_TOKENS = ("role refused", "write refused", "blueprint edit disabled")
+
+
+def _refusal_text(row: dict) -> bool:
+    error = str(row.get("error") or "")
+    return any(token in error for token in _REFUSAL_TOKENS)
+
+
+def compute_scoreboard(rows: list[dict], source: str = "") -> dict:
+    """纯函数：tasks / ok / first_pass / prompt_tokens_per_ok / tool_refused / source。
+
+    输入是现有 trace 行（任务行或步骤行）。没有 usage 的字段留 null，不填 0，不估算金额。
+    first_pass：该任务 ok 且 retry 为 0，且没有拒绝事件（安全越界是硬门槛，不计入首次通过率）。
+    tool_refused：failure_class 为 tool_refused 的次数优先；没有分类时按 trace 里拒绝事件文本计。
+    """
+    tasks = _tasks_of(rows)
+    refused_by_task = {}
+    primary = 0
+    fallback = 0
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        if failure_code(row) == "tool_refused":
+            primary += 1
+        elif _refusal_text(row):
+            fallback += 1
+        else:
+            continue
+        key = str(row.get("task_id") or row.get("id") or "")
+        refused_by_task[key] = refused_by_task.get(key, 0) + 1
+    tool_refused = primary if primary > 0 else fallback
+    ok = 0
+    first_pass = 0
+    prompt = None
+    for task in tasks:
+        if task.get("ok") is not True:
+            continue
+        ok += 1
+        try:
+            retry = int(task.get("retry_count") or 0)
+        except (TypeError, ValueError):
+            retry = 0
+        if retry == 0 and refused_by_task.get(str(task.get("id") or ""), 0) == 0:
+            first_pass += 1
+        number = _num(task.get("prompt_tokens"))
+        if number is not None:
+            prompt = (0 if prompt is None else prompt) + number
+    return {
+        "tasks": len(tasks),
+        "ok": ok,
+        "first_pass": first_pass,
+        "prompt_tokens_per_ok": (prompt / ok) if (ok > 0 and prompt is not None) else None,
+        "tool_refused": tool_refused,
+        "source": str(source or ""),
+    }
+
+
+def write_scoreboard(rows: list[dict], source) -> Path:
+    """现有命令把记分板写进 data/harness/scoreboard.json。"""
+    from config import DATA_DIR
+
+    board = compute_scoreboard(rows, source=str(source))
+    target = DATA_DIR / "harness" / "scoreboard.json"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp = target.with_suffix(target.suffix + ".tmp")
+    tmp.write_text(json.dumps(board, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    tmp.replace(target)
+    return target
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("trace")
@@ -440,11 +493,13 @@ def main() -> int:
         _print_directory_stats(stats)
         html_path = write_observability_html(stats, path, Path(__file__).resolve().parent / "reports")
         print(f"html={html_path}")
+        print(f"scoreboard={write_scoreboard(combined, path)}")
         return 0
     raw = _load(path)
     if not _print_intent_events(raw):
         _print_tasks(_tasks_of(raw))
         _print_classes(raw)
+        print(f"scoreboard={write_scoreboard(raw, path)}")
     return 0
 
 

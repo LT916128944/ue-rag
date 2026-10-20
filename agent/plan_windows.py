@@ -5,7 +5,7 @@ import os
 import re
 from pathlib import Path
 
-from agent.catalog import CATALOG, system_prompt
+from agent.catalog import CATALOG, allows, note_candidate, system_prompt
 
 _NAME_RE = re.compile(
     r"(?<![A-Za-z0-9_])(BP_[A-Za-z0-9_]+|[AUF][A-Z][A-Za-z0-9_]*)(?![A-Za-z0-9_])"
@@ -123,8 +123,14 @@ def _default_title(action: str, slots: dict) -> str:
         return "移动 Actor"
     if action == "place_actor":
         return "放进场景"
+    if action == "place_batch":
+        return f"按设计图批量放置 {slots.get('blueprint') or '蓝图'}"
     if action == "bind_blueprint":
         return "绑定蓝图"
+    if action == "set_scalar_param":
+        return f"覆写 {slots.get('target') or '材质实例'} 的 {slots.get('param') or '参数'}"
+    if action == "query_material":
+        return f"读 {slots.get('target') or '材质实例'} 的参数"
     return action or "窗口"
 
 
@@ -298,7 +304,11 @@ def _normalize_slots(action: str, slots: dict) -> dict:
 
 
 def _missing_slots(action: str, slots: dict) -> str:
-    spec = CATALOG[action]
+    from agent.catalog import spec_of
+
+    spec = spec_of(action)
+    if not isinstance(spec, dict):
+        return "表外动作，不执行。"
     required = spec["slots"]
     if not required:
         return ""
@@ -326,6 +336,10 @@ def resolve_slots(action: str, slots: dict) -> dict:
         return {"ok": True}
     if action == "integrate_verify":
         return {"ok": True}
+    if action == "query_actor":
+        return {"ok": True, "actor_name": str(slots.get("name") or "")}
+    if action == "run_automation_test":
+        return {"ok": True, "automation_filter": str(slots.get("filter") or "")}
     if action == "bind_blueprint":
         if slots.get("blueprint"):
             return resolve_name(str(slots["blueprint"]))
@@ -382,6 +396,19 @@ def resolve_slots(action: str, slots: dict) -> dict:
         fields["actor_name"] = found["class_name"]
         return fields
 
+    if action in ("set_scalar_param", "query_material"):
+        # 材质实例与蓝图本体的解析都在执行器里做：索引唯一命中，零个或多个就停。
+        if action == "set_scalar_param":
+            try:
+                float(str(slots.get("value") or "").strip())
+            except (TypeError, ValueError):
+                return {"ok": False, "error": "value 不是唯一的数字，不猜。"}
+        return {"ok": True}
+
+    if action == "place_batch":
+        # 蓝图与设计图的解析在执行器里做：文件与路径都要唯一命中才动场景
+        return {"ok": True}
+
     slot_name = "blueprint" if action in ("compile_blueprint", "place_actor") else "target"
     found = resolve_name(str(slots.get(slot_name) or ""))
     if not found.get("ok"):
@@ -406,7 +433,13 @@ def materialize(action: str, slots: dict, *, title: str, wid: str, depends: list
         "save": False,
         "pie": False,
     }
-    if action not in CATALOG:
+    if not allows(action):
+        try:
+            note_candidate(action, source="planner")
+        except Exception:
+            pass
+        if action:
+            window["action_candidate"] = action
         window["error"] = f"表外动作 {action or '空'}，这一窗暂停，不执行。"
         return window
     slots = _normalize_slots(action, slots)
@@ -733,15 +766,23 @@ def remember_route(query: str, windows: list[dict]) -> bool:
     routes = load_routes()
     if any(str(item.get("id") or "") == rid for item in routes):
         return False
-    routes.append({"id": rid, "when": when, "roles": roles, "windows": stored})
+    route = {"id": rid, "when": when, "roles": roles, "windows": stored}
+    routes.append(route)
     _save_routes(routes)
+    try:
+        from agent.skill_memory import remember_shadow
+
+        remember_shadow(route)
+    except Exception:
+        pass
     return True
 
 
-def remember_intent_route(query: str, intent: dict | None, windows: list[dict]) -> str | None:
+def remember_intent_route(query: str, intent: dict | None, windows: list[dict], source_run: str = "") -> str | None:
     """P3 L3 学习回写：整句集成成功才由调用方调用。unresolved 非空的意图不回写（半猜测不进缓存）。
     不记资产名：只记 when 触发词、roles、goals（动作 + 槽位角色 + 参数形状）和 depends 形状；
-    重放时 token 按角色代入，再走 L2 归地，资产在哪台机器现归地。条目 LRU 上限 50。"""
+    重放时 token 按角色代入，再走 L2 归地，资产在哪台机器现归地。旧路由 LRU 上限 50，已提升技能上限 200。
+    source_run 为空时 promote_from_route 停在 shadow，不提升。"""
     if not isinstance(intent, dict) or (intent.get("unresolved") or []):
         return None
     when = extract_when(query)
@@ -789,17 +830,61 @@ def remember_intent_route(query: str, intent: dict | None, windows: list[dict]) 
         goals.append(spec)
     rid = route_id([item["action"] for item in goals], when)
     routes = load_routes()
-    if any(str(item.get("id") or "") == rid for item in routes):
-        return rid
-    routes.append({"id": rid, "when": when, "roles": roles, "goals": goals})
-    _save_routes(routes)
+    existing = next((item for item in routes if str(item.get("id") or "") == rid), None)
+    if existing is None:
+        existing = {"id": rid, "when": when, "roles": roles, "goals": goals}
+        routes.append(existing)
+        _save_routes(routes)
+    try:
+        from agent.skill_memory import promote_from_route
+
+        promote_from_route(existing, source_run)
+    except Exception:
+        pass
     return rid
 
 
-def match_learned(query: str) -> list[dict] | None:
+def _learned_sources() -> list[dict]:
+    """已提升技能在前，旧路由在后。同一 id 只留技能那条。影子技能不参与。"""
+    try:
+        from agent.skill_memory import promoted_as_routes
+
+        skills = promoted_as_routes()
+    except Exception:
+        skills = []
+    seen = set()
+    ordered = []
+    for route in list(skills) + load_routes():
+        rid = str(route.get("id") or "")
+        if rid:
+            if rid in seen:
+                continue
+            seen.add(rid)
+        ordered.append(route)
+    return ordered
+
+
+def _skill_meta(route: dict) -> dict:
+    rid = str(route.get("id") or "")
+    version = 1
+    status = "route"
+    try:
+        from agent.skill_memory import load_skills
+
+        for skill in load_skills():
+            if str(skill.get("id") or "") == rid:
+                version = int(skill.get("version") or 1)
+                status = str(skill.get("status") or "promoted")
+                break
+    except (TypeError, ValueError, Exception):
+        pass
+    return {"skill_id": rid, "version": version, "status": status}
+
+
+def match_learned(query: str, meta: dict | None = None) -> list[dict] | None:
     query = (query or "").strip()
     names = extract_names(query)
-    for route in load_routes():
+    for route in _learned_sources():
         when = [str(word) for word in (route.get("when") or []) if str(word).strip()]
         roles = [str(role) for role in (route.get("roles") or []) if str(role).strip()]
         specs = route.get("goals") or route.get("windows") or []
@@ -824,7 +909,11 @@ def match_learned(query: str) -> list[dict] | None:
                     "slots": {str(key): binding.get(str(role), str(role)) for key, role in raw_slots.items()},
                     "max_retries": spec.get("max_retries"),
                 })
-            return _materialize_goals({"goals": goals}, query)
+            windows = _materialize_goals({"goals": goals}, query)
+            if meta is not None:
+                meta.clear()
+                meta.update(_skill_meta(route))
+            return windows
         windows = []
         for index, spec in enumerate(specs, 1):
             if not isinstance(spec, dict):
@@ -844,6 +933,9 @@ def match_learned(query: str) -> list[dict] | None:
                 depends=list(spec.get("depends_on") or []),
                 retries=retries,
             ))
+        if meta is not None:
+            meta.clear()
+            meta.update(_skill_meta(route))
         return windows
     return None
 
@@ -1086,7 +1178,7 @@ def _try_understand(query: str, complete) -> dict | None:
     return None
 
 
-def plan_windows(query: str, complete=None) -> dict:
+def _plan_windows_body(query: str, complete=None) -> dict:
     """拆窗口主链（20261015-1705 P1）：
     L0 快路径（离线零成本）：手写规则强命中（每一步都能落地）、learned_routes 已学句式；
     弱命中或未命中 → L1 理解器（一次模型调用，只输出意图 JSON）→ L2 归地成窗口；
@@ -1107,7 +1199,8 @@ def plan_windows(query: str, complete=None) -> dict:
             "windows": windows,
             "wrote_route": False,
         }
-    learned = match_learned(query)
+    learned_meta: dict = {}
+    learned = match_learned(query, meta=learned_meta)
     if learned is not None:
         # 已学模板同样不许静默丢需求半句：句里有需求说法而模板没有改码扇 → 弱命中走 L1
         learned_actions = {str(window.get("action") or "") for window in learned}
@@ -1124,6 +1217,7 @@ def plan_windows(query: str, complete=None) -> dict:
             "messages": None,
             "windows": windows,
             "wrote_route": False,
+            "skill": dict(learned_meta),
         }
     intent = _try_understand(query, complete)
     understood = intent is not None
@@ -1152,6 +1246,7 @@ def plan_windows(query: str, complete=None) -> dict:
             "wrote_route": False,
             "intent": decision,
             "intent_full": intent,
+            "action_candidates": list(intent.get("candidates") or []),
         }
     messages = [
         {"role": "system", "content": system_prompt()},
@@ -1208,3 +1303,88 @@ def plan_windows(query: str, complete=None) -> dict:
         "windows": windows,
         "wrote_route": wrote,
     }
+
+
+def _stamp_decision(planned: dict) -> None:
+    source = str(planned.get("source") or "")
+    windows = [item for item in (planned.get("windows") or []) if isinstance(item, dict)]
+    actions = [str(item.get("action") or "") for item in windows]
+    intent = dict(planned.get("intent") or {})
+    if source == "rules":
+        planned["intent"] = {
+            "actions": actions,
+            "unresolved": [],
+            "skill_id": "",
+            "version": 0,
+            "status": "rules",
+        }
+        return
+    if source == "learned":
+        meta = planned.get("skill") if isinstance(planned.get("skill"), dict) else {}
+        planned["intent"] = {
+            "actions": actions,
+            "unresolved": list(intent.get("unresolved") or []),
+            "skill_id": str(meta.get("skill_id") or ""),
+            "version": int(meta.get("version") or 0),
+            "status": str(meta.get("status") or "learned"),
+        }
+        return
+    if not intent and source not in ("understood", "planner"):
+        return
+    if not intent:
+        return
+    intent.setdefault("actions", actions)
+    intent.setdefault("unresolved", [])
+    intent.setdefault("skill_id", "")
+    intent.setdefault("version", 0)
+    intent.setdefault("status", source or "understood")
+    planned["intent"] = intent
+
+
+def _finish_plan(query: str, planned: dict) -> dict:
+    if not isinstance(planned, dict):
+        return planned
+    planned = dict(planned)
+    windows = planned.get("windows")
+    if isinstance(windows, list):
+        from agent.harness import build_criteria
+
+        planned["criteria"] = build_criteria(query, windows)
+    _stamp_decision(planned)
+    return planned
+
+
+def plan_windows(query: str, complete=None) -> dict:
+    """拆窗口主链。收尾时补巡逻只读条款和决策字段，不因此再叫一次模型。"""
+    return _finish_plan(query, _plan_windows_body(query, complete))
+
+
+def _planner_failed(planned: dict) -> bool:
+    if str(planned.get("source") or "") != "planner":
+        return False
+    windows = planned.get("windows") or []
+    if not windows:
+        return True
+    text = " ".join(str(window.get("error") or "") for window in windows if isinstance(window, dict))
+    return "规划者没有写出窗口清单" in text
+
+
+def steps_for_menu2(query: str, complete=None) -> list[dict]:
+    """菜单 2 和菜单 3 共用 plan_windows。理解器失败时退回手写步骤，再不行才是老规划者留下的暂停窗。"""
+    planned = plan_windows(query, complete=complete)
+    if _planner_failed(planned):
+        from agent.supervise import _plan_rules
+
+        ruled = _plan_rules(query)
+        if ruled:
+            return ruled
+    steps = []
+    for window in planned.get("windows") or []:
+        if not isinstance(window, dict):
+            continue
+        task = window.get("task")
+        if isinstance(task, dict):
+            steps.append(task)
+        else:
+            steps.append(window)
+    return steps

@@ -1,0 +1,19 @@
+{
+  "did": "只读裁决能否被 BP_TestPawn 拾取",
+  "evidence": [],
+  "unmet": [
+    "编辑器读数与期望一致"
+  ],
+  "next": "",
+  "artifacts": {
+    "by_name": {
+      "ref": null,
+      "in_level": null
+    },
+    "target": {
+      "ref": "NewRef",
+      "in_level": true
+    }
+  },
+  "goal": "自然语言落到可验证的 UE 修改；完成与否由合同和 feature_list 决定，不由模型宣布"
+}

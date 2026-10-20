@@ -6,13 +6,29 @@ unique 命中（索引/磁盘）→ linked；miss 且 C++ 索引可推父类（�
 模型只提供原始 token（BP_ 名、类名、/Game 路径），路径、父类、refPath 一律在这里归地。"""
 
 def _pause(kind: str, note: str) -> dict:
+    try:
+        from agent.clarify_policy import apply_note
+
+        note = apply_note(kind, note)
+    except Exception:
+        pass
     return {"plan": "pause_r", "ok": False, "fields": None, "create": None,
             "error": note, "needs": kind}
 
 
 def _linked(fields: dict) -> dict:
+    fresh = True
+    note = ""
+    try:
+        from agent.index_refresh import index_is_fresh
+
+        fresh = index_is_fresh()
+        if not fresh:
+            note = "资产索引已过期。这条路径仍用当前唯一命中，不改猜别的资产。"
+    except Exception:
+        fresh = True
     return {"plan": "linked", "ok": True, "fields": fields, "create": None,
-            "error": "", "needs": ""}
+            "error": "", "needs": "", "index_fresh": fresh, "index_note": note}
 
 
 def _unique_hit(name: str):

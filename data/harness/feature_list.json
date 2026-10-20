@@ -1,0 +1,195 @@
+{
+  "updated": "2026-10-20",
+  "note": "passed 只由裁判或离线检查改写，不由模型宣布。done->passed:true；pending/wont->passed:false。",
+  "items": [
+    {
+      "id": "loop-graph",
+      "status": "done",
+      "passed": true,
+      "evidence": "eval/check_routes.py",
+      "notes": "一张 LangGraph，边由 check_routes.py 固定；roles.py 只限本轮可见工具，不新增边"
+    },
+    {
+      "id": "tool-contract",
+      "status": "done",
+      "passed": true,
+      "evidence": "contract/tools.json",
+      "notes": "契约里六个高层工具，网关 /api/tool-call 只转发这六个"
+    },
+    {
+      "id": "hybrid-retrieval",
+      "status": "done",
+      "passed": true,
+      "evidence": "core/rag_core.py",
+      "notes": "专有名词路由命中即停；否则 BM25 + bge RRF 合并；热路径不加交叉编码器重排"
+    },
+    {
+      "id": "context-slice",
+      "status": "done",
+      "passed": true,
+      "evidence": "agent/nodes.py",
+      "notes": "plan 按角色带最近 6 条工具结果 + 最近一条成功 diff；丢弃部分在 checkpoint 换成工具名+sha1"
+    },
+    {
+      "id": "harness-contract",
+      "status": "done",
+      "passed": true,
+      "evidence": "agent/harness.py",
+      "notes": "合同、扇间接交接、回放不变差才提升技能"
+    },
+    {
+      "id": "patrol-cpp",
+      "status": "done",
+      "passed": true,
+      "evidence": "Source/AIAgentProject/Public/TestEnemyPatrolComponent.h",
+      "notes": "UTestEnemyPatrolComponent / ATestEnemy 已编译；行为树/动画/受击仍是人工条款（见 patrol-presentation）"
+    },
+    {
+      "id": "cost-log",
+      "status": "done",
+      "passed": true,
+      "evidence": "data/costs.jsonl",
+      "notes": "每次模型调用记模型、耗时、token，gateway 也走这条"
+    },
+    {
+      "id": "material-domain",
+      "status": "done",
+      "passed": true,
+      "evidence": "data/runs/20261020/20261020-164054.json",
+      "notes": "catalog 增 set_scalar_param（写闸=allow_writes+UE_ALLOW_MATERIAL 门）与 query_material（只读）；验收扇 20261020-164054：MI_Coin.Emissive=5 覆写复读一致，裁判 blueprint_compile 通过；只读扇 20261020-164154 读回 Emissive=5。开关已复原 false"
+    },
+    {
+      "id": "umg-domain",
+      "status": "done",
+      "passed": true,
+      "evidence": "Plan/20261020-平台跳跃HUD-UMG人工步骤.md",
+      "notes": "agent/umg_manual.py：wants_platform 且要 HUD 语义且 UE_ALLOW_UMG=false 时自动产出 Plan/ 人工步骤（WBP_HUD、左上 Anchor、委托绑定、倒计时/通关切换）；build_criteria 增 manual 条款。HUD 本体按文档由人做（人工条款），开关复原后维持 false。见同文档阶段 B"
+    },
+    {
+      "id": "platform-automation",
+      "status": "done",
+      "passed": true,
+      "evidence": "Source/AIAgentProject/Private/PlatformRunTest.cpp",
+      "notes": "AIAgent.Platform.Run：金币计数递增/收齐门开/倒计时超时失败分支/金币旋转/平台位移；RunTestsByFilter(AIAgent.Platform) 失败数 0（20261020）；玩法类 ACoin/AMovingPlatform/APlatformDoor/APlatformProgressActor+UPlatformProgressComponent 已编译。见同文档阶段 C"
+    },
+    {
+      "id": "level-assembly",
+      "status": "done",
+      "passed": true,
+      "evidence": "data/runs/20261020/20261020-164911.json",
+      "notes": "place_batch：设计图 JSON→批量放置→逐条复查唯一→窗口显式 save: true 才存关卡一次（run_windows 已透传 save）。验收 164911：9 实例幂等（重跑放置 0 跳过 9）、L_NewTest 保存一次、重载后 Coin_3/Door_1 坐标与设计一致（165005 复验）。see 阶段 D"
+    },
+    {
+      "id": "patrol-presentation",
+      "status": "pending",
+      "passed": false,
+      "evidence": "Plan/20261017-1507-巡逻敌人蓝图人工步骤.md",
+      "notes": "行为树、动画、受击三个 BlueprintImplementableEvent 仍由人绑"
+    },
+    {
+      "id": "editor-transaction",
+      "status": "pending",
+      "passed": false,
+      "evidence": "eval/reports/20261016-171408-cancel.md",
+      "notes": "没有编辑器 Transaction/Undo；属性回滚靠 props.json 快照"
+    },
+    {
+      "id": "doc-freshness",
+      "status": "done",
+      "passed": true,
+      "evidence": "agent/garden.py",
+      "notes": "园丁只扫描补抬头、记 stale，不叫模型；garden_report.json 已产出"
+    },
+    {
+      "id": "architecture-lint",
+      "status": "done",
+      "passed": true,
+      "evidence": "eval/check_architecture.py",
+      "notes": "边界已成 ast 测试；白名单两条固定（editor_exec、gateway），pipelines→agent 已拆"
+    },
+    {
+      "id": "schema-lint",
+      "status": "done",
+      "passed": true,
+      "evidence": "eval/check_schema.py",
+      "notes": "契约六工具补 summary 适用/不适用、retryable、字段 maxLength；超时只认 60/300"
+    },
+    {
+      "id": "risk-matrix",
+      "status": "done",
+      "passed": true,
+      "evidence": "data/harness/risk_matrix.json",
+      "notes": "三级名单固化；tier() 认动作名与 MCP 短名两套；熔断走 core/fault.py，5 次 30 秒冷却"
+    },
+    {
+      "id": "role-allowlist",
+      "status": "done",
+      "passed": true,
+      "evidence": "agent/roles.py",
+      "notes": "harness_role=research/plan/review 收紧 tool_allowed，没写时行为不变，仍是同一张图；L1 理解器仍从全动作目录选动作，规划侧裁剪要改 understand.py，不在本窗口"
+    },
+    {
+      "id": "memory-provenance",
+      "status": "done",
+      "passed": true,
+      "evidence": "agent/skill_memory.py",
+      "notes": "提升时写 source_runs 与 content_sha1；source_run 为空停在 shadow，已有条目不回写哈希"
+    },
+    {
+      "id": "scoreboard-file",
+      "status": "done",
+      "passed": true,
+      "evidence": "eval/report.py",
+      "notes": "compute_scoreboard 纯函数 + data/harness/scoreboard.json；指标定义见 documents/harness/scoreboard.md"
+    },
+    {
+      "id": "context-switch-drift",
+      "status": "done",
+      "passed": true,
+      "evidence": "eval/check_risk.py",
+      "notes": "config.allow_blueprint()（.env UE_ALLOW_BLUEPRINT=true）与 project_context.json 的 switches 已一致；只读断言钉在 check_risk.py，漂移时提示重跑 export_project_context.py"
+    },
+    {
+      "id": "rerank",
+      "status": "wont",
+      "passed": false,
+      "evidence": "eval/reports/20261016-154827-retrieval.md",
+      "notes": "已测过：重打分与混合 Recall@5 都不高于路由+BM25，放弃加入热路径"
+    },
+    {
+      "id": "second-graph",
+      "status": "wont",
+      "passed": false,
+      "evidence": "eval/check_routes.py",
+      "notes": "不增加第二张业务图，保持单一 LangGraph"
+    },
+    {
+      "id": "drop-langgraph",
+      "status": "wont",
+      "passed": false,
+      "evidence": "agent/graph.py",
+      "notes": "不把循环改成手写 ReAct，维持 LangGraph"
+    },
+    {
+      "id": "metrics-stack",
+      "status": "wont",
+      "passed": false,
+      "evidence": "eval/report.py",
+      "notes": "不部署 Loki/Prometheus/Docker；观测继续用 trace 生成的静态页"
+    },
+    {
+      "id": "cursor-query-default",
+      "status": "wont",
+      "passed": false,
+      "evidence": "agent/run_task.py",
+      "notes": "不把 run_task.py --query 接成 Cursor 每句话的默认动作"
+    },
+    {
+      "id": "docker",
+      "status": "wont",
+      "passed": false,
+      "evidence": "",
+      "notes": "本轮升级不做镜像；周计划里的容器化留到离线 CI 稳定之后"
+    }
+  ]
+}

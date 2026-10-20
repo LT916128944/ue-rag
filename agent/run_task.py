@@ -140,14 +140,19 @@ def _run_direct(task: dict, thread_id: str, on_row=None) -> dict:
         result = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
     if on_row is not None:
         try:
-            on_row({
+            from core.failure_class import stamp_failure
+
+            direct_row = {
                 "task_id": task.get("id"),
                 "node": "direct",
                 "tool": str(task.get("action") or ""),
                 "ok": bool(result.get("ok")),
                 "elapsed": 0,
                 "retry_count": 0,
-            })
+            }
+            if not result.get("ok"):
+                direct_row["error"] = str(result.get("error") or "")[:200]
+            on_row(stamp_failure(direct_row))
         except Exception:
             pass
     text = str(result.get("index_note") or result.get("error") or "")
@@ -164,6 +169,9 @@ def _run_direct(task: dict, thread_id: str, on_row=None) -> dict:
     }
     if result.get("verdict"):
         summary["judge"] = result["verdict"]
+    for key in ("build", "test", "judge_kind"):
+        if result.get(key) is not None:
+            summary[key] = result[key]
     if result.get("ref"):
         summary["ref"] = result["ref"]
     if "in_level" in result:
@@ -188,6 +196,9 @@ def run_task(task: dict, trace_path: Path | None = None, thread_id: str | None =
     editor_was_closed = False
 
     def emit(row: dict) -> None:
+        from core.failure_class import stamp_failure
+
+        stamp_failure(row)
         row.setdefault("role", trace_role(str(row.get("node") or ""), task))
         rows.append(row)
         with trace_path.open("a", encoding="utf-8") as handle:
@@ -223,6 +234,7 @@ def run_task(task: dict, trace_path: Path | None = None, thread_id: str | None =
                 probe = subprocess.run(["git", "rev-parse", "--is-inside-work-tree"], cwd=str(UE_PROJECT_DIR), capture_output=True, text=True)
                 if probe.returncode == 0:
                     message = f"git status -- {rel} 不干净，已停止"
+                    emit({"task_id": task["id"], "node": "gate", "tool": "git", "ok": False, "elapsed": 0, "retry_count": 0, "prompt_tokens": None, "completion_tokens": None, "error": message})
                     return {"id": task["id"], "ok": False, "retry_count": 0, "tool_calls": 0, "elapsed": 0, "index_note": "未更新", "error": message, "trace": str(trace_path)}
             saved = _snapshot_typo(task)
 
@@ -285,6 +297,10 @@ def run_task(task: dict, trace_path: Path | None = None, thread_id: str | None =
                             row["summary"] = str(item["summary"])[:500]
                         if (item or {}).get("error"):
                             row["error"] = str(item["error"])[:200]
+                        if (item or {}).get("policy"):
+                            row["policy"] = item["policy"]
+                        if (item or {}).get("context_slice"):
+                            row["context_slice"] = item["context_slice"]
                         emit(row)
 
         ok = bool(final_state and final_state.get("final_success"))
@@ -349,6 +365,9 @@ def run_task(task: dict, trace_path: Path | None = None, thread_id: str | None =
             "test": (final_state or {}).get("test_judge"),
             "editor": editor_note,
         }
+        criteria = ((final_state or {}).get("task") or {}).get("criteria")
+        if isinstance(criteria, list):
+            summary["criteria"] = criteria
         if (final_state or {}).get("source_written"):
             summary["source_written"] = True
         if summary["ok"] and summary.get("index_note") in ("", "未更新"):
@@ -372,6 +391,18 @@ def run_task(task: dict, trace_path: Path | None = None, thread_id: str | None =
             if summary.get("index_note") in ("", "未更新"):
                 summary["index_note"] = summary["error"]
                 summary["summary"] = summary["error"]
+        if summary.get("ok") is False and not any(item.get("failure_class") for item in rows):
+            emit({
+                "task_id": task["id"],
+                "node": "observe",
+                "tool": "",
+                "ok": False,
+                "elapsed": 0,
+                "retry_count": summary.get("retry_count") or 0,
+                "prompt_tokens": None,
+                "completion_tokens": None,
+                "error": str(summary.get("error") or "")[:200],
+            })
         return summary
     except Exception as exc:
         if editor_was_closed:
@@ -384,6 +415,18 @@ def run_task(task: dict, trace_path: Path | None = None, thread_id: str | None =
             text = str(build.get("summary") or "")
         if not text:
             text = f"{type(exc).__name__}: {exc}"
+        if not any(item.get("failure_class") for item in rows):
+            emit({
+                "task_id": task.get("id"),
+                "node": "observe",
+                "tool": "",
+                "ok": False,
+                "elapsed": 0,
+                "retry_count": 0,
+                "prompt_tokens": None,
+                "completion_tokens": None,
+                "error": text[:200],
+            })
         return {
             "id": task.get("id"),
             "ok": False,

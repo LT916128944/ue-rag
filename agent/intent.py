@@ -5,7 +5,7 @@
 schema 验收抄 validate_brief 的风格：表外动作拒收、未声明槽位丢弃并列进 dropped。"""
 import json
 
-from agent.catalog import CATALOG, INTEGRATE_ACTION
+from agent.catalog import CATALOG, INTEGRATE_ACTION, allows, note_candidate, spec_of
 
 INTENT_SCHEMA = {
     "query": "原句",
@@ -47,15 +47,26 @@ def validate_intent(data: dict, query: str) -> dict:
         dropped.append("意图丢弃未知字段：" + "、".join(sorted(set(map(str, unknown_top)))))
 
     goals: list[dict] = []
+    candidates: list[str] = []
     for raw in data.get("goals") or []:
         if not isinstance(raw, dict):
             dropped.append("一条 goal 不是对象，已丢弃")
             continue
         action = _text(raw.get("action"), 80)
-        if action == INTEGRATE_ACTION or action not in CATALOG:
+        if action == INTEGRATE_ACTION or not allows(action):
+            dropped.append(f"表外动作 {action or '空'} 拒收")
+            if action and action != INTEGRATE_ACTION and action not in CATALOG:
+                try:
+                    note_candidate(action, source="understand")
+                except Exception:
+                    pass
+                if action not in candidates:
+                    candidates.append(action)
+            continue
+        spec = spec_of(action)
+        if not isinstance(spec, dict):
             dropped.append(f"表外动作 {action or '空'} 拒收")
             continue
-        spec = CATALOG[action]
         unknown_goal = [key for key in raw if key not in _GOAL_KEYS]
         if unknown_goal:
             dropped.append(f"goal {action} 丢弃未知字段：" + "、".join(sorted(set(map(str, unknown_goal)))))
@@ -91,6 +102,7 @@ def validate_intent(data: dict, query: str) -> dict:
 
     intent.update({"goals": goals, "constraints": constraints, "unresolved": unresolved})
     intent["dropped"] = dropped
+    intent["candidates"] = candidates
     intent["ok"] = bool(goals)
     return intent
 

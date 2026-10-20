@@ -235,6 +235,16 @@ def _run_action(step: dict) -> dict:
         return _set_pickable(step)
     if action == "move_actor":
         return _move_actor(step)
+    if action == "query_actor":
+        return _query_actor(step)
+    if action == "run_automation_test":
+        return _run_automation(step)
+    if action == "set_scalar_param":
+        return _set_scalar_param(step)
+    if action == "query_material":
+        return _query_material(step)
+    if action == "place_batch":
+        return _place_batch(step)
     if action == "probe_move":
         return _probe_move(step)
     if action == "probe_look":
@@ -783,6 +793,12 @@ def _move_actor(step: dict) -> dict:
     if found.get("missing"):
         return {"ok": False, "id": name, "in_level": False, "error": f"场景里没有 {name}"}
     ref = found["ref"]
+    before = _read_location(ref, read)
+    if before.get("ok") and step.get("run_id"):
+        from agent.prop_snapshot import capture_props
+
+        x, y, z = before["location"]
+        capture_props(str(step.get("run_id")), ref, {"location": {"x": x, "y": y, "z": z}}, kind="location")
     write = {"allow_writes": ["set_actor_transform"], "save": False, "pie": False}
     moved = exec_tool(
         _ACTOR,
@@ -836,6 +852,22 @@ def _set_pickable(step: dict) -> dict:
     if found.get("missing"):
         return {"ok": False, "id": name, "in_level": False, "error": f"场景里没有 {name}"}
     ref = found["ref"]
+    before = exec_tool(
+        _OBJECT,
+        "get_properties",
+        {"instance": {"refPath": ref}, "properties": ["bPickable", "Tags"]},
+        task=read,
+    )
+    if before.get("ok") and step.get("run_id"):
+        from agent.prop_snapshot import capture_props
+
+        values = _parse_props(before.get("data"))
+        if isinstance(values, dict):
+            capture_props(
+                str(step.get("run_id")),
+                ref,
+                {"bPickable": values.get("bPickable"), "Tags": values.get("Tags")},
+            )
     write = {"allow_writes": ["set_properties", "add_tag"], "save": False, "pie": False}
     wrote = exec_tool(
         _OBJECT,
@@ -889,6 +921,411 @@ def _set_pickable(step: dict) -> dict:
         "ref": ref,
         "in_level": True,
         "error": "复查未通过：" + "；".join(bits) + extra,
+    }
+
+
+def _query_actor(step: dict) -> dict:
+    """契约里的只读查询。不写属性，不 PIE。"""
+    from core.contract_tools import query_actor
+
+    slots = step.get("slots") if isinstance(step.get("slots"), dict) else {}
+    name = str(step.get("actor_name") or slots.get("name") or "")
+    result = query_actor(name)
+    summary = str(result.get("summary") or result.get("error") or "")
+    judge = {"ok": bool(result.get("ok")), "kind": "editor_assert", "summary": summary, "errors": []}
+    out = {
+        "ok": bool(result.get("ok")),
+        "id": name,
+        "summary": summary,
+        "index_note": summary,
+        "test": judge,
+        "judge_kind": "editor_assert",
+    }
+    if result.get("ref_path"):
+        out["ref"] = result["ref_path"]
+        out["in_level"] = True
+    if not out["ok"]:
+        out["error"] = summary or "query_actor 失败"
+    return out
+
+
+def _run_automation(step: dict) -> dict:
+    """契约里的 Automation。不另开 PIE，不保存。"""
+    from core.contract_tools import run_automation_test
+
+    slots = step.get("slots") if isinstance(step.get("slots"), dict) else {}
+    filt = str(step.get("automation_filter") or slots.get("filter") or "")
+    result = run_automation_test(filt)
+    summary = str(result.get("summary") or result.get("error") or "")
+    judge = {"ok": bool(result.get("ok")), "kind": "automation", "summary": summary, "errors": []}
+    out = {
+        "ok": bool(result.get("ok")),
+        "id": filt,
+        "summary": summary,
+        "index_note": summary,
+        "test": judge,
+        "judge_kind": "automation",
+        "pie": False,
+        "save": False,
+    }
+    if not out["ok"]:
+        out["error"] = summary or "Automation 没过"
+    return out
+
+
+_MATERIAL_INSTANCE = "editor_toolset.toolsets.material_instance.MaterialInstanceTools"
+
+
+def _asset_ref_by_name(name: str, asset_class: str) -> str:
+    """资产索引里唯一命中才返回 object_path，零个或多个返回空字符串，不猜。"""
+    from config import ASSET_JSONL
+
+    if not ASSET_JSONL.is_file():
+        return ""
+    needle = f'"asset_name": "{name}"'
+    cls = f'"asset_class": "{asset_class}"'
+    refs: set[str] = set()
+    for line in ASSET_JSONL.read_text(encoding="utf-8", errors="replace").splitlines():
+        if needle in line and cls in line:
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            ref = str((rec.get("metadata") or {}).get("object_path") or "")
+            if ref:
+                refs.add(ref)
+    if len(refs) == 1:
+        return next(iter(refs))
+    return ""
+
+
+def _material_instance_ref(target: str) -> str:
+    """/Game 或 /Engine 路径直接归一成 object_path；名字查材质实例索引唯一命中。"""
+    text = str(target or "").strip().replace("\\", "/").rstrip("/").rstrip(".")
+    if not text:
+        return ""
+    if text.startswith("/Game/") or text.startswith("/Engine/"):
+        leaf = text.rsplit("/", 1)[-1]
+        if "." in leaf:
+            return text
+        return f"{text}.{leaf}"
+    return _asset_ref_by_name(text, "MaterialInstance")
+
+
+def _blueprint_ref(target: str) -> str:
+    """/Game 路径归一；蓝图名查索引唯一命中。"""
+    text = str(target or "").strip().replace("\\", "/").rstrip("/").rstrip(".")
+    if not text:
+        return ""
+    if text.startswith("/Game/"):
+        leaf = text.rsplit("/", 1)[-1]
+        if "." in leaf:
+            return text
+        return f"{text}.{leaf}"
+    return _asset_ref_by_name(text, "Blueprint")
+
+
+def _scalar_value(data) -> float | None:
+    """get_scalar_parameter 的读数： returnValue / value / 裸数字，读不出算失败。"""
+    value = data
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except json.JSONDecodeError:
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                return None
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, dict):
+        for key in ("returnValue", "value", "scalar", "Value"):
+            inner = value.get(key)
+            if isinstance(inner, bool):
+                continue
+            if isinstance(inner, (int, float)):
+                return float(inner)
+    if isinstance(value, str):
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
+def _set_scalar_param(step: dict) -> dict:
+    """覆写材质实例的一个标量参数。材质域写闸：UE_ALLOW_MATERIAL 人审门挡在 editor_exec，
+    allow_writes 只放 set_scalar_parameter。写完复读；blueprint 槽位给了蓝图就再编译它，
+    裁判 blueprint_compile。不改材质图，不保存。"""
+    from core.editor_exec import exec_tool
+    from core.judge import judge
+
+    read = _read_task()
+    slots = step.get("slots") if isinstance(step.get("slots"), dict) else {}
+    target = str(slots.get("target") or "").strip()
+    param = str(slots.get("param") or "").strip()
+    raw_value = str(slots.get("value") or "").strip()
+    blueprint = str(slots.get("blueprint") or "").strip()
+    if not target:
+        return {"ok": False, "error": "没有要覆写的材质实例"}
+    if not param:
+        return {"ok": False, "id": target, "error": "没有参数名，不猜。"}
+    try:
+        value = float(raw_value)
+    except (TypeError, ValueError):
+        return {"ok": False, "id": target, "error": "value 不是唯一的数字，不猜。"}
+    instance_ref = _material_instance_ref(target)
+    if not instance_ref:
+        return {"ok": False, "id": target, "error": f"{target} 没有唯一的材质实例路径，不猜。"}
+    instance = {"refPath": instance_ref}
+    write = {"allow_writes": ["set_scalar_parameter"], "save": False, "pie": False}
+    wrote = exec_tool(
+        _MATERIAL_INSTANCE,
+        "set_scalar_parameter",
+        {"instance": instance, "name": param, "value": value},
+        task=write,
+    )
+    if not wrote.get("ok"):
+        err = str(wrote.get("error") or "覆写失败")
+        if _conn_error(err):
+            err = f"编辑器 MCP 连不上：{err}"
+        out = {"ok": False, "id": instance_ref, "ref": instance_ref, "error": err}
+        if wrote.get("policy"):
+            out["policy"] = wrote["policy"]
+        return out
+    got = exec_tool(
+        _MATERIAL_INSTANCE,
+        "get_scalar_parameter",
+        {"instance": instance, "name": param},
+        task=read,
+    )
+    if not got.get("ok"):
+        return {"ok": False, "id": instance_ref, "ref": instance_ref,
+                "error": f"复读失败：{got.get('error') or '读不到参数'}"}
+    current = _scalar_value(got.get("data"))
+    if current is None or abs(current - value) > 1e-3:
+        shown = current if current is not None else "未读到"
+        return {"ok": False, "id": instance_ref, "ref": instance_ref,
+                "error": f"复读未通过：{param}={shown}，没有到 {value:g}"}
+    note = f"{instance_ref.rsplit('/', 1)[-1].split('.')[0]}.{param}={value:g} 已覆写并复读一致，未保存"
+    out = {"ok": True, "id": target, "ref": instance_ref, "in_level": False, "index_note": note}
+    if blueprint:
+        bp_ref = _blueprint_ref(blueprint)
+        if not bp_ref:
+            return {"ok": False, "id": target, "ref": instance_ref,
+                    "error": f"蓝图 {blueprint} 没有唯一的路径，不猜。"}
+        test = judge({"kind": "blueprint_compile", "refPath": bp_ref}, read)
+        out["test"] = test
+        out["judge_kind"] = "blueprint_compile"
+        if test.get("ok"):
+            out["index_note"] = note + f"；{bp_ref.rsplit('/', 1)[-1].split('.')[0]} 编译通过"
+        else:
+            out["ok"] = False
+            out["error"] = str(test.get("summary") or "蓝图编译失败")
+    return out
+
+
+_ASSET_TOOLS = "editor_toolset.toolsets.asset.AssetTools"
+_LAYOUT_DIR_PARTS = ("data", "harness", "level_layout")
+
+
+def _layout_file(layout: str) -> Path:
+    """设计图：绝对/相对路径，或 level_layout 目录下的文件名（补 .json）。找不到返回 None。"""
+    from config import DATA_DIR
+
+    text = str(layout or "").strip()
+    if not text:
+        return None
+    candidates = []
+    direct = Path(text)
+    candidates.append(direct)
+    if not direct.is_absolute():
+        if not text.lower().endswith(".json"):
+            text += ".json"
+        candidates.append(DATA_DIR / "harness" / "level_layout" / text)
+    for cand in candidates:
+        if cand.is_file():
+            return cand
+    return None
+
+
+def _layout_entries(data) -> list:
+    if isinstance(data, str):
+        try:
+            data = json.loads(data)
+        except json.JSONDecodeError:
+            return []
+    if not isinstance(data, dict):
+        return []
+    rows = data.get("actors")
+    if not isinstance(rows, list):
+        return []
+    out = []
+    for index, row in enumerate(rows):
+        if not isinstance(row, dict):
+            continue
+        loc = row.get("location") if isinstance(row.get("location"), dict) else row
+        try:
+            x = float(loc.get("x"))
+            y = float(loc.get("y"))
+            z = float(loc.get("z"))
+        except (TypeError, ValueError):
+            continue
+        name = str(row.get("name") or "").strip()
+        out.append({"name": name, "x": x, "y": y, "z": z})
+    return out
+
+
+def _place_batch(step: dict) -> dict:
+    """按设计图 JSON 批量放置同一蓝图。幂等：条目点名已存在的实例就跳过，不重复放。
+    放完逐条复查唯一性。默认不保存；窗口显式 save: true 才对当前关卡存盘一次。"""
+    from core.editor_exec import exec_tool
+
+    read = _read_task()
+    slots = step.get("slots") if isinstance(step.get("slots"), dict) else {}
+    blueprint = str(slots.get("blueprint") or "").strip()
+    layout = str(slots.get("layout") or "").strip()
+    if not blueprint or not layout:
+        return {"ok": False, "error": "没有蓝图或设计图，不猜。"}
+    bp_ref = _blueprint_ref(blueprint)
+    if not bp_ref:
+        return {"ok": False, "id": blueprint, "error": f"{blueprint} 没有唯一的蓝图路径，不猜。"}
+    asset_path = bp_ref.rsplit(".", 1)[0]
+    file = _layout_file(layout)
+    if file is None:
+        return {"ok": False, "id": blueprint, "error": f"找不到设计图 {layout}，不放。"}
+    try:
+        data = json.loads(file.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return {"ok": False, "id": blueprint, "error": f"设计图读不动：{exc}"}
+    entries = _layout_entries(data)
+    if not entries:
+        return {"ok": False, "id": blueprint, "error": "设计图里没有合法条目，不放。"}
+    base_name = asset_path.rsplit("/", 1)[-1]
+    write = {"allow_writes": ["add_to_scene_from_asset"], "save": bool(step.get("save")), "pie": False}
+    placed = skipped = 0
+    for index, entry in enumerate(entries):
+        name = entry["name"] or f"{base_name}_{index + 1}"
+        found = exec_tool(
+            _SCENE, "find_actors",
+            {"name": name, "tag": "", "collision_channels": []},
+            task=read,
+        )
+        if found.get("ok") and _actor_refs(found.get("data")):
+            skipped += 1
+            continue
+        placed_actor = exec_tool(
+            _SCENE, "add_to_scene_from_asset",
+            {
+                "asset_path": asset_path,
+                "name": name,
+                "xform": {"location": {"x": entry["x"], "y": entry["y"], "z": entry["z"]}},
+                "snap_to_ground": False,
+            },
+            task=write,
+        )
+        if placed_actor.get("ok"):
+            placed += 1
+        else:
+            err = str(placed_actor.get("error") or "放置失败")
+            if _conn_error(err):
+                return {"ok": False, "id": blueprint, "error": f"编辑器 MCP 连不上：{err}"}
+            return {"ok": False, "id": blueprint, "error": f"{name} 放置失败：{err}"}
+    # 复查：每个条目在关卡里唯一存在
+    for index, entry in enumerate(entries):
+        name = entry["name"] or f"{base_name}_{index + 1}"
+        found = exec_tool(
+            _SCENE, "find_actors",
+            {"name": name, "tag": "", "collision_channels": []},
+            task=read,
+        )
+        refs = _actor_refs(found.get("data")) if found.get("ok") else []
+        if len(refs) != 1:
+            return {"ok": False, "id": blueprint,
+                    "error": f"复查未通过：{name} 命中 {len(refs)} 个（要 1 个）"}
+    note = f"{base_name} 按设计图 {file.name} 复核 {len(entries)} 条唯一（放置 {placed}，幂等跳过 {skipped}）"
+    save_note = ""
+    if step.get("save"):
+        level = exec_tool(_SCENE, "get_current_level", {}, task=read)
+        level_path = ""
+        data = level.get("data") if isinstance(level, dict) else None
+        if isinstance(data, str):
+            try:
+                data = json.loads(data)
+            except json.JSONDecodeError:
+                data = None
+        if isinstance(data, dict):
+            inner = data.get("returnValue") if "returnValue" in data else data
+            if isinstance(inner, str):
+                level_path = inner
+            elif isinstance(inner, dict):
+                level_path = str(inner.get("returnValue") or "")
+        if not level_path:
+            return {"ok": False, "id": blueprint, "saved": False,
+                    "error": "没有当前关卡路径，关卡未保存（放置与复查已完成的实例还在内存里，未落盘）"}
+        saved = exec_tool(
+            _ASSET_TOOLS, "save_assets",
+            {"asset_paths": [level_path]},
+            task={"allow_writes": [], "save": True, "pie": False},
+        )
+        if saved.get("ok"):
+            save_note = f"；已保存当前关卡 {level_path or ''}（一次性人授权）"
+        else:
+            return {"ok": False, "id": blueprint,
+                    "error": f"关卡保存失败：{saved.get('error') or '未存上'}（放置与复查已完成：{note}）"}
+    summary = note + save_note
+    return {
+        "ok": True,
+        "id": base_name,
+        "ref": asset_path,
+        "in_level": True,
+        "index_note": summary,
+        "test": {"ok": True, "kind": "editor_assert", "summary": summary, "errors": []},
+        "judge_kind": "editor_assert",
+    }
+
+
+def _query_material(step: dict) -> dict:
+    """只读。读材质实例一个标量参数的当前值，裁判 editor_assert。不写，不保存，不 PIE。"""
+    from core.editor_exec import exec_tool
+
+    read = _read_task()
+    slots = step.get("slots") if isinstance(step.get("slots"), dict) else {}
+    target = str(slots.get("target") or "").strip()
+    param = str(slots.get("param") or "").strip()
+    if not target:
+        return {"ok": False, "error": "没有要读的材质实例"}
+    if not param:
+        return {"ok": False, "id": target, "error": "没有参数名，不猜。"}
+    instance_ref = _material_instance_ref(target)
+    if not instance_ref:
+        return {"ok": False, "id": target, "error": f"{target} 没有唯一的材质实例路径，不猜。"}
+    got = exec_tool(
+        _MATERIAL_INSTANCE,
+        "get_scalar_parameter",
+        {"instance": {"refPath": instance_ref}, "name": param},
+        task=read,
+    )
+    if not got.get("ok"):
+        err = str(got.get("error") or "读参数失败")
+        if _conn_error(err):
+            err = f"编辑器 MCP 连不上：{err}"
+        return {"ok": False, "id": instance_ref, "ref": instance_ref, "error": err}
+    current = _scalar_value(got.get("data"))
+    if current is None:
+        return {"ok": False, "id": instance_ref, "ref": instance_ref, "error": f"{param} 读不到数值"}
+    summary = f"{instance_ref.rsplit('/', 1)[-1].split('.')[0]}.{param}={current:g}"
+    return {
+        "ok": True,
+        "id": target,
+        "ref": instance_ref,
+        "in_level": False,
+        "summary": summary,
+        "index_note": summary,
+        "test": {"ok": True, "kind": "editor_assert", "summary": summary, "errors": []},
+        "judge_kind": "editor_assert",
     }
 
 
@@ -1020,11 +1457,11 @@ def _emit_choice(events, window: str, decision, path: str = "") -> None:
     events.emit("confirm", window=window, option=option, path=supplied)
 
 
-def run_sequence(query: str, decide, *, choices: bool = False) -> tuple[int, Path]:
+def run_sequence(query: str, decide, *, choices: bool = False, layered: bool = False, complete=None) -> tuple[int, Path]:
     """decide(step, summary) -> stop / skip / retry。summary 为空表示这一步还跑不了。
-    choices 为真时，每次 s/c/r 写一条 confirm 事件。"""
+    choices 为真时，每次 s/c/r 写一条 confirm 事件。
+    layered 为真时和菜单 3 共用 plan_windows：强规则仍是 L0，弱命中走理解器。"""
     from agent.run_task import run_task
-    from agent.supervise import plan_sequence
 
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     path = RUNS_DIR / stamp.split("-", 1)[0] / f"{stamp}.md"
@@ -1033,7 +1470,14 @@ def run_sequence(query: str, decide, *, choices: bool = False) -> tuple[int, Pat
         from agent.run_windows import _EventBus
 
         events = _EventBus(stamp)
-    steps = plan_sequence(query)
+    if layered:
+        from agent.plan_windows import steps_for_menu2
+
+        steps = steps_for_menu2(query, complete=complete)
+    else:
+        from agent.supervise import plan_sequence
+
+        steps = plan_sequence(query)
     rows = []
     print(f"拆成 {len(steps)} 步。记录写在 {path}")
     index = 0
@@ -1076,13 +1520,23 @@ def run_sequence(query: str, decide, *, choices: bool = False) -> tuple[int, Pat
                 return 1, path
             index += 1
             continue
-        if step.get("action"):
-            try:
+        action = step.get("action")
+        try:
+            from agent.catalog import GRAPH_ACTIONS
+
+            if action in GRAPH_ACTIONS:
+                task = step.get("task") if isinstance(step.get("task"), dict) and step["task"].get("verify") else None
+                if task is None:
+                    from agent.run_windows import _build_graph_task
+
+                    task = _build_graph_task(step, query)
+                summary = task if task.get("ok") is False and not task.get("verify") else run_task(task)
+            elif action:
                 summary = _run_action(step)
-            except Exception as exc:
-                summary = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
-        else:
-            summary = run_task(step)
+            else:
+                summary = run_task(step)
+        except Exception as exc:
+            summary = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
         detail = json.dumps(
             {key: summary.get(key) for key in ("id", "ok", "retry_count", "index_note", "editor", "error") if summary.get(key) not in (None, "")},
             ensure_ascii=False,

@@ -1,0 +1,34 @@
+{
+  "skills": [
+    {
+      "id": "mark-interactable",
+      "version": 1,
+      "when": "可交互",
+      "when_terms": ["可交互"],
+      "roles": ["target", "picker"],
+      "goals": ["set_pickable", "judge_pickup"],
+      "preconditions": ["动作在 catalog 内", "槽位可解析才执行"],
+      "action_sequence": ["set_pickable", "judge_pickup"],
+      "verification": ["bPickable 为真", "InteractableActor 存在", "距离不超过 100 uu"],
+      "failure_recovery": ["缺路径问一次 r", "实例不存在则该扇失败"],
+      "confidence": 0.9,
+      "source_runs": [],
+      "conflicts": [],
+      "lru": 1,
+      "status": "promoted",
+      "supersedes": "",
+      "windows": [
+        {
+          "action": "set_pickable",
+          "slots": {"target": "target"}
+        },
+        {
+          "action": "judge_pickup",
+          "slots": {"target": "target", "picker": "picker"},
+          "depends_on": ["W1"],
+          "max_retries": 1
+        }
+      ]
+    }
+  ]
+}

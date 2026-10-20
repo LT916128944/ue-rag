@@ -1,0 +1,11 @@
+{
+  "did": "给 BP_Coin 的 MID 设 Emissive=5",
+  "evidence": [],
+  "unmet": [
+    "Parameter \"Emissive\" is not a <MaterialParameterType.Scalar: 0> parameter on the material.",
+    "已点名的蓝图能编过"
+  ],
+  "next": "",
+  "artifacts": {},
+  "goal": "自然语言落到可验证的 UE 修改；完成与否由合同和 feature_list 决定，不由模型宣布"
+}

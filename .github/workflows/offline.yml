@@ -16,5 +16,15 @@ jobs:
         run: python -m pip install -r requirements.txt
       - name: check_routes
         run: python eval/check_routes.py
+      - name: check_info_layer
+        run: python eval/check_info_layer.py
+      - name: check_architecture
+        run: python eval/check_architecture.py
+      - name: check_schema
+        run: python eval/check_schema.py
+      - name: check_risk
+        run: python eval/check_risk.py
+      - name: check_automation
+        run: python eval/check_automation.py
       - name: retrieval_bench
         run: python eval/retrieval_bench.py

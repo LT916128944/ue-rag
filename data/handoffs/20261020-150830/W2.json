@@ -1,0 +1,11 @@
+{
+  "did": "裁决",
+  "evidence": [],
+  "unmet": [
+    "场景里没有 BP_TestActor",
+    "编辑器读数与期望一致"
+  ],
+  "next": "累计集成、验证与交付",
+  "artifacts": {},
+  "goal": "自然语言落到可验证的 UE 修改；完成与否由合同和 feature_list 决定，不由模型宣布"
+}
