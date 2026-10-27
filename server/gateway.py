@@ -8,9 +8,8 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 from fastapi import FastAPI
 from pydantic import BaseModel, Field
 
-from config import UE_MCP_URL
 from core.contract_tools import call_named
-from core.editor_launch import mcp_up
+from core.editor_launch import _mcp_urls, mcp_up
 from core.llm_call import complete_logged, model_name
 
 app = FastAPI(title="ue-rag gateway")
@@ -49,7 +48,7 @@ def health() -> dict:
     return {
         "ok": True,
         "model": model_name(),
-        "mcp_url": UE_MCP_URL,
+        "mcp_url": _mcp_urls()[0],
         "mcp_up": mcp_up(),
     }
 

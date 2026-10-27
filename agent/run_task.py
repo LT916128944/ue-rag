@@ -16,7 +16,7 @@ from langgraph.checkpoint.sqlite import SqliteSaver
 from agent.graph import builder
 from agent.roles import trace_role
 from agent.task_schema import load_task
-from config import PROJECT_ROOT, TRACES_DIR, UE_PROJECT_DIR, UE_SOURCE_ROOT
+from config import PROJECT_ROOT, TRACES_DIR, UE_PROJECT_DIR, UE_SOURCE_ROOT, source_rel_prefix
 from core.editor_exec import exec_tool
 from core.error_memory import remember_fixed
 from core.history_log import append_history
@@ -24,6 +24,18 @@ from core.task_log import append_task_record
 
 TYPO_NEEDLE = "void ATestActor::TestPrintDebugInfo()\n{\n}"
 TYPO_BODY = "void ATestActor::TestPrintDebugInfo()\n{\n\tThisFunctionDoesNotExist();\n}"
+
+
+def _unfinished_reason(build, final_state, *, editor_note: str = "", launch_ok: bool = True) -> str:
+    """窗口没成功时的那一句。编译已通过、启动编辑器被拒绝时，用拒绝原文，不要写成图没跑完。"""
+    if isinstance(build, dict) and build.get("ok") is False:
+        errs = build.get("errors") or []
+        text = str(errs[0].get("message") or "") if errs else ""
+        return (text or str(build.get("summary") or ""))[:500]
+    if not launch_ok and editor_note:
+        return str(editor_note)[:500]
+    last = str((final_state or {}).get("last_error") or "")
+    return (last or "图结束时没有完成")[:500]
 
 
 def _initial_state(task: dict) -> dict:
@@ -182,6 +194,9 @@ def _run_direct(task: dict, thread_id: str, on_row=None) -> dict:
 
 
 def run_task(task: dict, trace_path: Path | None = None, thread_id: str | None = None, on_row=None) -> dict:
+    from backends.select import lock_backend
+
+    lock_backend()
     from agent.catalog import DIRECT_ACTIONS
 
     if str(task.get("action") or "") in DIRECT_ACTIONS:
@@ -228,7 +243,7 @@ def run_task(task: dict, trace_path: Path | None = None, thread_id: str | None =
                 emit({"task_id": task["id"], "node": "precheck", "tool": "close_editor", "ok": False, "elapsed": 0, "retry_count": 0, "prompt_tokens": None, "completion_tokens": None, "error": message})
                 return {"id": task["id"], "ok": False, "retry_count": 0, "tool_calls": 0, "elapsed": 0, "index_note": "未更新", "error": message, "trace": str(trace_path)}
         if task.get("inject_typo"):
-            rel = "Source/AIAgentProject/" + (task.get("typo_path") or "Private/TestActor.cpp")
+            rel = source_rel_prefix() + (task.get("typo_path") or "Private/TestActor.cpp")
             if not _git_clean(rel):
                 # 没有 git 时用文件快照还原，不因此拒绝。有 git 且不干净则停。
                 probe = subprocess.run(["git", "rev-parse", "--is-inside-work-tree"], cwd=str(UE_PROJECT_DIR), capture_output=True, text=True)
@@ -301,6 +316,10 @@ def run_task(task: dict, trace_path: Path | None = None, thread_id: str | None =
                             row["policy"] = item["policy"]
                         if (item or {}).get("context_slice"):
                             row["context_slice"] = item["context_slice"]
+                        if (item or {}).get("reasoning"):
+                            row["reasoning"] = str(item["reasoning"])[:800]
+                        if (item or {}).get("calls"):
+                            row["calls"] = [str(name) for name in (item.get("calls") or [])[:8]]
                         emit(row)
 
         ok = bool(final_state and final_state.get("final_success"))
@@ -368,6 +387,8 @@ def run_task(task: dict, trace_path: Path | None = None, thread_id: str | None =
         criteria = ((final_state or {}).get("task") or {}).get("criteria")
         if isinstance(criteria, list):
             summary["criteria"] = criteria
+        if tools:
+            summary["tools"] = [str(name) for name in tools if name]
         if (final_state or {}).get("source_written"):
             summary["source_written"] = True
         if summary["ok"] and summary.get("index_note") in ("", "未更新"):
@@ -380,14 +401,12 @@ def run_task(task: dict, trace_path: Path | None = None, thread_id: str | None =
                 text = str(build.get("summary") or "")
             summary["summary"] = (text or "裁判通过")[:500]
         if not summary["ok"] and not summary.get("error"):
-            build = summary.get("build") or {}
-            if isinstance(build, dict) and build.get("ok") is False:
-                errs = build.get("errors") or []
-                text = str(errs[0].get("message") or "") if errs else ""
-                summary["error"] = (text or str(build.get("summary") or ""))[:500]
-            else:
-                last = str((final_state or {}).get("last_error") or "")
-                summary["error"] = (last or "图结束时没有完成")[:500]
+            summary["error"] = _unfinished_reason(
+                summary.get("build"),
+                final_state,
+                editor_note=editor_note,
+                launch_ok=launch_ok,
+            )
             if summary.get("index_note") in ("", "未更新"):
                 summary["index_note"] = summary["error"]
                 summary["summary"] = summary["error"]

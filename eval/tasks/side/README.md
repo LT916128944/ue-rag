@@ -8,4 +8,4 @@
 
 `DiscoverTests` 的返回仍然只有 `{"status":"ready"}`，名字不在这一步。接着 `ListTests` 才能看到过滤器。2026-10-16 抄到的是 `AIAgent.Pawn.Look`、`AIAgent.Pawn.Wasd`、`AIAgent.Enemy.Patrol`。巡逻任务是 `demo-c-patrol.json`，用最后这一条，不进默认三条。`demo-a-spawn-box.json` 读出生点盒子。`demo-b-blueprint.json` 只允许改 `/Game/BP_TestEnemy.BP_TestEnemy` 这一张，编译之后仍要跑同一条 Automation。
 
-`pickup-sentence.json` 只给 `check_routes.py` 对一句原话做离线拆句，不编译、不进默认三条。
+`pickup-sentence.json` 只给 `check_routes.py` 对一句原话做离线拆句，不编译、不进默认三条。`kill-check.json` 是单点杀伤旁路：仿 `inject_typo` 故意改错一处，期望 `AIAgent.Pawn.Look` 失败，再按同一条快照还原。不进默认三条，也不进 `bench_manifest.json`。

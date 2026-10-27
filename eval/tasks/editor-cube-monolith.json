@@ -1,0 +1,15 @@
+{
+  "id": "editor-cube-monolith",
+  "query": "当前后端是 Monolith。把关卡里 label 为 Cube 的 Actor 移到世界坐标 [1200, 400, 150]。只调用一次工具，工具名必须是 move_actor，参数 actor_name 为 Cube，location 为 [1200, 400, 150]。不要调用 find_actors、set_actor_transform、scan_mcp_tools.py 或 call_mcp_tool.py。不要保存，不要启动 PIE。",
+  "verify": [
+    {
+      "kind": "editor_assert",
+      "actor_name": "Cube",
+      "expect": {"location": {"x": 1200, "y": 400, "z": 150}}
+    }
+  ],
+  "allow_writes": ["move_actor"],
+  "save": false,
+  "pie": false,
+  "max_retries": 3
+}

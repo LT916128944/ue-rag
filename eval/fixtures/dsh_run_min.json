@@ -1,0 +1,40 @@
+{
+  "run_id": "dsh-run-min",
+  "status": "成功",
+  "criteria": [
+    {
+      "id": "c-build",
+      "text": "编译通过",
+      "evidence_kind": "cpp_build",
+      "passed": false,
+      "windows": ["W1"]
+    },
+    {
+      "id": "c-manual",
+      "text": "人工绑定",
+      "evidence_kind": "manual",
+      "passed": false
+    },
+    {
+      "id": "c-assert",
+      "text": "场景断言",
+      "evidence_kind": "editor_assert",
+      "passed": false,
+      "windows": ["W1"]
+    }
+  ],
+  "windows": {
+    "W1": {
+      "window": {
+        "id": "W1",
+        "task": {
+          "verify": [
+            {"kind": "cpp_build", "fake": "match"},
+            {"kind": "editor_assert", "fake": "mismatch"},
+            {"kind": "editor_assert", "fake": "match"}
+          ]
+        }
+      }
+    }
+  }
+}

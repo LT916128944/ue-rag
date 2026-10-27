@@ -16,6 +16,9 @@ jobs:
         run: python -m pip install -r requirements.txt
       - name: check_routes
         run: python eval/check_routes.py
+      # Monolith 排他后端：未配置仍是 official；非法值与选错入口都拒绝。不连编辑器。
+      - name: check_backend
+        run: python eval/check_backend.py
       - name: check_info_layer
         run: python eval/check_info_layer.py
       - name: check_architecture
@@ -26,5 +29,59 @@ jobs:
         run: python eval/check_risk.py
       - name: check_automation
         run: python eval/check_automation.py
+      # 闭环合同（20261024 整改）。这七条只依赖本仓库：run_task / exec_tool / complete 全是替身，
+      # RUNS/EVENTS/ARCHIVE/SNAPSHOTS/BRIEFS/LEDGER 全部隔离到临时目录，不联网、不调模型、不碰编辑器。
+      # 之前它们只在 WORKFLOW.md 里记本机命令，CI 上没有护栏：run_windows 的聚合口径坏掉也不会红。
+      - name: check_harness
+        run: python eval/check_harness.py
+      - name: check_stitch
+        run: python eval/check_stitch.py
+      - name: check_upgrade
+        run: python eval/check_upgrade.py
+      # 20261024-192858 的整改链，一条一扇：
+      # create_level 动作 + 归地 + 补窗；零窗口范围的结构化能力缺口；归档证据不被二次归档清空；
+      # 集成矩阵「交付验收」四态；以及 T3 的端到端离线回归（原句 → 规划/物化 → 真跑 → 收尾状态）。
+      - name: check_create_level
+        run: python eval/check_create_level.py
+      - name: check_capability_gap
+        run: python eval/check_capability_gap.py
+      - name: check_archive_fidelity
+        run: python eval/check_archive_fidelity.py
+      - name: check_integrate_verdict
+        run: python eval/check_integrate_verdict.py
+      # T3 独立复验：独立写的断言 + 对抗性用例。data/briefs 与 data/runs 是 gitignore 的，
+      # CI 上不存在时用同形状内联替身（文件里会打印一句），断言照样跑。
+      - name: check_failure_192858
+        run: python eval/check_failure_192858.py
+      # DSH 离线检查。这四条只依赖本仓库（临时目录 + mock/假 judge），CI 可跑。
+      # check_dsh_config.py 与 check_dsh_bridge.py 不进 CI：前者要同级 AIAgentProject
+      # 仓库与绝对路径的 venv，后者要拉检索模型与 data/chroma，只在 WORKFLOW.md 记本机命令。
+      - name: check_dsh_contract
+        run: python eval/check_dsh_contract.py
+      # verify spec 的入口空洞（20261024-011917）：新记录能从 entry["task"] 读回 spec，
+      # 旧记录回落不炸，只有裁判 {ok, kind} 对上才改 passed。
+      - name: check_verify_spec
+        run: python eval/check_verify_spec.py
+      - name: check_dsh_lock
+        run: python eval/check_dsh_lock.py
+      - name: check_dsh_costs
+        run: python eval/check_dsh_costs.py
+      # 20261024-192858 能力缺口盲区的升级批次（docs/upgrade/next-upgrade-plan.md 的 D1–D11）。
+      # 与上面「本次修复」那批分开写注释：上面是把这一次的事做对，下面这批是
+      # 让下一次不会以另一种形式再来一次。每组只依赖本仓库，不联网、不调模型、不碰编辑器。
+      - name: check_catalog_parity
+        run: python eval/check_catalog_parity.py
+      - name: check_evidence_attribution
+        run: python eval/check_evidence_attribution.py
+      - name: check_escalation
+        run: python eval/check_escalation.py
+      - name: check_review_coverage
+        run: python eval/check_review_coverage.py
+      - name: check_candidate_aging
+        run: python eval/check_candidate_aging.py
+      - name: check_lexicon
+        run: python eval/check_lexicon.py
+      - name: check_statuses
+        run: python eval/check_statuses.py
       - name: retrieval_bench
         run: python eval/retrieval_bench.py

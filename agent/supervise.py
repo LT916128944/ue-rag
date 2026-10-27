@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from config import UE_PROJECT_DIR, UE_SOURCE_ROOT, allow_blueprint
+from config import UE_PROJECT_DIR, UE_SOURCE_ROOT, allow_blueprint, task_flag, task_policy
 from core.retrieve_funnel import _corpus
 
 _BP_RE = re.compile(r"(?<![A-Za-z0-9_])BP_[A-Za-z0-9_]+(?![A-Za-z0-9_])")
@@ -65,8 +65,7 @@ def _base(query: str) -> dict:
         "query": query.strip(),
         "verify": [],
         "allow_writes": [],
-        "save": False,
-        "pie": False,
+        **task_policy(),
         "max_retries": 3,
         "supervised": True,
     }
@@ -81,6 +80,38 @@ def _filter_in(query: str) -> str:
     return match.group(1) if match else ""
 
 
+def declared_automation_filters() -> list[str]:
+    """源码里 IMPLEMENT_SIMPLE_AUTOMATION_TEST 声明的过滤器。不写死测试名。"""
+    from config import UE_SOURCE_ROOT
+
+    if not Path(UE_SOURCE_ROOT).is_dir():
+        return []
+    pattern = re.compile(
+        r'IMPLEMENT_SIMPLE_AUTOMATION_TEST\s*\(\s*[^,]+,\s*"([^"]+)"',
+        re.S,
+    )
+    found: list[str] = []
+    for path in Path(UE_SOURCE_ROOT).rglob("*.cpp"):
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        found.extend(pattern.findall(text))
+    return list(dict.fromkeys(found))
+
+
+def unique_automation_filter(*needles: str) -> str:
+    """关键字只命中一条已声明过滤器时返回它。零条或多条都返回空，不挑。"""
+    hits = []
+    for name in declared_automation_filters():
+        low = name.lower()
+        if any(needle.lower() in low for needle in needles if needle):
+            hits.append(name)
+    if len(hits) == 1:
+        return hits[0]
+    return ""
+
+
 def _attach_filter(task: dict, query: str) -> dict:
     filt = _filter_in(query)
     if filt:
@@ -93,7 +124,13 @@ _PROJECT_COMPILE_RE = re.compile(r"编译工程|编译项目|编译一下工程|
 _BP_CREATE_PHRASE_RE = re.compile(
     r"(?:新增|添加|创建|新建|生成|加)一?个?\s*(?:/Game/[A-Za-z0-9_/]+|BP_[A-Za-z0-9_]+|蓝图)"
 )
-_LAUNCH_EDITOR_RE = re.compile(r"启动编辑器|打开编辑器|启动\s*UE")
+_LAUNCH_EDITOR_RE = re.compile(
+    r"(?:启动|打开|开启)\s*(?:UE|Unreal|虚幻)\s*(?:引擎)?\s*(?:编辑器)?"
+    r"|(?:启动|打开|开启)\s*编辑器",
+    re.I,
+)
+# 单独一个「启动/打开 UE 或虚幻」不够：「打开虚幻商城」也会命中，必须排除商店这类对象。
+_LAUNCH_EDITOR_EXCLUDE_RE = re.compile(r"商城|市场|Marketplace|商店|资产库", re.I)
 _PICKUP_BY_RE = re.compile(
     r"(?P<target>A[A-Z][A-Za-z0-9_]*)\s*能否被\s*(?P<picker>A[A-Z][A-Za-z0-9_]*)\s*拾取"
 )
@@ -190,6 +227,51 @@ def _implementation(stem: str) -> str | None:
     return None
 
 
+def _source_rel(raw: str) -> str:
+    """人写的路径归一化成相对当前源码根的 posix 路径。"""
+    from config import source_rel_prefix
+
+    rel = raw.replace("\\", "/").strip().strip("\"'`").lstrip("/")
+    prefix = source_rel_prefix()
+    if prefix and rel.startswith(prefix):
+        rel = rel[len(prefix):]
+    return rel
+
+
+def _unique_source_file(query: str, stem: str) -> str | None:
+    """句子里点名的那个 stem 在源码树里的唯一相对路径。多于一份就返回 None，不猜。
+
+    句子给了目录就只认那个目录：写错目录不能悄悄换成同名文件（那是猜）。
+    只写文件名时按 stem（+点名的后缀）在源码树里找唯一一份。
+    """
+    root = Path(UE_SOURCE_ROOT)
+    pathed: list[str] = []
+    bare: list[str] = []
+    for raw in _PATH_STRIP_RE.findall(query):
+        rel = _source_rel(raw)
+        if Path(rel).stem == stem and rel not in pathed:
+            pathed.append(rel)
+    for match in _FILE_RE.finditer(query):
+        rel = _source_rel(match.group(0))
+        if Path(rel).stem == stem and rel not in bare:
+            bare.append(rel)
+    for rel in [*pathed, *bare]:
+        if (root / rel).is_file():
+            return rel
+    if pathed:
+        # 写了目录但源码树里没有这一份：不猜
+        return None
+    # 只写了文件名：按 stem + 点名的后缀找唯一一份
+    suffixes = {Path(rel).suffix for rel in bare} or {".h", ".cpp"}
+    found = [
+        path for path in root.rglob(f"{stem}.*")
+        if path.is_file() and path.suffix in suffixes
+    ]
+    if len(found) == 1:
+        return found[0].relative_to(root).as_posix()
+    return None
+
+
 def _pinned_class(query: str) -> dict | None:
     """句子里点名了唯一的 .h/.cpp 文件时，目标类由文件钉死，其余类名只当引用参数。"""
     files = _FILE_RE.findall(query)
@@ -217,19 +299,50 @@ def _unique_class(tokens: list[str]) -> dict | None:
     return None
 
 
-def _try_cpp(query: str) -> dict | None:
-    if not (re.search(r"编译|error\s*C|构建|\bcpp\b", query, re.I) or _is_cpp_edit(query)):
-        return None
-    if _BP_RE.search(query) and not _cpp_tokens(query):
-        return None
-    tokens = _cpp_tokens(query)
-    if not tokens:
-        return _fail("写不出唯一的 C++ 路径，不猜。")
-    rec = _pinned_class(query)
-    if rec is None:
-        rec = _unique_class(tokens)
-    if rec is None:
-        return _fail("C++ 类不是唯一的，不猜。")
+def _cpp_rule(query: str) -> str:
+    if _is_cpp_edit(query):
+        return "可以新增这次要求的函数。声明放头文件，实现放 cpp。不要改别的类。"
+    return "不要新增无关函数，不要改别的文件。"
+
+
+def _cpp_task_body(query: str, files: str) -> dict:
+    """钉死文件的 C++ 任务体。句式与判定口径只留这一份，_try_cpp / cpp_task_for_file 共用。"""
+    task = _base(query)
+    task["query"] = (
+        f"{query.strip()}\n"
+        f"只改 {files}。用 read_source 读出要改的段落，再用 apply_unified_diff。"
+        "diff 的旧行必须来自最近一次 read_source 的 text，不要带行号。写码成功后文件已变，旧行要用新读取重做；"
+        "每段 diff 成功后行号会偏移：下一段 diff 前必须重新 read_source，@@ 旧行号用这次返回的 numbered。"
+        f"{_cpp_rule(query)}"
+    )
+    task["verify"] = [{"kind": "cpp_build"}]
+    task["judge_first"] = not _is_cpp_edit(query)
+    task["launch_editor"] = _is_cpp_edit(query)
+    return task
+
+
+def _cpp_task_for_named_file(query: str, stem: str) -> dict:
+    """句子里唯一点名的文件没有 UCLASS：钉死这个文件，不要求类，也不回落到句子里的别的类。"""
+    rel = _unique_source_file(query, stem)
+    if not rel:
+        # 让 sequence.mark_missing_path 能直接标成 needs=source，等人 r 补一次
+        return {
+            **_fail("点名的 C++ 文件不是唯一的，不猜。只给一次：r Private/名字.cpp。"),
+            "needs": "source",
+            "blocked": True,
+        }
+    task = _cpp_task_body(query, rel)
+    if _keep(query):
+        task["keep_source"] = True
+    return _attach_filter(task, query)
+
+
+def _class_task(query: str, rec: dict, shortcuts: bool = True) -> dict:
+    """把一个已解析出的 UCLASS 记录做成任务。路径不唯一时返回 _fail 结果，不猜。
+
+    shortcuts 管「移动已实现就只编译」「注入 typo」这类单循环专用改写：规划器的 edit_cpp 扇
+    要的是真改源码（expect_source_write），带上它们会自相矛盾。
+    """
     stem = Path(str(rec["metadata"].get("file_name") or "")).stem
     rel = _implementation(stem)
     if rel == "":
@@ -241,29 +354,15 @@ def _try_cpp(query: str) -> dict | None:
             rel = f"Public/{header}"
         else:
             return _fail("写不出唯一的 C++ 路径，不猜。")
-    task = _base(query)
-    header = f"Public/{stem}.h"
+    head = f"Public/{stem}.h"
     files = rel
-    if header != rel and (Path(UE_SOURCE_ROOT) / header).is_file():
-        files = f"{header} 与 {rel}"
-    if _is_cpp_edit(query):
-        rule = "可以新增这次要求的函数。声明放头文件，实现放 cpp。不要改别的类。"
-    else:
-        rule = "不要新增无关函数，不要改别的文件。"
-    task["query"] = (
-        f"{query.strip()}\n"
-        f"只改 {files}。用 read_source 读出要改的段落，再用 apply_unified_diff。"
-        "diff 的旧行必须来自最近一次 read_source 的 text，不要带行号。写码成功后文件已变，旧行要用新读取重做；"
-        "每段 diff 成功后行号会偏移：下一段 diff 前必须重新 read_source，@@ 旧行号用这次返回的 numbered。"
-        f"{rule}"
-    )
-    task["verify"] = [{"kind": "cpp_build"}]
-    task["judge_first"] = not _is_cpp_edit(query)
-    task["launch_editor"] = _is_cpp_edit(query)
-    if _movement_ready(stem) and re.search(r"WASD|前后左右|无法移动", query, re.I):
+    if head != rel and (Path(UE_SOURCE_ROOT) / head).is_file():
+        files = f"{head} 与 {rel}"
+    task = _cpp_task_body(query, files)
+    if shortcuts and _movement_ready(stem) and re.search(r"WASD|前后左右|无法移动", query, re.I):
         task["judge_first"] = True
         task["query"] += "\n移动实现已经在源码里。这一轮只编译，不要改文件。"
-    if rel.endswith("TestActor.cpp") and re.search(r"编译错误|error\s*C", query, re.I):
+    if shortcuts and rel.endswith("TestActor.cpp") and re.search(r"编译错误|error\s*C", query, re.I):
         text = (Path(UE_SOURCE_ROOT) / rel).read_text(encoding="utf-8", errors="replace")
         if "ThisFunctionDoesNotExist" not in text:
             task["inject_typo"] = True
@@ -273,12 +372,29 @@ def _try_cpp(query: str) -> dict | None:
     return _attach_filter(task, query)
 
 
+def _try_cpp(query: str) -> dict | None:
+    if not (re.search(r"编译|error\s*C|构建|\bcpp\b", query, re.I) or _is_cpp_edit(query)):
+        return None
+    if _BP_RE.search(query) and not _cpp_tokens(query):
+        return None
+    tokens = _cpp_tokens(query)
+    if not tokens:
+        return _fail("写不出唯一的 C++ 路径，不猜。")
+    named = _FILE_RE.findall(query)
+    rec = _pinned_class(query)
+    if rec is None:
+        # 句子里只点名一个 .h/.cpp：目标就是它，绝不用句子里的别的类替换
+        if len(named) == 1:
+            return _cpp_task_for_named_file(query, named[0])
+        rec = _unique_class(tokens)
+    if rec is None:
+        return _fail("C++ 类不是唯一的，不猜。")
+    return _class_task(query, rec)
+
+
 def cpp_task_for_file(query: str, rel: str) -> dict | None:
     """人用 r 补上的源文件。必须是 Source/AIAgentProject 里已经存在的 .h 或 .cpp。"""
-    rel = rel.replace("\\", "/").strip().lstrip("/")
-    prefix = "Source/AIAgentProject/"
-    if rel.startswith(prefix):
-        rel = rel[len(prefix):]
+    rel = _source_rel(rel)
     if not rel.endswith((".h", ".cpp")) or ".." in rel.split("/"):
         return None
     root = Path(UE_SOURCE_ROOT)
@@ -293,21 +409,64 @@ def cpp_task_for_file(query: str, rel: str) -> dict | None:
             files = f"{rel} 与 {cpp}"
     elif header != rel and (root / header).is_file():
         files = f"{header} 与 {rel}"
-    task = _base(query)
-    rule = "可以新增这次要求的函数。声明放头文件，实现放 cpp。不要改别的类。" if _is_cpp_edit(query) else "不要新增无关函数，不要改别的文件。"
-    task["query"] = (
-        f"{query.strip()}\n"
-        f"只改 {files}。用 read_source 读出要改的段落，再用 apply_unified_diff。"
-        "diff 的旧行必须来自最近一次 read_source 的 text，不要带行号。写码成功后文件已变，旧行要用新读取重做；"
-        "每段 diff 成功后行号会偏移：下一段 diff 前必须重新 read_source，@@ 旧行号用这次返回的 numbered。"
-        f"{rule}"
-    )
-    task["verify"] = [{"kind": "cpp_build"}]
-    task["judge_first"] = not _is_cpp_edit(query)
-    task["launch_editor"] = _is_cpp_edit(query)
+    task = _cpp_task_body(query, files)
     task["title"] = "改 C++ 并编译"
     task["path_filled"] = True
     return _attach_filter(task, query)
+
+
+def cpp_task_for_class(query: str, class_name: str) -> dict | None:
+    """按类名定位这一个类，再复用 cpp_task_for_file 的任务体。解析不出来返回 None，由调用方回落。
+
+    query 必须是原句（origin）：规划者给的 title 只是扇名，拿它当需求等于把需求丢掉
+    （20261024-011917 的 W1 就是这么把 WASD/跳跃/金币那句丢光的）。
+    原句里可能同时提到别的类名或蓝图，所以仍然按这个类钉死它自己所在的文件。
+    """
+    token = (class_name or "").strip()
+    if not token:
+        return None
+    classes = {}
+    for hit in _resolve_class(token):
+        name = str(hit["metadata"].get("class_name") or "")
+        if name:
+            classes[name] = hit
+    if len(classes) != 1:
+        # 索引里没有这个类（或不是唯一一条）：返回 None，由调用方决定回落，这里不编
+        return None
+    task = _class_task(query, next(iter(classes.values())), shortcuts=False)
+    if task.get("ok") is False:
+        return None
+    task["title"] = "改 C++ 并编译"
+    task["path_filled"] = True
+    return task
+
+
+def pinned_file_matches_class(query: str, class_name: str) -> bool:
+    """原句唯一点名的那个文件，stem 是否正好是这个类名（A 前缀可有可无）。
+
+    规划者的 class 槽位不一定是 UCLASS：PlatformRunTest 在工程里是 AutomationTest，索引里没有
+    class_name 记录，但原句点名的 Private/PlatformRunTest.cpp 就是目标。对得上才认，绝不换成别的类。
+    """
+    files = _FILE_RE.findall(query or "")
+    token = (class_name or "").strip()
+    if not token or len(files) != 1:
+        return False
+    bare = token[1:] if token.startswith("A") and len(token) > 1 else token
+    return files[0] in (token, bare)
+
+
+def named_file_class(query: str) -> str | None:
+    """原句唯一点名的那个文件解析出的 UCLASS 类名。解析不出（无 UCLASS / 不唯一）返回 None。
+
+    给调用方做判据优先级用：点名文件优先，而且「点名的文件有类」时走按类的任务
+    （shortcuts=False），不要走 _try_cpp 那条带单循环改写的路。
+    """
+    if len(_FILE_RE.findall(query or "")) != 1:
+        return None
+    rec = _pinned_class(query or "")
+    if rec is None:
+        return None
+    return str(rec["metadata"].get("class_name") or "") or None
 
 
 def _unique_blueprint_ref(query: str) -> tuple[str | None, str | None]:
@@ -390,7 +549,12 @@ def _actor_labels(query: str) -> list[str]:
 
 
 def _wants_save(query: str) -> bool:
-    return "保存" in query or re.search(r"\bsave\b", query, re.I) is not None
+    """句子明说要保存，或没写「不保存」时跟随任务缺省。"""
+    if re.search(r"不\s*保存|别\s*保存|不要\s*保存", query or ""):
+        return False
+    if "保存" in query or re.search(r"\bsave\b", query, re.I) is not None:
+        return True
+    return task_flag({}, "save")
 
 
 def _try_editor(query: str) -> dict | None:
@@ -418,9 +582,9 @@ def _try_editor(query: str) -> dict | None:
     task = _base(query)
     level_text = f"当前关卡要包含 {level.group(1)}。" if level else ""
     if save:
-        tail = "然后调用 save_assets，asset_paths 传空数组，保存改脏的关卡。不要关编辑器，不要启动 PIE。"
+        tail = "然后调用 save_assets，asset_paths 传空数组，保存改脏的关卡。"
     else:
-        tail = "不要保存，不要启动 PIE。"
+        tail = "不要保存。"
     task["query"] = (
         f"{query.strip()}\n"
         f"把名为 {name} 的 Actor 移动到世界坐标 x={x:g} y={y:g} z={z:g}。{level_text}"
@@ -454,11 +618,10 @@ def _try_automation(query: str) -> dict | None:
 
 
 def script_class_path(class_name: str) -> str:
-    """反射名去掉 A/U/F 前缀。ATestActor 是 /Script/AIAgentProject.TestActor。"""
-    bare = class_name
-    if len(bare) > 1 and bare[0] in "AUF" and bare[1].isupper():
-        bare = bare[1:]
-    return f"/Script/AIAgentProject.{bare}"
+    """反射名去掉 A/U/F 前缀。模块名来自 project_context，不写死工程名。"""
+    from config import script_object_path
+
+    return script_object_path(class_name)
 
 
 def _blueprint_identity(query: str) -> dict | None:
@@ -488,7 +651,7 @@ def _followups(query: str) -> list[str]:
     if re.search(r"创建蓝图|新建蓝图|生成蓝图", query):
         steps.append("创建蓝图。需要目录，暂停后用 r /Game/某目录 补上。")
     if re.search(r"丢到场景|放到场景|放进场景|拖到场景", query):
-        steps.append("把蓝图放进关卡。沿用上一格填的蓝图路径，不保存关卡。")
+        steps.append("把蓝图放进关卡。沿用上一格填的蓝图路径，放完按任务策略保存关卡。")
     if re.search(r"拾取", query):
         steps.append("用 Pawn 测试拾取。放进场景后给实例打上 InteractableActor 标签再查一次，不进 PIE。")
     return steps
@@ -628,8 +791,7 @@ def _try_named_blueprint_place(query: str) -> list[dict] | None:
                 "asset_name": asset,
                 "actor_name": asset,
                 "ref_path": ref,
-                "save": False,
-                "pie": False,
+                **task_policy(),
             }]
     names = list(dict.fromkeys(_BP_RE.findall(query)))
     paths = [match.group(0) for match in re.finditer(r"/Game(?:/[A-Za-z0-9_]+)+", query)]
@@ -652,8 +814,7 @@ def _try_named_blueprint_place(query: str) -> list[dict] | None:
             "asset_name": fields.get("asset_name"),
             "actor_name": fields.get("actor_name") or fields.get("asset_name"),
             "ref_path": fields.get("ref_path"),
-            "save": False,
-            "pie": False,
+            **task_policy(),
         }]
     if linked.get("plan") == "create_planned" and create.get("asset_name"):
         filler = {key: value for key, value in create.items() if key in ("asset_name", "parent")}
@@ -926,6 +1087,86 @@ def _try_manual_graph(query: str) -> dict | None:
     return None
 
 
+def _wants_launch_editor(query: str) -> bool:
+    """句子里真的要求启动编辑器。商店/市场这类对象排除，否则「打开虚幻商城」会被当成启动编辑器。"""
+    text = query or ""
+    if not _LAUNCH_EDITOR_RE.search(text):
+        return False
+    return _LAUNCH_EDITOR_EXCLUDE_RE.search(text) is None
+
+
+def _launch_editor_task(query: str) -> dict:
+    """只启动编辑器并等 MCP。不编译、不改场景、不保存、不进 PIE。
+    「启动 UE 编辑器，其他啥也别干」这类句子走到这里，不再映射成 compile_project 空转。"""
+    task = _base(query)
+    task["title"] = "启动 UE 编辑器"
+    task["query"] = f"{query.strip()}\n只启动编辑器并等 MCP 连通。不要编译、不要改场景、不要保存、不要进 PIE。"
+    task["action"] = "launch_editor"
+    task["verify"] = [{"kind": "editor_assert", "text": "编辑器进程在，MCP 端口连通"}]
+    task["allow_writes"] = []
+    task["save"] = False
+    task["pie"] = False
+    task["max_retries"] = 0
+    return task
+
+
+_LEVEL_CREATE_RE = re.compile(
+    r"(?:新建|创建|新增|添加|生成|建(?:立|造)?|做)\s*(?:一|1)?\s*(?:个|张|幅)?\s*(?:新的|新)?\s*"
+    r"(?:关卡|地图|level|map)"
+    r"|\b(?:create|add|make)\s+(?:a\s+)?(?:new\s+)?(?:level|map)\b"
+    r"|\bnew\s+(?:level|map)\b",
+    re.I,
+)
+
+
+def _wants_create_level(query: str) -> bool:
+    """句子里真的要求新建一个关卡（不是「在这个关卡里做什么」）。
+    「新建/创建/建一个/做一个 + 紧邻的 关卡/地图」才算；中间夹了别的词（做一个平台跳跃关卡）不算。"""
+    return _LEVEL_CREATE_RE.search(query or "") is not None
+
+
+def _level_token(query: str) -> str:
+    """句中关卡名：唯一一条 L_ 名优先，其次唯一一条 /Game 路径。多于一条或没有返回空串，不猜。"""
+    text = query or ""
+    names = list(dict.fromkeys(_LEVEL_RE.findall(text)))
+    if len(names) == 1:
+        return names[0]
+    if len(names) > 1:
+        return ""
+    paths = list(dict.fromkeys(
+        match.group(0) for match in re.finditer(r"/Game(?:/[A-Za-z0-9_]+)+", text)
+    ))
+    return paths[0] if len(paths) == 1 else ""
+
+
+def _create_level_task(query: str) -> dict:
+    """「新建一个关卡 L_X」在句子级就由代码接住，不让整句退化成只启动编辑器。
+    （20261024-192858：动作表里没有建关卡的动作，B 范围拿到 0 扇窗口后整段蒸发。）
+    名字不唯一或为空时给一扇带 error 的暂停步，不猜也不静默。"""
+    from agent.plan_windows import resolve_level
+
+    task = _base(query)
+    task["title"] = "新建关卡并切过去"
+    task["action"] = "create_level"
+    task["verify"] = [{"kind": "editor_assert", "text": "/Game 下关卡资产存在且已成为当前关卡"}]
+    task["allow_writes"] = ["duplicate", "save_assets", "load_level"]
+    task["max_retries"] = 1
+    raw = _level_token(query)
+    found = resolve_level(raw) if raw else {"ok": False, "error": "缺少关卡名，不猜。"}
+    if not found.get("ok"):
+        task.update({
+            "ok": False,
+            "blocked": True,
+            "error": str(found.get("error") or "缺少关卡名，不猜。"),
+        })
+        return task
+    task["slots"] = {"level": raw}
+    for key in ("level_name", "level_path", "ref_path", "asset_name", "package_path"):
+        if found.get(key):
+            task[key] = found[key]
+    return task
+
+
 def _is_project_compile(query: str) -> bool:
     """编译整个工程。句里同时还在改函数时，仍走原来的改源码步骤。"""
     if not _PROJECT_COMPILE_RE.search(query):
@@ -1013,6 +1254,8 @@ def _explicit_blueprint(query: str, class_name: str) -> dict | None:
 
 
 def _indexed_blueprint(class_name: str) -> dict | None:
+    from config import project_module
+
     bare = _bare_class(class_name)
     asset = "BP_" + bare
     hits = []
@@ -1024,7 +1267,7 @@ def _indexed_blueprint(class_name: str) -> dict | None:
             continue
         content = rec.get("content") or ""
         parent_ok = (
-            f"AIAgentProject.{bare}" in content
+            f"{project_module()}.{bare}" in content
             or f"父类名: {bare}" in content
             or f"父类名: {class_name}" in content
         )
@@ -1105,8 +1348,7 @@ def _append_pickup_slots(steps: list[dict], query: str) -> bool:
         "action": "place_pair",
         "picker": {key: picker.get(key) for key in ("asset_path", "actor_name", "ref_path", "asset_name", "folder_path", "parent")},
         "target": {key: target.get(key) for key in ("asset_path", "actor_name", "ref_path", "asset_name", "folder_path", "parent")},
-        "save": False,
-        "pie": False,
+        **task_policy(),
         "pickup_handled": True,
     }
     check = {
@@ -1115,8 +1357,7 @@ def _append_pickup_slots(steps: list[dict], query: str) -> bool:
         "read_only": True,
         "picker_name": picker.get("actor_name") or "",
         "actor_name": target.get("actor_name") or "",
-        "save": False,
-        "pie": False,
+        **task_policy(save=False, pie=False),
         "pickup_handled": True,
     }
     if ready:
@@ -1163,11 +1404,29 @@ def _plan_rules(query: str) -> list[dict] | None:
         _cpp_tokens(query) and (re.search(r"编译|error\s*C|构建", query, re.I) or _is_cpp_edit(query))
     )
     editor_hit = _wants_scene_move(query)
+    create_level_hit = _wants_create_level(query)
+    launch_only = (
+        _wants_launch_editor(query)
+        and not compile_hit
+        and not project_compile
+        and not cpp_hit
+        and not named_bp
+        and not editor_hit
+        and not create_level_hit
+    )
+    if launch_only:
+        # 只要求启动编辑器：给一扇真正启动编辑器的步骤，不再交给规划者编 compile_project
+        return [_launch_editor_task(query)]
     if not cpp_hit and not project_compile and not named_bp and not editor_hit:
         manual = _try_manual_graph(query)
         if manual is not None:
             return [manual]
     steps = []
+    if create_level_hit:
+        # 建关卡前编辑器要先起来，顺序固定：先启动，再建关卡。
+        if _wants_launch_editor(query):
+            steps.append(_launch_editor_task(query))
+        steps.append(_create_level_task(query))
     if project_compile:
         steps.append(_project_compile_task(query))
     if cpp_hit:
@@ -1252,16 +1511,17 @@ def _plan_rules(query: str) -> list[dict] | None:
         and "测试" in query
         and re.search(r"WASD|前后左右|无法移动", query, re.I)
     ):
-        steps.append({
-            "ok": True,
-            "title": "测试 WASD 移动",
-            "action": "probe_move",
-            "automation_filter": "AIAgent.Pawn.Wasd",
-            "verify": [{"kind": "automation", "filter": "AIAgent.Pawn.Wasd"}],
-            "save": False,
-            "pie": False,
-            "max_retries": 1,
-        })
+        wasd_filter = unique_automation_filter("wasd")
+        if wasd_filter:
+            steps.append({
+                "ok": True,
+                "title": "测试 WASD 移动",
+                "action": "probe_move",
+                "automation_filter": wasd_filter,
+                "verify": [{"kind": "automation", "filter": wasd_filter}],
+                **task_policy(save=False),
+                "max_retries": 1,
+            })
     if (
         any((step.get("verify") or [{}])[0].get("kind") == "cpp_build" and step.get("ok") is not False for step in steps)
         and re.search(r"镜头|视角|鼠标", query)
@@ -1273,16 +1533,17 @@ def _plan_rules(query: str) -> list[dict] | None:
                 step["launch_editor"] = True
                 step["launch_without_source"] = True
                 step["wait_mcp"] = True
-        steps.append({
-            "ok": True,
-            "title": "测试鼠标旋转镜头",
-            "action": "probe_look",
-            "automation_filter": "AIAgent.Pawn.Look",
-            "verify": [{"kind": "automation", "filter": "AIAgent.Pawn.Look"}],
-            "save": False,
-            "pie": bool(re.search(r"PIE", query, re.I)),
-            "max_retries": 1,
-        })
+        look_filter = unique_automation_filter("look")
+        if look_filter:
+            steps.append({
+                "ok": True,
+                "title": "测试鼠标旋转镜头",
+                "action": "probe_look",
+                "automation_filter": look_filter,
+                "verify": [{"kind": "automation", "filter": look_filter}],
+                **task_policy(save=False),
+                "max_retries": 1,
+            })
     if steps:
         return _without_automation_pause(steps, query)
     if compile_hit and "蓝图" in query:

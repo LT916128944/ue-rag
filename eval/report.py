@@ -4,6 +4,7 @@
 import argparse
 import html
 import json
+import os
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -319,8 +320,97 @@ def _cell_html(value) -> str:
     return f"<td>{html.escape(text)}</td>"
 
 
-def render_html(stats: dict, *, trace_dir: str = "") -> str:
-    """一页静态 HTML。缓存命中率只在响应带回字段时填数字。"""
+def collect_attributions(trace_dir: Path | None = None, handoff_dir: Path | None = None) -> list[dict]:
+    """trace 或交接目录里真有归因条目才返回。没有就空列表。"""
+    from agent.harness import clip
+
+    found: list[dict] = []
+
+    def take(key: str, items) -> None:
+        if not isinstance(items, list):
+            return
+        for item in items:
+            if not isinstance(item, dict) or not str(item.get("id") or "").strip():
+                continue
+            found.append({
+                "id": str(item.get("id")),
+                "key": str(item.get("key") or key or ""),
+                "label": str(item.get("label") or ""),
+                "note": clip(item.get("note") or "", 240),
+            })
+
+    def read_obj(data: dict) -> None:
+        if not isinstance(data, dict):
+            return
+        nested = data.get("attribution")
+        if isinstance(nested, dict):
+            take(str(nested.get("key") or data.get("key") or ""), nested.get("items"))
+            return
+        if isinstance(nested, list):
+            take(str(data.get("key") or ""), nested)
+            return
+        if str(data.get("type") or "") == "attribution" and isinstance(data.get("items"), list):
+            take(str(data.get("key") or ""), data.get("items"))
+
+    def scan_jsonl(path: Path) -> None:
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            return
+        for line in lines:
+            if "attribution" not in line and '"items"' not in line:
+                continue
+            try:
+                read_obj(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+
+    if trace_dir is not None:
+        if trace_dir.is_file() and trace_dir.suffix == ".jsonl":
+            scan_jsonl(trace_dir)
+        elif trace_dir.is_dir():
+            for path in sorted(trace_dir.glob("*.jsonl")):
+                scan_jsonl(path)
+    if handoff_dir is not None and handoff_dir.is_dir():
+        for path in sorted(handoff_dir.rglob("*.attribution.json")):
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            if isinstance(data, dict):
+                take(str(data.get("key") or ""), data.get("items"))
+    return found
+
+
+def _attribution_section(attributions) -> str:
+    from agent.harness import clip
+
+    rows = []
+    for item in attributions or []:
+        if not isinstance(item, dict) or not str(item.get("id") or "").strip():
+            continue
+        note = clip(item.get("note") or "", 240)
+        rows.append(
+            "<tr>"
+            f"<td><code>{html.escape(str(item.get('id') or ''))}</code></td>"
+            f"<td><code>{html.escape(str(item.get('key') or ''))}</code></td>"
+            f"<td>{html.escape(str(item.get('label') or ''))}</td>"
+            f"<td>{html.escape(note)}</td>"
+            "</tr>"
+        )
+    if not rows:
+        return ""
+    body = "\n".join(rows)
+    return f"""<h2>归因</h2>
+<table>
+<tr><th>id</th><th>簇</th><th>label</th><th>note</th></tr>
+{body}
+</table>
+"""
+
+
+def render_html(stats: dict, *, trace_dir: str = "", attributions=None) -> str:
+    """一页静态 HTML。缓存命中率只在响应带回字段时填数字。没有归因条目就不写那一节。"""
     routes = stats.get("routes") or {}
     runs = int(routes.get("runs") or 0)
     l0 = int(routes.get("l0") or 0)
@@ -332,6 +422,7 @@ def render_html(stats: dict, *, trace_dir: str = "") -> str:
         for code, label in FAILURE_CLASSES
     )
     cache_rate = "" if cache.get("rate") is None else _fmt(cache.get("rate"), 4)
+    attr_section = _attribution_section(attributions)
     return f"""<!DOCTYPE html>
 <html lang="zh">
 <head>
@@ -364,7 +455,7 @@ h2 {{ font-size: 1.05rem; margin-top: 1.6rem; }}
 <tr><th>枚举</th><th>类</th><th>次数</th></tr>
 {class_rows}
 </table>
-<h2>路由</h2>
+{attr_section}<h2>路由</h2>
 <p>只数 <code>data/events</code> 里的 <code>run_start</code>。L0 是手写规则和已学句式，不叫模型。</p>
 <table>
 <tr><th>L0 直接归地</th>{_cell_html(routes.get("l0"))}</tr>
@@ -391,11 +482,23 @@ h2 {{ font-size: 1.05rem; margin-top: 1.6rem; }}
 """
 
 
-def write_observability_html(stats: dict, trace_dir: Path, reports_dir: Path) -> Path:
+def write_observability_html(stats: dict, trace_dir: Path, reports_dir: Path, attributions=None) -> Path:
     reports_dir.mkdir(parents=True, exist_ok=True)
+    if attributions is None:
+        handoff = None
+        try:
+            from agent.harness import handoff_root
+
+            handoff = handoff_root()
+        except Exception:
+            handoff = None
+        attributions = collect_attributions(trace_dir=trace_dir, handoff_dir=handoff)
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     path = reports_dir / f"{stamp}-observability.html"
-    path.write_text(render_html(stats, trace_dir=f"：{trace_dir}"), encoding="utf-8")
+    path.write_text(
+        render_html(stats, trace_dir=f"：{trace_dir}", attributions=attributions),
+        encoding="utf-8",
+    )
     return path
 
 
@@ -469,6 +572,61 @@ def write_scoreboard(rows: list[dict], source) -> Path:
     return target
 
 
+def dsh_usage_lines(rows: list[dict]) -> list[str]:
+    """costs 行里 caller=dsh 的那部分按天汇总：calls / prompt / completion / cache_hit。
+
+    没有 dsh 行返回空列表，调用方整节省略；某天没有读数的那列留空，不填 0。
+    """
+    days: dict[str, dict] = {}
+    for row in rows:
+        if not isinstance(row, dict) or str(row.get("caller") or "") != "dsh":
+            continue
+        day = str(row.get("ts") or "")[:10]
+        if not day:
+            continue
+        item = days.setdefault(
+            day, {"calls": 0, "prompt": None, "completion": None, "cache_hit": None},
+        )
+        item["calls"] += 1
+        item["prompt"] = _sum_usage(item["prompt"], row.get("prompt_tokens"))
+        item["completion"] = _sum_usage(item["completion"], row.get("completion_tokens"))
+        item["cache_hit"] = _sum_usage(item["cache_hit"], row.get("prompt_cache_hit_tokens"))
+    if not days:
+        return []
+    lines = ["DSH 用量", "day\tcalls\tprompt\tcompletion\tcache_hit"]
+    for day in sorted(days):
+        item = days[day]
+        lines.append(
+            f"{day}\t{item['calls']}\t{_cell(item['prompt'])}\t"
+            f"{_cell(item['completion'])}\t{_cell(item['cache_hit'])}"
+        )
+    return lines
+
+
+def _costs_path() -> Path:
+    """成本文件。UE_COSTS_PATH 只给离线检查指路，默认仍是 data/costs.jsonl。"""
+    raw = os.getenv("UE_COSTS_PATH")
+    if raw and raw.strip():
+        return Path(raw.strip())
+    from config import DATA_DIR
+
+    return DATA_DIR / "costs.jsonl"
+
+
+def print_dsh_usage() -> bool:
+    """有 caller=dsh 的成本行就打印「DSH 用量」一节；没有就什么都不打，返回 False。"""
+    path = _costs_path()
+    try:
+        rows = _load(path)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return False
+    lines = dsh_usage_lines(rows)
+    if not lines:
+        return False
+    print("\n".join(lines))
+    return True
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("trace")
@@ -491,6 +649,7 @@ def main() -> int:
             tasks.extend(_tasks_of(_load(item)))
         stats = summarize_traces(combined, tasks, route_counts(root / "data" / "events"))
         _print_directory_stats(stats)
+        print_dsh_usage()
         html_path = write_observability_html(stats, path, Path(__file__).resolve().parent / "reports")
         print(f"html={html_path}")
         print(f"scoreboard={write_scoreboard(combined, path)}")
@@ -500,6 +659,7 @@ def main() -> int:
         _print_tasks(_tasks_of(raw))
         _print_classes(raw)
         print(f"scoreboard={write_scoreboard(raw, path)}")
+    print_dsh_usage()
     return 0
 
 

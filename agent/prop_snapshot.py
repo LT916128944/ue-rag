@@ -1,5 +1,5 @@
 # agent/prop_snapshot.py
-"""写 Actor 属性前记下字段，失败且没有 keep_source 时写回。不保存关卡，不 PIE。"""
+"""写 Actor 属性前记下字段，失败且没有 keep_source 时写回。写回后按任务策略保存关卡。"""
 import json
 import os
 from pathlib import Path
@@ -73,7 +73,7 @@ def _write_back(ref: str, item: dict) -> None:
 
 
 def restore_props(run_id: str, *, writer=None) -> list[str]:
-    """同一 ref 出现多次就不写回。不调用保存。"""
+    """同一 ref 出现多次就不写回。写回后按任务策略保存关卡（缺省保存）。"""
     rows = _load(run_id)
     seen: dict[str, dict] = {}
     ambiguous: set[str] = set()
@@ -94,4 +94,8 @@ def restore_props(run_id: str, *, writer=None) -> list[str]:
         else:
             _write_back(ref, item)
         restored.append(ref)
+    if restored and writer is None:
+        from agent.sequence import _save_level
+
+        _save_level({})
     return restored

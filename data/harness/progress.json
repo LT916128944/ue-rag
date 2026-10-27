@@ -1,12 +1,14 @@
 {
   "goal": "自然语言落到可验证的 UE 修改；完成与否由合同和 feature_list 决定，不由模型宣布",
   "goal_anchor": "目标字段在压缩时保留",
-  "updated": "2026-10-20",
+  "updated": "2026-10-21",
   "phase": "automation",
-  "next_action": "平台跳跃四阶段已过（material-domain/umg-domain/platform-automation/level-assembly 均 done，见 feature_list 各 evidence）；HUD 人工条款待侑按 Plan/20261020-平台跳跃HUD-UMG人工步骤.md 做 WBP_HUD，做完后平台需求整句即可全绿；下一条 pending 是 patrol-presentation（行为树/动画/受击人工绑定）",
-  "last_upgrade": "平台跳跃四阶段（Plan/20261020-1553-平台跳跃关卡需求差距与下一目标.md）",
+  "next_action": "下一次只从 feature_list.json 的第一条 pending 做起：patrol-presentation（行为树、动画、受击三个 BlueprintImplementableEvent 仍由人绑，见 Plan/20261017-1507-巡逻敌人蓝图人工步骤.md）。下一条 pending 是 editor-transaction，再下一条是 level-assembly-persist（整句真跑一次，用补出来的 editor_assert 条款证明 5 扇 place_batch 真的落地）。平台跳跃这条已闭环：金币/平台/门/进度中枢在 L_NewTest，HUD 由 C++ UPlatformHUDWidget 驱动",
+  "last_upgrade": "HUD 闭环 + 起点归位 + 资产索引重建 + 开关漂移钉住，见 .cursor/memory/plans/2026-10-21.md",
   "risks": [
-    "project_context.json 的开关可能与 config.py 不一致，升级 2 用测试钉住",
-    "资产索引（ue_assets/ue_cpp jsonl）落后于编辑器内存：BP_Coin/M_Coin/MI_Coin/BP_Progress/BP_Door/BP_Platform 已存盘但索引未刷新，名字归地会失败；跑一次 shortcuts\\asset.bat（关编辑器）后恢复。见 Plan/20261020-1553 验收注"
+    "project_context.json 的开关可能与 config.py 不一致；eval/check_risk.py 现在比五个开关，漂了就报错并指向 pipelines/export_project_context.py",
+    "资产索引（ue_assets jsonl）与编辑器内存会漂：本轮已用 shortcuts\\ingest.bat asset 重建（含 BP_Coin/BP_Door/BP_Platform/BP_Progress/WBP_HUD/M_Coin/MI_Coin 与关卡 Actor）。改关卡后要再跑一次，否则 agent/supervise 的名字归地会漏；sequence._blueprint_ref 另有 Content 磁盘兜底",
+    "20261021-221446 的教训：理解器的 unresolved 是需求黑洞——不进窗口、不进合同，只在交接文本里留一句。任何「句子里点名要进场景」的东西都必须由代码转成 place_batch + editor_assert，不能靠模型自觉；level-assembly-persist 这条 pending 未闭环前，别把整句报成成功",
+    "金币拾取只走距离判定（ACoin::Tick + PickupRadius）。不要改回 OnComponentBeginOverlap：球半径 100 + 胶囊半径 34 的有效距离会把相邻金币一起收掉；也不要让 Pawn 胶囊用 Block 响应，Block 会盖掉金币侧的 Overlap"
   ]
 }

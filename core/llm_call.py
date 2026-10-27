@@ -89,6 +89,18 @@ def append_cost(record: dict) -> None:
         handle.write(json.dumps(line, ensure_ascii=False) + "\n")
 
 
+def reasoning_content(message) -> str:
+    """思考模式的 reasoning_content。下一轮必须原样带回，否则接口 400。"""
+    value = getattr(message, "reasoning_content", None)
+    if not isinstance(value, str) or not value:
+        extra = getattr(message, "model_extra", None)
+        if isinstance(extra, dict):
+            value = extra.get("reasoning_content")
+    if not isinstance(value, str) or not value:
+        return ""
+    return value
+
+
 def complete_logged(messages, *, tools=None, tool_choice=None, temperature=None, caller: str = "llm") -> tuple[object | None, dict]:
     """调用并落一行。失败不抛，错误写在 record['error']。"""
     from openai import OpenAI

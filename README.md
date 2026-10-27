@@ -89,6 +89,8 @@ python scripts/scan_mcp_tools.py --schema "<full_name>"
 python scripts/call_mcp_tool.py --toolset "<toolset>" --tool "<name>" --args "{}"
 ```
 
+DSH 外壳：见 `dsh/README.md`（`shortcuts/dsh.bat` 预检，工具只经 9 个 `mcp__uerag__*`）。
+
 核对评测清单（不打开编辑器、不调模型）：
 
 ```powershell
@@ -105,6 +107,7 @@ python eval/run_bench.py
 | `core/` | 检索、MCP 客户端、裁判 |
 | `pipelines/` | 导出元数据并写入向量库 |
 | `scripts/` | 扫描和调用单个 MCP 工具 |
+| `tools/llm-gateway/` | 本地模型名映射网关（Node，零依赖），见该目录 `README.md` |
 | `server/` | 项目语料 MCP |
 | `eval/` | 任务和可恢复评测 |
 | `docs/` | 选型记录 |

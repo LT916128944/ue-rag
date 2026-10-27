@@ -292,6 +292,15 @@ def check_menu2() -> None:
         assert calls["n"] >= 1
         assert layered[0]["title"] == "改 C++ 并编译"
         assert any(step.get("blocked") or step.get("ok") is False for step in layered)
+        # WF-3：弱命中的规则回退不许半拆当成功——末尾必须补一扇未完成窗，写清为什么不算收口。
+        tail = layered[-1]
+        assert tail.get("ok") is False and tail.get("blocked") is True, tail
+        assert "手写规则只拆出" in str(tail.get("error") or ""), tail
+        assert "没有一次带 spec 的验证" in str(tail.get("error") or ""), tail
+        assert "不要报成功" in str(tail.get("error") or ""), tail
+        # 强命中的规则步骤原样返回，不许被加尾巴（也不能叫模型）。
+        assert all(not step.get("blocked") and step.get("ok") is not False for step in strong), strong
+        assert all("手写规则只拆出" not in str(step.get("error") or "") for step in strong), strong
 
         def understood(messages):
             calls["understood"] = messages
@@ -340,20 +349,141 @@ def check_brief_unfinished() -> None:
                 "total_estimate": {"min_hours": 1, "max_hours": 2},
                 "unresolved": ["动画由人绑"],
             })
+            md_enemy = render_brief_md({
+                "query": "敌人巡逻接线",
+                "scopes": [{
+                    "id": "A", "title": "敌人", "deliverables": ["接线"],
+                    "estimate_hours": [1, 2],
+                }],
+                "integration": {},
+                "external_dependencies": [],
+                "total_estimate": {"min_hours": 1, "max_hours": 2},
+            })
         finally:
             ledger_mod.LEDGER_PATH = saved
             if saved_routes is None:
                 os.environ.pop("UE_LEARNED_ROUTES", None)
             else:
                 os.environ["UE_LEARNED_ROUTES"] = saved_routes
-        assert "尚未完成清单" in md and "A 完成" in md and "B 未完成" in md
+        assert "尚未完成清单" in md and "动画由人绑" in md
+        assert "B 未完成" not in md and "敌人" not in md
+        assert "B 未完成" in md_enemy
+
+
+def check_brief_carryover() -> None:
+    """平台跳跃的原句不提敌人时，台账里的巡逻/追击不能进本次范围。"""
+    from agent import ledger as ledger_mod
+    from agent.brief import generate_brief
+
+    query = "在 UE 5.8 里做一个能玩的平台跳跃关卡：玩家操纵一个球体（可以跳跃），去碰旋转发光的金币"
+    enemy_scope = {
+        "id": "A",
+        "title": "敌人 AI 逻辑接线（沿用上一轮剩余任务）",
+        "deliverables": [
+            "ATestEnemy 与 UTestEnemyPatrolComponent 的巡逻逻辑接线",
+            "发现玩家后的追击逻辑接线",
+            "近距离攻击玩家的逻辑接线",
+        ],
+        "pending_note": "代码已有，缺接线",
+        "estimate_hours": [4, 12],
+        "depends_on": [],
+        "windows": [],
+    }
+    sphere_scope = {
+        "id": "B",
+        "title": "球体玩家与跳跃",
+        "deliverables": ["球体可以跳跃"],
+        "estimate_hours": [4, 12],
+        "depends_on": [],
+        "windows": [],
+    }
+    coin_scope = {
+        "id": "C",
+        "title": "金币：旋转发光、拾取后隐藏",
+        "deliverables": ["碰到后金币隐藏"],
+        "pending_note": "计数来源依赖 B 范围",
+        "estimate_hours": [4, 10],
+        "depends_on": ["B"],
+        "windows": [],
+    }
+    from agent import brief as brief_mod
+
+    with tempfile.TemporaryDirectory() as tmp_name:
+        path = Path(tmp_name) / "ledger.json"
+        path.write_text(json.dumps({"scopes": [
+            {
+                "id": "A",
+                "title": "编译工程并启动编辑器",
+                "status": "done",
+                "pending": [],
+                "note": "需重新确认编译通过后再启动编辑器",
+            },
+            {
+                "id": "B",
+                "title": "BP_TestEnemy 巡逻/追击/近战攻击逻辑",
+                "status": "pending",
+                "pending": [
+                    "ATestEnemy 与 UTestEnemyPatrolComponent 的巡逻逻辑接线",
+                    "发现玩家后追击逻辑接线",
+                    "近距离攻击玩家逻辑接线",
+                ],
+                "note": "代码已有，缺接线和验证",
+            },
+        ]}, ensure_ascii=False), encoding="utf-8")
+        saved = ledger_mod.LEDGER_PATH
+        saved_titles = brief_mod._retrieval_titles
+        ledger_mod.LEDGER_PATH = path
+        brief_mod._retrieval_titles = lambda query, k=3: []
+        try:
+            summary = ledger_mod.ledger_summary_text(query=query)
+            assert "TestEnemy" not in summary, summary
+            assert "不要写进本次范围" in summary
+            assert "TestEnemy" in ledger_mod.ledger_summary_text(query="把 BP_TestEnemy 的巡逻接上")
+
+            def complete(messages):
+                assert "原句没提到" in messages[0]["content"]
+                user = messages[1]["content"]
+                assert "TestEnemy" not in user, user
+                assert "不要写进本次范围" in user
+                return json.dumps({
+                    "query": query,
+                    "scopes": [enemy_scope, sphere_scope, coin_scope],
+                    "integration": {
+                        "title": "累计集成、验证与交付",
+                        "deliverables": [
+                            "核对 C 的金币",
+                            "汇总 A 这条遗留任务的最终状态",
+                        ],
+                        "estimate_hours": [2, 8],
+                    },
+                    "external_dependencies": [
+                        {"name": "UE_ALLOW_UMG", "provides": "允许改控件", "status": "否则 C 范围不执行"},
+                    ],
+                }, ensure_ascii=False)
+
+            brief = generate_brief(query, windows=[], complete=complete)
+        finally:
+            ledger_mod.LEDGER_PATH = saved
+            brief_mod._retrieval_titles = saved_titles
+    assert brief is not None
+    assert [scope["id"] for scope in brief["scopes"]] == ["A", "B"], brief["scopes"]
+    assert "球体" in brief["scopes"][0]["title"]
+    assert "金币" in brief["scopes"][1]["title"]
+    assert brief["scopes"][1]["depends_on"] == ["A"]
+    assert brief["scopes"][1]["pending_note"] == "计数来源依赖 A 范围"
+    joined = "；".join(brief["integration"]["deliverables"])
+    assert joined == "核对 B 的金币", joined
+    assert brief["external_dependencies"][0]["status"] == "否则 B 范围不执行"
+    assert brief["total_estimate"] == {"min_hours": 10.0, "max_hours": 30.0}
+    assert any("BP_TestEnemy" in item for item in brief["dropped"])
+    assert not any("编译工程" in item for item in brief["dropped"])
 
 
 def check_patrol() -> None:
     from agent.patrol_manual import patrol_manual_text, write_patrol_plan
 
     text = patrol_manual_text()
-    for token in ("OnPatrol", "OnChase", "OnMeleeAttack", "人绑", "不改图", "不 PIE"):
+    for token in ("OnPatrol", "OnChase", "OnMeleeAttack", "人绑", "不改图", "保存与 PIE"):
         assert token in text, token
     with tempfile.TemporaryDirectory() as tmp_name:
         path = write_patrol_plan(Path(tmp_name))
@@ -385,6 +515,7 @@ def main() -> int:
     check_catalog()
     check_menu2()
     check_brief_unfinished()
+    check_brief_carryover()
     check_patrol()
     check_board_and_ab()
     print("distill ok")

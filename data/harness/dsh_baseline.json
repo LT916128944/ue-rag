@@ -1,0 +1,33 @@
+{
+  "generated_at": "2026-10-23T21:30:08",
+  "callers": {
+    "understand": {
+      "n": 48,
+      "p50": 995,
+      "max": 1581
+    },
+    "planner": {
+      "n": 18,
+      "p50": 1022,
+      "max": 1767
+    },
+    "plan": {
+      "n": 133,
+      "p50": 8008,
+      "max": 12435
+    },
+    "supervise": {
+      "n": 2,
+      "p50": 106,
+      "max": 106
+    }
+  },
+  "scoreboard": {
+    "tasks": 26,
+    "ok": 24,
+    "first_pass": 21,
+    "prompt_tokens_per_ok": 126071.29166666667,
+    "tool_refused": 0,
+    "source": "data\\traces"
+  }
+}

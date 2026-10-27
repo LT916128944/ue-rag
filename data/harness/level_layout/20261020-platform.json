@@ -1,7 +1,8 @@
 {
   "blueprint": "BP_Platform",
-  "note": "平台跳跃关卡 · 后段移动平台一枚（路径第 5 跳处）",
+  "note": "平台跳跃关卡 · 后段两块往返移动平台（bStartActive 缺省 true，MoveDelta 300uu 往返），托着 Coin_5、Coin_6 增加难度",
   "actors": [
-    {"name": "Platform_1", "x": 700, "y": -30, "z": 360}
+    {"name": "Platform_1", "x": 700, "y": -30, "z": 360},
+    {"name": "Platform_2", "x": 900, "y": -30, "z": 420}
   ]
 }

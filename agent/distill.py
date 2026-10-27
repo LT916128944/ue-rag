@@ -251,16 +251,22 @@ def distill_records(events: list[dict], runs: list[dict] | None = None) -> dict:
                 for item in matrix[:8]:
                     if not isinstance(item, dict):
                         continue
+                    # ok=None 是「不适用」，既不算通过也不算失败，蒸馏时原样保留
+                    raw = item.get("ok")
                     brief.append({
                         "item": str(item.get("item") or "")[:80],
-                        "ok": bool(item.get("ok")),
+                        "ok": None if raw is None else bool(raw),
                     })
             keep(skills, {
                 "run_id": run_id,
                 "hash_count": len(hashes) if isinstance(hashes, list) else 0,
                 "matrix": brief,
                 "status": "shadow",
-                "outcome": "success" if brief and all(item.get("ok") for item in brief) else "fail",
+                "outcome": (
+                    "success"
+                    if brief and all(item.get("ok") is True for item in brief if item.get("ok") is not None)
+                    else "fail"
+                ),
             }, "archive:" + run_id)
 
     return {

@@ -106,6 +106,26 @@ def execute_ue_tool(tool_name: str, arguments: str, task: dict | None = None) ->
             return json.dumps(result, ensure_ascii=False)
         return json.dumps({"ok": False, "error": f"Unknown local tool: {short_name}"}, ensure_ascii=False)
 
+    from backends.select import current_backend
+
+    if current_backend() == "monolith":
+        namespace = ""
+        action = ""
+        if "__" in tool_name:
+            namespace, action = tool_name.split("__", 1)
+        elif toolset_name and "." not in toolset_name:
+            namespace, action = toolset_name, short_name
+        elif "." not in tool_name:
+            namespace = str(args.pop("namespace", "") or "mesh")
+            action = tool_name
+        if namespace and action:
+            from backends.monolith import exec as monolith_exec
+
+            result = monolith_exec(namespace, action, args, task=task)
+            preview = json.dumps(result, ensure_ascii=False)[:300]
+            print(f"\n  >> [Monolith] {namespace}.{action} → {preview}")
+            return json.dumps(result, ensure_ascii=False)
+
     from core.editor_exec import exec_tool
     result = exec_tool(toolset_name, short_name, args, task=task)
     preview = json.dumps(result, ensure_ascii=False)[:300]
@@ -198,14 +218,42 @@ def _pin_tools(tools: list[dict], names: list[str]) -> list[dict]:
     return tools
 
 
+def _monolith_pinned(names: list[str]) -> list[dict]:
+    """backend=monolith 时只给任务允许的 namespace.action，不把官方工具塞进列表。"""
+    tools = []
+    for name in names:
+        text = str(name or "").strip()
+        if not text or "." in text:
+            continue
+        tools.append({
+            "type": "function",
+            "function": {
+                "name": text,
+                "description": "Monolith action. 不要调用官方 MCP。",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "actor_name": {"type": "string"},
+                        "location": {"type": "array", "items": {"type": "number"}},
+                        "asset_path": {"type": "string"},
+                    },
+                },
+            },
+        })
+    return tools
+
+
 def retrieve_node(state: AgentState):
     print("--- [Node] retrieve ---")
     from agent.roles import CPP_TOOLS, EDITOR_READS, plan_role
+    from backends.select import current_backend
 
     task = state.get("task") or {}
     role = plan_role(task)
     if role == "cpp":
         tools = get_local_tools(CPP_TOOLS)
+    elif role == "editor" and current_backend() == "monolith":
+        tools = _monolith_pinned(list(task.get("allow_writes") or []))
     elif role == "editor":
         tools = _pin_tools([], list(task.get("allow_writes") or []) + sorted(EDITOR_READS))
     elif role == "mixed":
@@ -222,13 +270,17 @@ def retrieve_node(state: AgentState):
 
 
 def _role_constraints(state: AgentState, role: str) -> str:
+    from config import project_module, source_rel_prefix
+
     task = state.get("task") or {}
     allow = ", ".join(task.get("allow_writes") or []) or "（无）"
+    module = project_module()
+    source_root = source_rel_prefix().rstrip("/") or f"Source/{module}"
     if role == "cpp":
-        return """
+        return f"""
 【角色】C++。只能使用 read_source 和 apply_unified_diff。不要调用编辑器工具，不要调用 finish。
 空工具调用会进入裁判。裁判失败后，下一条消息里会有 errors。
-path 相对 Source/AIAgentProject，例如 Private/TestActor.cpp。
+path 相对 {source_root}，例如 Private/类名.cpp。
 diff 的旧行必须来自最近一次 read_source 返回的 text，不要带行号。写码成功后文件已变，旧行要用新读取重做。每段 diff 成功后行号会偏移：下一段 diff 前必须重新 read_source，@@ 旧行号用这次返回的 numbered。
 """
     if role == "editor":
@@ -237,7 +289,7 @@ diff 的旧行必须来自最近一次 read_source 返回的 text，不要带行
 允许的写工具：{allow}。没列出的写操作会被拒绝。
 没有需要调用的写工具时，不要调用工具。空工具调用会进入裁判。
 修改 Actor 前必须先 find_actors。name、tag、collision_channels 都要传，空的也要显式给。
-引擎类用 /Script/Engine.XXX，工程类用 /Script/AIAgentProject.XXX。不确定就不要臆造路径。
+引擎类用 /Script/Engine.XXX，工程类用 /Script/{module}.XXX。不确定就不要臆造路径。
 """
     if role == "mixed":
         return f"""
@@ -248,14 +300,14 @@ diff 的旧行必须来自最近一次 read_source 返回的 text，不要带行
         return f"""
 【UE 类路径规则】
 - 引擎内置类：/Script/Engine.XXX
-- 工程自定义类：/Script/AIAgentProject.XXX
+- 工程自定义类：/Script/{module}.XXX
 - 不确定类路径时，不要臆造，改用 find_actors。name、tag、collision_channels 三个参数都要传，空的也要显式给。
 
 【流程约束】
 - 工具调用是唯一能改工程的方式。空工具调用会直接进入裁判。裁判失败后你会在下一条里看到 errors。
 - 你没有 finish，不能自己宣布成功。
 - 允许的编辑器写工具：{allow}。没列出的写操作会被拒绝。
-- 改 C++ 只能 read_source 再 apply_unified_diff。path 相对 Source/AIAgentProject，例如 Private/TestActor.cpp。
+- 改 C++ 只能 read_source 再 apply_unified_diff。path 相对 {source_root}，例如 Private/类名.cpp。
 - diff 里的旧行必须来自最近一次 read_source 返回的 text，不要带行号。写码成功后文件已变，旧行要用新读取重做。每段 diff 成功后行号会偏移：下一段 diff 前必须重新 read_source，@@ 旧行号用这次返回的 numbered。
 - 所有 diff 写完就停：不要再 read_source 复查，直接回复不带任何工具调用，进入编译裁判。裁判失败会把编译错误带给你再改。
 """
@@ -268,6 +320,17 @@ diff 的旧行必须来自最近一次 read_source 返回的 text，不要带行
 
 
 _READ_DIFF_TOOLS = frozenset({"read_source", "apply_unified_diff"})
+# 控件图和 Actor 查找。连续只读时下一轮提示若看不到结果，模型会把同一对调用打到 recursion_limit。
+_EDITOR_LOOP_READS = frozenset({
+    "find_actors",
+    "get_actor_transform",
+    "GetWidgets",
+    "GetWidgetDescription",
+    "GetWidgetTreeDepth",
+    "GetNamedSlots",
+    "ListWidgetClasses",
+    "GetWidgetClassInfo",
+})
 
 
 def _pre_build_stall(state: AgentState) -> tuple[str, str]:
@@ -303,15 +366,43 @@ def _pre_build_stall(state: AgentState) -> tuple[str, str]:
     return "", ""
 
 
+def _editor_read_stall(state: AgentState) -> tuple[str, str]:
+    """控件 / Actor 只读打转（20261021-121520：GetWidgets 与 GetWidgetDescription 交替直到 recursion_limit=80）。
+
+    返回 (诊断, 动作)。动作 ""=没在打转 / "build"=已经写过、只是不肯停读 /
+    "stop"=一次都没写成功。没有写入时不能借空工具调用进编译，否则未改的控件会被判成通过。
+    """
+    outcomes = state.get("tool_outcomes") or []
+    if len(outcomes) < 8:
+        return "", ""
+    if not all(item.get("tool") in _EDITOR_LOOP_READS for item in outcomes[-8:]):
+        return "", ""
+    wrote = any(
+        item.get("ok") and item.get("tool") not in _EDITOR_LOOP_READS
+        for item in outcomes
+    )
+    if wrote:
+        return (
+            "连续 8 次只在读控件或 Actor，停止读取，直接进入编译裁判。",
+            "build",
+        )
+    return (
+        "编辑器打转：最近 8 次调用全是读控件或查找 Actor，没有一次写入。停止这一轮。",
+        "stop",
+    )
+
+
 def plan_node(state: AgentState):
     print("--- [Node] plan ---")
     from agent.roles import plan_role
 
     stall, action = _pre_build_stall(state)
+    if not action:
+        stall, action = _editor_read_stall(state)
     if action == "build":
         # 借现有路由：plan 不带工具调用 + require_build + 未编译 → build。
         # 编译过了就进 fix 的正常循环，没过就结束；不再把写完的代码判成失败还原掉。
-        print(f"  [Plan] 写码已完成，停止读取，直接进编译：{stall}")
+        print(f"  [Plan] 停止读取，直接进编译：{stall}")
         return {
             "messages": [{"role": "assistant", "content": f"停止读取：{stall}"}],
             "tool_calls": [],
@@ -345,7 +436,7 @@ def plan_node(state: AgentState):
     prompt += _role_constraints(state, role)
 
     from agent.context import slice_counts, visible_messages
-    from core.llm_call import complete, usage_for_trace
+    from core.llm_call import complete, reasoning_content, usage_for_trace
 
     messages = [{"role": "system", "content": prompt}] + visible_messages(state["messages"], task)
     counts = slice_counts(state["messages"], task)
@@ -365,13 +456,31 @@ def plan_node(state: AgentState):
                 "function": {"name": tc.function.name, "arguments": tc.function.arguments},
             })
     msg_dict = {"role": "assistant", "content": msg.content or ""}
+    reasoning = reasoning_content(msg)
+    if reasoning:
+        msg_dict["reasoning_content"] = reasoning
     if tool_calls_dict:
         msg_dict["tool_calls"] = tool_calls_dict
+    thought = {"tool": "llm", "ok": True}
+    content = str(msg.content or "").strip()
+    if content:
+        thought["summary"] = content[:240]
+    if reasoning:
+        thought["reasoning"] = reasoning[:800]
+    if tool_calls_dict:
+        thought["calls"] = [
+            str((tc.get("function") or {}).get("name") or "")
+            for tc in tool_calls_dict
+            if str((tc.get("function") or {}).get("name") or "")
+        ]
+    step_log = [{"tool": "context_slice", "ok": True, "context_slice": counts}]
+    if thought.get("summary") or thought.get("reasoning") or thought.get("calls"):
+        step_log.append(thought)
     return {
         "messages": [msg_dict],
         "tool_calls": tool_calls_dict,
         "llm_usage": usage_for_trace(record),
-        "step_log": [{"tool": "context_slice", "ok": True, "context_slice": counts}],
+        "step_log": step_log,
     }
 
 
@@ -534,7 +643,16 @@ def _criteria_update(state: AgentState, *judges) -> dict | None:
         return None
     from agent.harness import apply_judges
 
-    task["criteria"] = apply_judges(criteria, *judges)
+    # 图内裁判也带窗口 id，和窗口层同一套归属口径：条款只认列出自己的窗口。
+    wid = str(task.get("id") or "").strip()
+    stamped = []
+    for judge in judges:
+        if isinstance(judge, dict):
+            judge = dict(judge)
+            if wid:
+                judge["window"] = wid
+        stamped.append(judge)
+    task["criteria"] = apply_judges(criteria, *stamped)
     return task
 
 
@@ -580,6 +698,13 @@ def observe_node(state: AgentState):
             if (state.get("task") or {}).get("freeze_source"):
                 failed["is_completed"] = True
                 print("  [Observe] freeze_source，留下裁判原文，不进入改文件")
+            elif (
+                build_judge.get("ok") is True
+                and str(test_judge.get("kind") or "") == "automation"
+                and test_judge.get("ok") is False
+            ):
+                failed["is_completed"] = True
+                print("  [Observe] Automation 残差，本扇结束，不进入改文件")
             criteria_task = _criteria_update(state, build_judge, test_judge)
             if criteria_task is not None:
                 failed["task"] = criteria_task

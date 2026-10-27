@@ -1,5 +1,5 @@
 {
-  "updated": "2026-10-20",
+  "updated": "2026-10-21",
   "note": "passed 只由裁判或离线检查改写，不由模型宣布。done->passed:true；pending/wont->passed:false。",
   "items": [
     {
@@ -64,6 +64,13 @@
       "passed": true,
       "evidence": "Plan/20261020-平台跳跃HUD-UMG人工步骤.md",
       "notes": "agent/umg_manual.py：wants_platform 且要 HUD 语义且 UE_ALLOW_UMG=false 时自动产出 Plan/ 人工步骤（WBP_HUD、左上 Anchor、委托绑定、倒计时/通关切换）；build_criteria 增 manual 条款。HUD 本体按文档由人做（人工条款），开关复原后维持 false。见同文档阶段 B"
+    },
+    {
+      "id": "umg-hud-exec",
+      "status": "done",
+      "passed": true,
+      "evidence": "Source/AIAgentProject/Private/PlatformHUDWidget.cpp",
+      "notes": "不改 Widget 图的路线：新建 UPlatformHUDWidget（父类 /Script/AIAgentProject.PlatformHUDWidget），BindWidgetOptional 按名字绑 txt_CoinCount/txt_Timer/txt_Clear/txt_Fail，0.05 秒定时器 + 三个委托驱动 Refresh（NativeTick 要蓝图侧也实现才会被驱动，不可靠）；WBP_HUD 用 set_parent 指到这个类并编译；ATestPawn::EnsureHud 在 BeginPlay/PossessedBy/PawnClientRestart 挂进视口。check_platform_hud 从「只核控件名」升级成「控件名 + 父类」，两条件都过才算。PIE 实测：金币 0/6 → 6/6 逐步递增、倒计时 1:30 递减、收齐后门升 300uu、txt_Clear 显示「通关」。widget_graph 条款不再用于平台 HUD（没有连线）；umg-domain 的 passed 未改。"
     },
     {
       "id": "platform-automation",
@@ -190,6 +197,104 @@
       "passed": false,
       "evidence": "",
       "notes": "本轮升级不做镜像；周计划里的容器化留到离线 CI 稳定之后"
+    },
+    {
+      "id": "handoff-unmet-total",
+      "status": "done",
+      "passed": true,
+      "evidence": "eval/check_harness.py",
+      "notes": "交接 unmet 最多 8 条，并写 unmet_total / unmet_omitted。9 条时笔记有总数、没有第 9 条正文"
+    },
+    {
+      "id": "test-disposition-window",
+      "status": "done",
+      "passed": true,
+      "evidence": "eval/check_harness.py",
+      "notes": "编译已过且 Automation 失败时本扇结束，不进 fix；代码追加 dispose_residual。check_routes.py 打印 routes ok"
+    },
+    {
+      "id": "residual-cluster",
+      "status": "done",
+      "passed": true,
+      "evidence": "eval/check_harness.py",
+      "notes": "处置扇按失败测试名聚类，最多 4 扇，超出并进 overflow"
+    },
+    {
+      "id": "kill-check-side",
+      "status": "done",
+      "passed": true,
+      "evidence": "eval/check_harness.py",
+      "notes": "旁路 kill-check.json 不进默认三条。注入后 Automation 失败才算杀伤，失败数仍为 0 记 blind_spot"
+    },
+    {
+      "id": "scene-gate",
+      "status": "done",
+      "passed": true,
+      "evidence": "eval/check_scene_gate.py",
+      "notes": "20261021-221446 的教训：理解器把「金币/门/平台的摆放位置」整段扔进 unresolved，代码只把它记进交接文本，窗口清单里一扇放置都没有，关卡是空的却记 6/7 扇成功。agent/scene_gate.py 按 data/harness/level_layout 的设计图补 place_batch + editor_assert（条款显式绑到那一扇），rules / learned / understood 三条路径都过闸门，unresolved 里已接住的摆放需求会被拿掉；harness._criterion_row / _bind_windows 保留条款自带归属；sequence._blueprint_ref 索引 miss 时回落 Content 磁盘，_place_batch 支持条目 props（写完复读）。离线 check_scene_gate.py 绿；L_NewTest 已放进 6 金币 / 7 平台 / 1 门 / 1 进度中枢，重载复验坐标一致"
+    },
+    {
+      "id": "level-assembly-persist",
+      "status": "pending",
+      "passed": false,
+      "evidence": "data/runs/20261021/20261021-221446.md",
+      "notes": "level-assembly 记 passed 的证据是 20261020-164911「幂等跳过 6」，但 20261021-221446 跑的时候 L_NewTest 里一个 Coin_/Platform_/Door_/Progress_ 都没有——说明那次「已保存」没真正落盘，passed 是误判。本轮已重新放置并重载复验（15 实例坐标一致、bStartActive 读回正确），但还没有一次从自然语言整句跑到底的 run 作证据，故留 pending：下一次整句重跑后用它自己的 editor_assert 条款收口"
+    },
+    {
+      "id": "dsh-config",
+      "status": "done",
+      "passed": true,
+      "evidence": "eval/check_dsh_config.py",
+      "notes": "P1：DSH 配置模板、会话技能、根 AGENTS.md 指针、预检脚本。2026-10-23 check_dsh_config ok（4 entries / 20 skills），preflight ok。pass仅由该检查改。"
+    },
+    {
+      "id": "dsh-graph-write-policy",
+      "status": "done",
+      "passed": true,
+      "evidence": "eval/check_routes.py",
+      "notes": "P2：图写判定单源化到 core/graph_write_policy.py；Cursor/Codex hook 与 DSH 网关共用，同一对象断言已进 check_routes。2026-10-23 routes ok。"
+    },
+    {
+      "id": "dsh-bridge",
+      "status": "done",
+      "passed": true,
+      "evidence": "eval/check_dsh_bridge.py",
+      "notes": "P2：server/dsh_bridge.py 9 工具 + agent/dsh_cli.py；写策略只读 session_task.json；写锁与 spill。2026-10-23 dsh-bridge ok；stdio 实拉 9 工具。"
+    },
+    {
+      "id": "dsh-skills",
+      "status": "done",
+      "passed": true,
+      "evidence": "eval/check_dsh_config.py",
+      "notes": "P3：ue-dsh-route-skill、ue-dsh-verify-skill、ue-dsh-handoff-skill，源在 .codex/skills 并同步 .cursor/skills。frontmatter 由 check_dsh_config 检查。2026-10-23 dsh-config ok (3 entries, 23 skills)。pass仅由该检查改。"
+    },
+    {
+      "id": "dsh-contract",
+      "status": "done",
+      "passed": true,
+      "evidence": "eval/check_dsh_contract.py",
+      "notes": "P3：verify 空窗口不猜、第一个 kind 匹配的裁判即用、--all 失败不中断、dry-run 不写、拒绝带 policy；manual 与模型文本「已完成」不改 passed。2026-10-23 dsh-contract ok。pass仅由该检查改。"
+    },
+    {
+      "id": "dsh-orchestration",
+      "status": "done",
+      "passed": true,
+      "evidence": "dsh/workflows/README.md",
+      "notes": "P4：dsh/workflows/research.js 与 triage.js 两个只读并行模板（pipeline，不设阶段屏障；每个 ≤6 子代理、结果 ≤8KB、每路最多读 5 个文件），只用 search_project，不调 exec_editor_tool/verify/window_state。人工 workflow 跑通记录 2026-10-23：research.js 5 个子代理产出 data/briefs/20261023-175218-testpawn-wasd-movement.md（66 行）+ 同名 .json（goal/findings 12/files 12/unresolved 5/next 5）；triage.js 2 个子代理命中 ue_error （error C2039 PatrolSpeed，distance=0.0，confidence 0.75），debug 路证据对不上给 unknown 未编造。"
+    },
+    {
+      "id": "dsh-handoff",
+      "status": "done",
+      "passed": true,
+      "evidence": "eval/check_dsh_lock.py",
+      "notes": "P4：handoff-validate 按 harness.build_handoff 字段与截断口径校验（did/next/goal ≤240、evidence[].summary ≤240、unmet ≤8 且 unmet_total-len(unmet)==unmet_omitted、artifacts 只留 ref/in_level、出现 read_source 即失败；evidence kind 收 EVIDENCE_KINDS + nodes.py 会写的 skip 占位）；新增 handoff-merge 校验后并进 data/handoffs/<run>/<window>.json，目标已存在拒绝不覆盖、只收单窗文件。现存 110 份交接全部通过校验。写锁 check_dsh_lock.py：并发互斥一成一 busy、900s stale、伪造 pid 视为 stale、只读不占锁，dsh-lock ok。2026-10-23 dsh-bridge ok / dsh-lock ok / dsh-ab 打印表格 / upgrade ok。"
+    },
+    {
+      "id": "dsh-costs",
+      "status": "done",
+      "passed": true,
+      "evidence": "eval/check_dsh_costs.py",
+      "notes": "P5：scripts/import_dsh_costs.py 只读 data/dsh/exports/*.jsonl（不直接读 zstd 会话），把 usage 抄成 caller=dsh 的 costs 行，字段名与 core/llm_call.py 一致；无 usage 的行跳过并计数，不估算、不填 0；不抄 prompt/正文/路径/密钥；elapsed 导出里没有就不写；文件名以 fixture- 开头的默认跳过（--include-fixture 才导）。DSH 投影口径：prompt_tokens=uncachedInputTokens+cacheReadTokens，cacheReadTokens→prompt_cache_hit_tokens 与 cached_tokens，uncachedInputTokens→prompt_cache_miss_tokens；cacheWriteTokens 在 DeepSeek 账里没有对应字段，不硬套成 miss。eval/report.py 只在 data/costs.jsonl 存在 caller=dsh 行时加「DSH 用量」节（按天 calls/prompt/completion/cache_hit），无 dsh 行整节省略不填 0；render_html / summarize_traces / compute_scoreboard / write_scoreboard 的签名与行为未改（改前改后对同一 trace 与 intent 事件流输出逐字相同）。2026-10-23 dsh-costs ok（8 组断言，临时目录，真实 data/costs.jsonl 哈希前后一致）。fixture 是检查输入，`.gitignore` 为它单开例外（`!data/dsh/exports/fixture-*.jsonl`），人导出的会话日志仍在 `data/dsh/exports/*` 被忽略；check_dsh_costs.py 已进 `.github/workflows/offline.yml`。"
     }
   ]
 }

@@ -1,0 +1,11 @@
+{
+  "id": "bp-gun-compile-monolith",
+  "query": "当前后端是 Monolith。不要修改任何资产，不要调用编辑器工具。直接结束工具调用，让裁判编译蓝图 /Game/BP_Gun。不要保存，不要启动 PIE。",
+  "verify": [
+    {"kind": "blueprint_compile", "refPath": "/Game/BP_Gun"}
+  ],
+  "allow_writes": [],
+  "save": false,
+  "pie": false,
+  "max_retries": 3
+}

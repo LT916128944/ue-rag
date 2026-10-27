@@ -1,6 +1,6 @@
 {
-  "query": "编译工程后启动UE编辑器，然后测试ATestActor能否被ATestPawn拾取",
+  "query": "编译工程后启动UE编辑器，然后测试ATestCharacter能否被ATestPawn拾取",
   "unknown_query": "测试ANoSuchActor能否被AAlsoMissing拾取",
   "pawn_ref": "/Game/BP_TestPawn.BP_TestPawn",
-  "note": "离线拆句期望。不放进 run_eval.py。Actor 蓝图不在索引里，这一格暂停，不创建蓝图。"
+  "note": "离线拆句期望。目标用一个有 C++ 类但没有蓝图的 ATestCharacter：绑定物体要暂停、只给一次 r、不创建蓝图。2026-10-21 资产索引重建后 BP_TestActor 已进索引，原句用它就不再触发暂停，故换掉；断言意图不变。不放进 run_eval.py。"
 }

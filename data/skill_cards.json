@@ -2,7 +2,7 @@
   {
     "name": "ue-actor-skill",
     "description": "场景 Actor：移动/Transform/组件/Tag/Label、按名查找。挂接见 attach.md。",
-    "path": "E:\\UEProject\\AIWork\\AIAgentProject\\.cursor\\skills\\ue-actor-skill\\SKILL.md",
+    "path": "E:\\UEProject\\AIWork\\AIAgentProject\\.codex\\skills\\ue-actor-skill\\SKILL.md",
     "triggers": [
       "actor",
       "关卡",
@@ -19,7 +19,7 @@
   {
     "name": "ue-animation-skill",
     "description": "Animation / Control Rig / Skeletal Mesh：骨骼、Socket、Rig Pin。",
-    "path": "E:\\UEProject\\AIWork\\AIAgentProject\\.cursor\\skills\\ue-animation-skill\\SKILL.md",
+    "path": "E:\\UEProject\\AIWork\\AIAgentProject\\.codex\\skills\\ue-animation-skill\\SKILL.md",
     "triggers": [
       "动画",
       "骨骼",
@@ -40,7 +40,7 @@
   {
     "name": "ue-asset-skill",
     "description": "Asset：查找、加载、保存、exists、Content 路径。",
-    "path": "E:\\UEProject\\AIWork\\AIAgentProject\\.cursor\\skills\\ue-asset-skill\\SKILL.md",
+    "path": "E:\\UEProject\\AIWork\\AIAgentProject\\.codex\\skills\\ue-asset-skill\\SKILL.md",
     "triggers": [
       "资产",
       "资源"
@@ -54,7 +54,7 @@
   {
     "name": "ue-blueprint-skill",
     "description": "Blueprint Graph：节点、连线、变量、事件、Graph DSL、编译。",
-    "path": "E:\\UEProject\\AIWork\\AIAgentProject\\.cursor\\skills\\ue-blueprint-skill\\SKILL.md",
+    "path": "E:\\UEProject\\AIWork\\AIAgentProject\\.codex\\skills\\ue-blueprint-skill\\SKILL.md",
     "triggers": [
       "蓝图",
       "blueprint"
@@ -76,7 +76,7 @@
   {
     "name": "ue-cpp-plan-skill",
     "description": "UE 项目实施计划与完成后落盘。C++ 与蓝图都算。 Use when adding or changing Pawn, Actor, Subsystem, Component, Module, Blueprint graph, Widget, or when the user says 实施计划, 新建类, 蓝图, 新功能, 重构.",
-    "path": "E:\\UEProject\\AIWork\\AIAgentProject\\.cursor\\skills\\ue-cpp-plan-skill\\SKILL.md",
+    "path": "E:\\UEProject\\AIWork\\AIAgentProject\\.codex\\skills\\ue-cpp-plan-skill\\SKILL.md",
     "triggers": [
       "c++",
       "编译错误",
@@ -92,7 +92,7 @@
   {
     "name": "ue-debug-skill",
     "description": "排障：报错、日志、事件不触发、功能不生效、查不到对象。只读定位，不实现新功能。",
-    "path": "E:\\UEProject\\AIWork\\AIAgentProject\\.cursor\\skills\\ue-debug-skill\\SKILL.md",
+    "path": "E:\\UEProject\\AIWork\\AIAgentProject\\.codex\\skills\\ue-debug-skill\\SKILL.md",
     "triggers": [
       "报错",
       "失败",
@@ -106,9 +106,68 @@
     "conflicts": []
   },
   {
+    "name": "ue-dsh-handoff-skill",
+    "description": "多步骤或多扇任务收尾时写一份交接 JSON，并用 dsh_cli handoff-validate / handoff-merge 校验与交付。不写工具正文。",
+    "path": "E:\\UEProject\\AIWork\\AIAgentProject\\.codex\\skills\\ue-dsh-handoff-skill\\SKILL.md",
+    "triggers": [
+      "dsh",
+      "交接",
+      "handoff",
+      "unmet"
+    ],
+    "tools": [],
+    "version": "1.0",
+    "conflicts": []
+  },
+  {
+    "name": "ue-dsh-route-skill",
+    "description": "DSH 里要动编辑器、编译或跑 Automation 时用。先扫工具卡片，再取一个 schema，再执行。保存和 PIE 只读 session_task.json。",
+    "path": "E:\\UEProject\\AIWork\\AIAgentProject\\.codex\\skills\\ue-dsh-route-skill\\SKILL.md",
+    "triggers": [
+      "dsh",
+      "编辑器",
+      "编译",
+      "automation"
+    ],
+    "tools": [],
+    "version": "1.0",
+    "conflicts": []
+  },
+  {
+    "name": "ue-dsh-session-skill",
+    "description": "DSH 会话开工与 UE 操作路由。先 resume_context；编辑器先扫卡片再取单项 schema；写策略只读 data/dsh/session_task.json；任何完成都要 read_contract + verify。",
+    "path": "E:\\UEProject\\AIWork\\AIAgentProject\\.codex\\skills\\ue-dsh-session-skill\\SKILL.md",
+    "triggers": [
+      "dsh",
+      "mcp__uerag",
+      "会话开工",
+      "verify"
+    ],
+    "tools": [
+      "search_ue_project",
+      "query_actor"
+    ],
+    "version": "1.0",
+    "conflicts": []
+  },
+  {
+    "name": "ue-dsh-verify-skill",
+    "description": "说完成、修好、通过或已生成之前用。先 read_contract 再 verify，只引用返回的 ok 与 kind。manual 条款不碰。",
+    "path": "E:\\UEProject\\AIWork\\AIAgentProject\\.codex\\skills\\ue-dsh-verify-skill\\SKILL.md",
+    "triggers": [
+      "dsh",
+      "完成",
+      "verify",
+      "read_contract"
+    ],
+    "tools": [],
+    "version": "1.0",
+    "conflicts": []
+  },
+  {
     "name": "ue-history-skill",
     "description": "排障先查一条历史解决方案，不要读本文件全文。关键词：写不成任务、不生效、报错、失败、查不到、没反应、kind=none、监督者、对不上、不猜。 用 search_ue_project(现象原文, top_k=1, where={\"doc_kind\":\"history\"})。标题对不上再查 doc_kind=debug。仍对不上就走域技能。",
-    "path": "E:\\UEProject\\AIWork\\AIAgentProject\\.cursor\\skills\\ue-history-skill\\SKILL.md",
+    "path": "E:\\UEProject\\AIWork\\AIAgentProject\\.codex\\skills\\ue-history-skill\\SKILL.md",
     "triggers": [
       "写不成任务",
       "历史解决方案",
@@ -123,7 +182,7 @@
   {
     "name": "ue-low-token-skill",
     "description": "UE5.8 MCP 未知工具集。跨域、索引未覆盖的 Toolset、发现失败时用。路由见 AGENTS.md。",
-    "path": "E:\\UEProject\\AIWork\\AIAgentProject\\.cursor\\skills\\ue-low-token-skill\\SKILL.md",
+    "path": "E:\\UEProject\\AIWork\\AIAgentProject\\.codex\\skills\\ue-low-token-skill\\SKILL.md",
     "triggers": [
       "未知工具",
       "toolset"
@@ -135,7 +194,7 @@
   {
     "name": "ue-manual-blueprint-skill",
     "description": "蓝图改图先看 UE_ALLOW_BLUEPRINT。false 时不改图，把连线步骤写入 Plan/。 true 时才改蓝图，失败达到 max_retries 后停止。 Use when wiring a Blueprint graph, 蓝图节点, BeginPlay, 材质图, UMG, 动画, Niagara.",
-    "path": "E:\\UEProject\\AIWork\\AIAgentProject\\.cursor\\skills\\ue-manual-blueprint-skill\\SKILL.md",
+    "path": "E:\\UEProject\\AIWork\\AIAgentProject\\.codex\\skills\\ue-manual-blueprint-skill\\SKILL.md",
     "triggers": [
       "蓝图改图",
       "人工步骤"
@@ -147,7 +206,7 @@
   {
     "name": "ue-material-skill",
     "description": "Material / Material Instance：节点、连线、参数、编译、实例 override。",
-    "path": "E:\\UEProject\\AIWork\\AIAgentProject\\.cursor\\skills\\ue-material-skill\\SKILL.md",
+    "path": "E:\\UEProject\\AIWork\\AIAgentProject\\.codex\\skills\\ue-material-skill\\SKILL.md",
     "triggers": [
       "材质",
       "material"
@@ -166,7 +225,7 @@
   {
     "name": "ue-niagara-skill",
     "description": "Niagara System：Emitter、Module、Renderer、Stack、参数、Niagara Blueprint。",
-    "path": "E:\\UEProject\\AIWork\\AIAgentProject\\.cursor\\skills\\ue-niagara-skill\\SKILL.md",
+    "path": "E:\\UEProject\\AIWork\\AIAgentProject\\.codex\\skills\\ue-niagara-skill\\SKILL.md",
     "triggers": [
       "niagara",
       "粒子"
@@ -185,7 +244,7 @@
   {
     "name": "ue-object-skill",
     "description": "UObject 属性：读、写、类查询。实例/CDO/组件路径不可混用。",
-    "path": "E:\\UEProject\\AIWork\\AIAgentProject\\.cursor\\skills\\ue-object-skill\\SKILL.md",
+    "path": "E:\\UEProject\\AIWork\\AIAgentProject\\.codex\\skills\\ue-object-skill\\SKILL.md",
     "triggers": [
       "属性",
       "类查询"
@@ -199,7 +258,7 @@
   {
     "name": "ue-pcg-skill",
     "description": "PCG Graph：Node、Pin、参数、Subgraph、执行。随机必须显式 Seed。",
-    "path": "E:\\UEProject\\AIWork\\AIAgentProject\\.cursor\\skills\\ue-pcg-skill\\SKILL.md",
+    "path": "E:\\UEProject\\AIWork\\AIAgentProject\\.codex\\skills\\ue-pcg-skill\\SKILL.md",
     "triggers": [
       "pcg"
     ],
@@ -210,7 +269,7 @@
   {
     "name": "ue-programmatic-skill",
     "description": "Unreal MCP 批处理：≥2 步合并为一次 execute_tool_script。",
-    "path": "E:\\UEProject\\AIWork\\AIAgentProject\\.cursor\\skills\\ue-programmatic-skill\\SKILL.md",
+    "path": "E:\\UEProject\\AIWork\\AIAgentProject\\.codex\\skills\\ue-programmatic-skill\\SKILL.md",
     "triggers": [
       "批处理",
       "execute_tool_script"
@@ -222,7 +281,7 @@
   {
     "name": "ue-rag-route-skill",
     "description": "UE 编辑器操作先扫描 MCP 工具再调用。Actor、属性、验证、编译已有蓝图时用。UE_ALLOW_BLUEPRINT=true 时蓝图 Graph 也走这里。禁止把 830 个 MCP schema 装进上下文。",
-    "path": "E:\\UEProject\\AIWork\\AIAgentProject\\.cursor\\skills\\ue-rag-route-skill\\SKILL.md",
+    "path": "E:\\UEProject\\AIWork\\AIAgentProject\\.codex\\skills\\ue-rag-route-skill\\SKILL.md",
     "triggers": [
       "扫描",
       "mcp"
@@ -234,7 +293,7 @@
   {
     "name": "ue-sequencer-skill",
     "description": "Sequencer / Level Sequence：Binding、Track、Section、Keyframe、导入导出。",
-    "path": "E:\\UEProject\\AIWork\\AIAgentProject\\.cursor\\skills\\ue-sequencer-skill\\SKILL.md",
+    "path": "E:\\UEProject\\AIWork\\AIAgentProject\\.codex\\skills\\ue-sequencer-skill\\SKILL.md",
     "triggers": [
       "sequencer",
       "过场"
@@ -246,7 +305,7 @@
   {
     "name": "ue-static-mesh-skill",
     "description": "Static Mesh：Nanite、LOD、Collision、材质槽、导入。",
-    "path": "E:\\UEProject\\AIWork\\AIAgentProject\\.cursor\\skills\\ue-static-mesh-skill\\SKILL.md",
+    "path": "E:\\UEProject\\AIWork\\AIAgentProject\\.codex\\skills\\ue-static-mesh-skill\\SKILL.md",
     "triggers": [
       "静态网格",
       "nanite",
@@ -261,7 +320,7 @@
   {
     "name": "ue-umg-skill",
     "description": "UMG / Widget Blueprint：增删移动控件、Named Slot、事件绑定、编译。",
-    "path": "E:\\UEProject\\AIWork\\AIAgentProject\\.cursor\\skills\\ue-umg-skill\\SKILL.md",
+    "path": "E:\\UEProject\\AIWork\\AIAgentProject\\.codex\\skills\\ue-umg-skill\\SKILL.md",
     "triggers": [
       "umg",
       "widget",
@@ -281,7 +340,7 @@
   {
     "name": "ue-verify-skill",
     "description": "最小验证：Transform/编译/资产状态。只验用户要的那一项。",
-    "path": "E:\\UEProject\\AIWork\\AIAgentProject\\.cursor\\skills\\ue-verify-skill\\SKILL.md",
+    "path": "E:\\UEProject\\AIWork\\AIAgentProject\\.codex\\skills\\ue-verify-skill\\SKILL.md",
     "triggers": [
       "验证",
       "编译"

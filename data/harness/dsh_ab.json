@@ -1,0 +1,42 @@
+{
+  "generated_at": "2026-10-23T21:30:16",
+  "note": "dsh 侧数值由人从 DSH 会话用量填入；缺数留 null，脚本打 -，不估算、不宣称谁更快。",
+  "tasks": {
+    "editor-cube": {
+      "menu2": {
+        "prompt_tokens": null,
+        "ok": null,
+        "source": ""
+      },
+      "dsh": {
+        "prompt_tokens": null,
+        "ok": null,
+        "source": ""
+      }
+    },
+    "bp-gun-compile": {
+      "menu2": {
+        "prompt_tokens": null,
+        "ok": null,
+        "source": ""
+      },
+      "dsh": {
+        "prompt_tokens": null,
+        "ok": null,
+        "source": ""
+      }
+    },
+    "cpp-typo": {
+      "menu2": {
+        "prompt_tokens": 73255,
+        "ok": null,
+        "source": "trace 20261021-221447（无 run json）"
+      },
+      "dsh": {
+        "prompt_tokens": null,
+        "ok": null,
+        "source": ""
+      }
+    }
+  }
+}

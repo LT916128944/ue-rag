@@ -1,0 +1,105 @@
+{
+  "version": 1,
+  "owner": "人（工程 owner / Lead）",
+  "note": "术语→动作映射（D3，见 docs/upgrade/next-upgrade-plan.md §5 与 gap-taxonomy.md 附录 E）。模型只能提议（data/skills/action_candidates.json），不能改本表。每行二选一：action 必须指向 agent/catalog.py 的 CATALOG 里真实存在的动作；否则写 unplannable: true 并同时给 reason 与 suggested_path。绝不发明动作名。字段：verbs 必填非空的短动词/短语，按子串匹配（大小写与空白已归一），既用于 lookup 也用于动作映射；aliases 可选，是「相关但不做结论」的弱线索（例如裸 BP_），只参与 lookup 与未覆盖排查，不参与 action_for/unplannable；evidence/caveat/requires/pair_with 只作人读依据，不参与匹配。",
+  "rows": [
+    {
+      "verbs": ["新建一个关卡", "新建关卡", "建一个关卡", "新建地图", "创建关卡", "建个关卡"],
+      "action": "create_level",
+      "evidence": "[事实] 830 工具面无 new_level / create_map（data/ue_mcp_index.json 实测各 0 处，只有 SceneTools.load_level / get_current_level）；实现=AssetTools.duplicate 复制模板 + SceneTools.load_level（agent/catalog.py:31-36 summary；agent/sequence.py:136-137 → _create_level）",
+      "caveat": "是模板复制，不是空白关卡：level 槽位填 L_ 名（落 /Game/Maps/名字）或 /Game 路径，已存在就只切过去；summary 必须写明「模板复制」（D12）。要真正的空白关卡走本表 blank_level 那条 unplannable。"
+    },
+    {
+      "verbs": ["空白关卡", "空关卡", "全新的空关卡", "新建空白地图"],
+      "unplannable": true,
+      "namespace": "mesh",
+      "reason": "[事实] 830 工具面没有 new_level / create_map（data/ue_mcp_index.json 实测 0 处），只有 SceneTools.load_level 与 get_current_level；CATALOG 里唯一的建关卡动作 create_level 是「复制模板 + 切关卡」，做不出一张空关卡（agent/catalog.py:31-36、agent/sequence.py:136）",
+      "suggested_path": "namespace=mesh。monolith 下先走 create_level（空图由执行层试），不要在调用前把这扇抹成零窗口。插件侧补 SceneTools.new_level 仍是另一条路，不许当成已经做成空关卡"
+    },
+    {
+      "verbs": ["创建蓝图", "新建蓝图", "建一个蓝图", "生成蓝图", "新建一个蓝图"],
+      "aliases": ["BP_"],
+      "action": "bind_blueprint",
+      "evidence": "[事实] CATALOG（agent/catalog.py:8-106）里没有独立的 create_blueprint：它只在 DIRECT_ACTIONS/EDITOR_LOCK_ACTIONS（catalog.py:122/165）与执行分支 agent/sequence.py:138 上，属 D1 的规划侧集合差，故本行按 CATALOG 真值指向 bind_blueprint；bind_blueprint 的 summary 就是「没有资产、且给了 /Game 路径时才新建，不改图」（catalog.py:26-30）",
+      "caveat": "落地方案：plan_windows.materialize_goal 走 agent/grounding.link_asset，缺资产时插一扇代码生成的 create_blueprint 前置扇（agent/plan_windows.py:610-672/681-687）；槽位 class/blueprint 只填一个，两个都空就暂停问人。等 D1 把 create_blueprint 提进 CATALOG 后再把本行的 action 换回去。"
+    },
+    {
+      "verbs": ["打开编辑器", "启动编辑器", "打开UE编辑器", "启动UE编辑器", "打开虚幻编辑器", "启动虚幻编辑器"],
+      "action": "launch_editor",
+      "evidence": "[事实] agent/catalog.py:9（slots 为空）；system_prompt 里明写只要求启动时用这一扇（catalog.py:382）"
+    },
+    {
+      "verbs": ["编译这张蓝图", "编译某张蓝图", "编译蓝图", "重新编译蓝图", "编译一次蓝图"],
+      "action": "compile_blueprint",
+      "evidence": "[事实] agent/catalog.py:18（槽位 blueprint，不改图）"
+    },
+    {
+      "verbs": ["编译工程", "编译整个工程", "编译项目", "重新编译工程"],
+      "action": "compile_project",
+      "evidence": "[事实] agent/catalog.py:14（槽位为空）；没说编译工程时规划者的 compile_project 会被 plan_windows._without_unasked_project_compile 拿掉（plan_windows.py:1266-1290）"
+    },
+    {
+      "verbs": ["加输入", "输入映射", "输入动作", "按键", "鼠标", "WASD", "增强输入", "InputMapping", "InputAction"],
+      "unplannable": true,
+      "namespace": "input",
+      "reason": "[事实] 830 工具面无 Enhanced Input / InputMapping 工具：data/ue_mcp_index.json 里 EnhancedInput 与 InputMapping 各 0 处（2026-09-21 索引，2026-10-24 复测同一结果）；CATALOG 里也没有任何输入相关动作（agent/catalog.py:8-106）",
+      "suggested_path": "namespace=input。UE_ALLOW_BLUEPRINT 为 true 且后端是 monolith 时先试蓝图修复，同一目标最多 3 次；第 3 次仍失败就止损。开关是 false 时不试。不得为此编造动作名"
+    },
+    {
+      "verbs": ["计分", "HUD", "文本反馈", "结算", "倒计时", "分数", "金币计数"],
+      "action": "edit_widget_blueprint",
+      "requires": ["UE_ALLOW_UMG"],
+      "pair_with": ["create_widget_blueprint", "check_platform_hud"],
+      "evidence": "[事实] agent/catalog.py:78-87（create_widget_blueprint / edit_widget_blueprint）；UE_ALLOW_UMG 门在 agent/plan_windows.py:461-470 与 :478-506（waiting_external + external_dep），任务书侧 widget_edit_task 在 plan_windows.py:1535-1546；只读核对用 check_platform_hud（catalog.py:92-96）",
+      "caveat": "资产名和目录来自句子，不限一份固定的 WBP_。UE_ALLOW_UMG 不是 true 时这一扇等待外部，不报失败。要新建时用 pair_with 里的 create_widget_blueprint。"
+    },
+    {
+      "verbs": ["移动", "移到", "挪到", "坐标", "摆到指定位置"],
+      "action": "move_actor",
+      "evidence": "[事实] agent/catalog.py:61-64（槽位 actor + location；不保存）"
+    },
+    {
+      "verbs": ["摆放", "布置", "放进去", "放进场景", "丢到场景", "放到场景"],
+      "action": "place_actor",
+      "evidence": "[事实] agent/catalog.py:37-40（槽位 blueprint，把蓝图放进当前关卡，不保存）；一次摆一个"
+    },
+    {
+      "verbs": ["批量摆", "批量放置", "按设计图", "设计图", "layout"],
+      "action": "place_batch",
+      "evidence": "[事实] agent/catalog.py:41-46（槽位 blueprint + layout，layout 是 data/harness/level_layout/ 下的设计图 JSON）"
+    },
+    {
+      "verbs": ["删掉多余的", "删掉多余", "离群实例", "清理离群"],
+      "action": "remove_batch",
+      "evidence": "[事实] agent/catalog.py:47-52（targets 每条 name+x/y/z，坐标容差 2uu，对不上就不删）"
+    },
+    {
+      "verbs": ["读材质参数", "查询材质参数", "材质参数是多少", "读参数"],
+      "action": "query_material",
+      "evidence": "[事实] agent/catalog.py:74-77（只读，读材质实例一个标量参数）"
+    },
+    {
+      "verbs": ["材质参数", "标量参数", "参数改成", "参数设为", "覆写参数"],
+      "action": "set_scalar_param",
+      "evidence": "[事实] agent/catalog.py:69-73（覆写材质实例的一个标量参数，写完复读；不改材质图，不保存）"
+    },
+    {
+      "verbs": ["跑测试", "跑一遍自动化", "跑自动化", "自动化测试", "验证一下"],
+      "action": "run_automation_test",
+      "evidence": "[事实] agent/catalog.py:88-91（只读，按过滤器跑 Automation，失败数不是 0 就不算通过，不另开 PIE）"
+    },
+    {
+      "verbs": ["改蓝图图", "加节点", "连线", "蓝图节点", "连引脚", "改蓝图逻辑"],
+      "unplannable": true,
+      "namespace": "blueprint",
+      "reason": "[事实] 动作表内没有改图动作：bind_blueprint 的 summary 明写「不改图」（agent/catalog.py:26-30），CATALOG 全表无图编辑动作（catalog.py:8-106）；工具面确实有 BlueprintTools.create_node / connect_pins（data/ue_mcp_index.json 实测 create_node 4 处、connect_pins 6 处）[事实]，但没有任何动作把它接进闭环",
+      "suggested_path": "namespace=blueprint。UE_ALLOW_BLUEPRINT=true 且后端是 monolith 时执行层 discover/describe/exec，最多 3 次，不写人工连线清单代替执行。开关是 false 时不调用写图工具"
+    },
+    {
+      "verbs": ["巡逻", "追击", "AI行为", "行为树", "BehaviorTree", "寻路"],
+      "unplannable": true,
+      "reason": "[事实] 工具面无巡逻/感知/寻路工具：data/ue_mcp_index.json 里 AIPerception / NavMesh / Patrol 各 0 处；BehaviorTree 命中 20 处只是资产类型与图类型描述，没有表内动作把它接进闭环；CATALOG 里没有 AI 类动作（agent/catalog.py:8-106）",
+      "suggested_path": "edit_cpp（C++ 侧 AIController/感知逻辑）+ 人工蓝图图（UE_ALLOW_BLUEPRINT）；任务书里必须写成能力缺口并进人审（D2/D6），不许只留一句「未完成」"
+    }
+  ]
+}

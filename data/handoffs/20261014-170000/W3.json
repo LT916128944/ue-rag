@@ -4,6 +4,11 @@
   "unmet": [
     "编辑器读数与期望一致"
   ],
+  "unmet_total": 1,
+  "unmet_omitted": 0,
+  "unmet_ids": [
+    "c-editor_assert"
+  ],
   "next": "",
   "artifacts": {
     "by_name": {

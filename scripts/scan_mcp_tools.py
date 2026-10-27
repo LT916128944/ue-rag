@@ -92,6 +92,13 @@ def main() -> int:
     parser.add_argument("--schema", default="", help="Print input_schema for this full_name only")
     args = parser.parse_args()
 
+    from backends.official import official_block
+
+    blocked = official_block()
+    if blocked:
+        _emit({"ok": False, "error": blocked})
+        return 1
+
     if args.schema:
         return print_schema(args.schema)
     if not args.query.strip():

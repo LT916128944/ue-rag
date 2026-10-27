@@ -1,0 +1,20 @@
+{
+  "id": "kill-check",
+  "query": "旁路单点杀伤：AIAgent.Pawn.Look 已经能过。对契约相关的一处做一次故意改错，期望 Automation 的 test_judge.ok 为 false。finally 按 inject_typo 的源码快照还原，不把试探留在 Source/。不进默认三条。",
+  "verify": [
+    {"kind": "automation", "filter": "AIAgent.Pawn.Look"}
+  ],
+  "allow_writes": [],
+  "save": false,
+  "pie": false,
+  "max_retries": 1,
+  "judge_first": true,
+  "inject_typo": true,
+  "typo_path": "Private/TestActor.cpp",
+  "expect": {
+    "test_judge_ok": false,
+    "killed_when_automation_fails": true,
+    "blind_spot_when_failed_count_stays_zero": true,
+    "restore": "inject_typo"
+  }
+}

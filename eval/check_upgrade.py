@@ -458,8 +458,13 @@ def check_matrix_ledger(briefs: Path, ledger_path: Path, arch: Path, events_dir:
         action = str(task.get("action") or "")
         if action == "set_pickable":
             return {"id": task.get("id"), "ok": True, "summary": "bPickable 为真",
+                    "test": {"ok": True, "kind": "editor_assert", "summary": "bPickable 为真", "errors": []},
+                    "judge_kind": "editor_assert",
                     "ref": "ref-BP_TestActor", "in_level": True, "thread_id": thread_id}
         return {"id": task.get("id"), "ok": False, "summary": "场景里没有 BP_TestActor，失败",
+                "test": {"ok": False, "kind": "editor_assert", "summary": "场景里没有 BP_TestActor",
+                         "errors": [{"file": "", "line": 0, "message": "场景里没有 BP_TestActor"}]},
+                "judge_kind": "editor_assert",
                 "error": "场景里没有 BP_TestActor", "thread_id": thread_id}
 
     original = run_task_mod.run_task
@@ -494,36 +499,202 @@ def check_matrix_ledger(briefs: Path, ledger_path: Path, arch: Path, events_dir:
     assert "范围B" in summary and "只读裁决能否拾取" in summary
 
 
+def check_widget_slots() -> None:
+    """create_widget_blueprint 按句子里的目录和名字建，不限 WBP_HUD。槽位写了名字就不能报「槽位是空的」。"""
+    import config
+    from agent.plan_windows import materialize
+    from agent.run_windows import _dependency_met
+
+    saved = config.allow_umg
+    slots = {"folder": "/Game/UI", "name": "WBP_HUD", "parent": "User Widget"}
+    try:
+        config.allow_umg = lambda: False
+        held = materialize(
+            "create_widget_blueprint", slots,
+            title="创建左上角金币计数与倒计时 HUD 控件蓝图", wid="W1", depends=[], retries=1,
+        )
+        assert "槽位是空的" not in str(held.get("error") or ""), held
+        assert held.get("waiting_external") is True
+        assert held.get("external_dep") == "UE_ALLOW_UMG"
+        assert held.get("realizable") is False
+
+        config.allow_umg = lambda: True
+        opened = materialize(
+            "create_widget_blueprint", slots,
+            title="创建左上角金币计数与倒计时 HUD 控件蓝图", wid="W1", depends=[], retries=1,
+        )
+        assert opened.get("realizable") is True, opened
+        assert opened.get("folder_path") == "/Game/UI"
+        assert opened.get("asset_name") == "WBP_HUD"
+        assert opened.get("parent") == "/Script/UMG.UserWidget"
+        assert "槽位是空的" not in str(opened.get("error") or "")
+
+        other = materialize(
+            "create_widget_blueprint",
+            {"folder": "/Game/UI", "name": "WBP_Other", "parent": "User Widget"},
+            title="别的控件", wid="W9", depends=[], retries=1,
+        )
+        assert other.get("realizable") is True, other
+        assert other.get("folder_path") == "/Game/UI", other
+        assert other.get("asset_name") == "WBP_Other", other
+        assert other.get("ref_path") == "/Game/UI/WBP_Other.WBP_Other", other
+        assert "只新建 /Game/UI/WBP_HUD" not in str(other.get("error") or ""), other
+
+        # 20261021-183206 的现场：规划者把 folder 写成 "UI"，旧代码判不可执行，W3-W5 连带全断。
+        for raw_folder in ("UI", "Game/UI", "/Game/UI/", "/game/ui"):
+            loose = materialize(
+                "create_widget_blueprint",
+                {"folder": raw_folder, "name": "WBP_HUD", "parent": "User Widget"},
+                title="创建左上角金币计数与倒计时 HUD 控件蓝图", wid="W2", depends=[], retries=1,
+            )
+            assert loose.get("realizable") is True, (raw_folder, loose)
+            assert loose.get("folder_path") == "/Game/UI", (raw_folder, loose)
+            assert loose.get("asset_name") == "WBP_HUD", (raw_folder, loose)
+    finally:
+        config.allow_umg = saved
+    assert _dependency_met("done", "run_automation_test") is True
+    assert _dependency_met("waiting_external", "run_automation_test") is True
+    assert _dependency_met("waiting_external", "edit_widget_blueprint") is False
+    assert _dependency_met("failed", "run_automation_test") is False
+
+
+def check_unasked_compile() -> None:
+    """没说编译工程时，规划者的 compile_project 直接消失，不再停下来问路径。"""
+    from agent.plan_windows import _without_unasked_project_compile
+
+    windows = [
+        {"id": "W1", "action": "compile_project", "title": "编译整个工程", "depends_on": []},
+        {"id": "W2", "action": "create_widget_blueprint", "title": "新建 HUD", "depends_on": ["W1"]},
+        {"id": "W3", "action": "edit_widget_blueprint", "title": "搭计数", "depends_on": ["W2"]},
+    ]
+    kept = _without_unasked_project_compile("做一个平台跳跃关卡，左上角计数", windows)
+    assert [item["id"] for item in kept] == ["W2", "W3"]
+    assert kept[0]["depends_on"] == []
+    assert kept[1]["depends_on"] == ["W2"]
+    asked = _without_unasked_project_compile("请编译工程再启动编辑器", [
+        {"id": "W1", "action": "compile_project", "title": "编译工程", "depends_on": []},
+        {"id": "W2", "action": "create_widget_blueprint", "title": "新建 HUD", "depends_on": ["W1"]},
+    ])
+    assert [item["id"] for item in asked] == ["W1", "W2"]
+    assert asked[1]["depends_on"] == ["W1"]
+    # 全被拿掉时不能留空清单：留一扇暂停窗写清原因（20261022-113402 报「没有窗口」）
+    empty = _without_unasked_project_compile("启动UE编辑器，其他啥也别干", [
+        {"id": "W1", "action": "compile_project", "title": "编译工程", "depends_on": []},
+    ])
+    assert len(empty) == 1 and empty[0].get("realizable") is False, empty
+    assert "launch_editor" in str(empty[0].get("error") or ""), empty
+
+
+def check_launch_only() -> None:
+    """「启动UE编辑器，其他啥也别干」要拆成一扇 launch_editor，不能整句 0 扇。
+    20261022-113402：动作表里没有启动编辑器，理解器报缺动作 → 回退规划者写 compile_project
+    → 被 _without_unasked_project_compile 拿掉 → 0 扇 → 集成只报「没有窗口」。"""
+    from agent.catalog import CATALOG, DIRECT_ACTIONS, EDITOR_LOCK_ACTIONS, allows
+    from agent.plan_windows import plan_windows, windows_from_rules
+    from agent.supervise import _plan_rules
+
+    query = "启动UE编辑器，其他啥也别干"
+    assert "launch_editor" in CATALOG and allows("launch_editor")
+    assert "launch_editor" in DIRECT_ACTIONS and "launch_editor" in EDITOR_LOCK_ACTIONS
+
+    ruled = _plan_rules(query)
+    assert isinstance(ruled, list) and ruled, ruled
+    assert ruled[0].get("action") == "launch_editor", ruled
+    assert ruled[0].get("save") is False and ruled[0].get("pie") is False, ruled
+
+    windows = windows_from_rules(ruled)
+    assert len(windows) == 1 and windows[0]["action"] == "launch_editor", windows
+    assert windows[0].get("save") is False and windows[0].get("pie") is False, windows
+
+    planned = plan_windows(query, complete=lambda _messages: "")
+    assert planned["source"] == "rules", planned["source"]
+    assert len(planned["windows"]) == 1, planned["windows"]
+    assert planned["windows"][0]["action"] == "launch_editor", planned["windows"]
+
+    # 商店句不能被当成启动编辑器
+    from agent.supervise import _wants_launch_editor
+    assert _wants_launch_editor(query) is True
+    assert _wants_launch_editor("打开虚幻商城看道具") is False
+    assert _wants_launch_editor("打开 UE 编辑器") is True
+
+
 def check_board() -> None:
-    """阶段二：三区渲染，E 展开明细，files_modified 绿点。"""
+    """主代理画路线图；运行中的窗口是一块 CLI；完成后收起；E 切换详细日志。"""
     from rich.console import Console
 
     from agent.board import Board
+    from agent.cli_log import bind_window, cli_record, reset_window
+    from agent.run_windows import _EventBus, append_cli_log, runs_cli_path
 
     out = io.StringIO()
-    console = Console(file=out, width=96, force_terminal=False, legacy_windows=False)
-    board = Board(console=console)
-    board.event({"type": "run_start", "query": "把 BP_TestActor 设为可拾取再裁决", "windows": [
-        {"id": "W1", "title": "设为可拾取", "action": "set_pickable", "depends_on": []},
-        {"id": "W2", "title": "只读裁决", "action": "judge_pickup", "depends_on": ["W1"]},
-    ]})
+    console = Console(file=out, width=100, height=40, force_terminal=False, legacy_windows=False)
+    logged = []
+    board = Board(console=console, on_log=logged.append)
+    board.event({
+        "type": "run_start", "run_id": "20990101-000001",
+        "query": "把 BP_TestActor 设为可拾取再裁决",
+        "windows": [
+            {"id": "W1", "title": "设为可拾取", "action": "set_pickable", "depends_on": []},
+            {"id": "W2", "title": "只读裁决", "action": "judge_pickup", "depends_on": ["W1"]},
+        ],
+    })
     board.event({"type": "window_state", "window": "W1", "state": "running"})
-    board.event({"type": "tool_call", "window": "W1", "node": "retrieve", "tool": "", "ok": True})
+    board.event({
+        "type": "tool_call", "window": "W1", "node": "plan", "tool": "llm", "ok": True,
+        "reasoning": "先读控件再改可拾取", "calls": ["set_actor_property"],
+    })
+    token = bind_window("W1")
+    try:
+        board.feed_line(">> [UE] ActorTools::set_actor_transform")
+    finally:
+        reset_window(token)
+    board.expanded = True
+    console.print(board.render())
+    live = out.getvalue()
+    for token in ("主代理", "路线图", "设为可拾取", "只读裁决", "子代理", "思考", "先读控件",
+                 "set_actor_transform", "E 简略"):
+        assert token in live, (token, live)
+    assert "结果" not in live
+
+    out.seek(0)
+    out.truncate(0)
     board.event({"type": "window_result", "window": "W1", "ok": True, "state": "done",
                  "summary": "bPickable 为真", "elapsed": 1.2, "retries": 0})
     board.event({"type": "files_modified", "window": "W1", "kinds": "scene"})
+    console.print(board.render())
+    mid = out.getvalue()
+    assert "排队" in mid and "只读裁决" in mid
+    assert "bPickable" not in mid  # W1 的 CLI 已收起，结果等全部结束再给
+
+    out.seek(0)
+    out.truncate(0)
     board.event({"type": "window_state", "window": "W2", "state": "running"})
-    board.event({"type": "judge", "window": "W2", "node": "test", "note": ""})
+    board.event({"type": "judge", "window": "W2", "node": "test", "tool": "automation", "ok": True,
+                 "summary": "能拾取"})
     board.event({"type": "window_result", "window": "W2", "ok": True, "state": "done",
                  "summary": "能拾取", "elapsed": 0.8, "retries": 0})
     board.event({"type": "integration", "ok": True, "status": "成功", "summary": "全部窗口完成"})
     board.event({"type": "run_end", "status": "成功", "ok": True})
-    board.expanded = True
     console.print(board.render())
-    text = out.getvalue()
-    for token in ("主代理", "运行窗口", "完成", "已完成", "修改了文件", "设为可拾取", "只读裁决",
-                 "子代理", "可续接", "elapsed=1.2"):
-        assert token in text, (token, text)
+    done = out.getvalue()
+    for token in ("结果", "子代理已关闭", "修改了文件", "bPickable 为真", "能拾取", "1.2",
+                 "全部窗口完成", "20990101-000001.cli.jsonl", "先读控件"):
+        assert token in done, (token, done)
+    assert logged and logged[-1]["window"] == "W1" and "set_actor_transform" in logged[-1]["text"]
+
+    rec = cli_record({
+        "type": "tool_call", "run_id": "20990101-000001", "window": "W1",
+        "node": "plan", "tool": "llm", "ok": True, "reasoning": "先读控件再改可拾取",
+    })
+    assert rec and rec["kind"] == "think" and "先读控件" in rec["text"]
+    bus = _EventBus("20990101-000001")
+    bus.emit("tool_call", window="W1", node="plan", tool="llm", ok=True, reasoning="先读控件再改可拾取")
+    path = runs_cli_path("20990101-000001")
+    saved = path.read_text(encoding="utf-8")
+    assert "先读控件再改可拾取" in saved
+    append_cli_log("20990101-000001", {"ts": "", "run_id": "20990101-000001", "window": "W1",
+                                      "kind": "stdout", "text": ">> [UE] ActorTools::set_actor_transform"})
+    assert "set_actor_transform" in path.read_text(encoding="utf-8")
 
 
 def check_rules_dechain() -> None:
@@ -561,10 +732,197 @@ def check_rules_dechain() -> None:
     assert windows3[1]["depends_on"] == ["W1"], windows3
 
 
+def check_cpp_window_context() -> None:
+    """20261024-0215 的两个工作流缺陷（WF-1 / WF-2）离线钉桩：不叫模型、不写场景。
+
+    WF-1：`edit_cpp` 窗口按规划者的 title + class 重建任务句时把原句需求整段丢了
+    （`_try_cpp(f"{title}。类 {class_name}。编译")`）。20261024-011917 的 W1 只拿到
+    「改 C++ 并编译。类 ATestPawn。编译」，模型只好猜，最后改了个无关的
+    `bCanBePossessed = true`，编译 exit 0 就算成功——低 token 的代价被转嫁到正确性上。
+
+    WF-2：句子里唯一点名一个没有 UCLASS 的 .cpp 时，`_pinned_class` 返回 None →
+    `_try_cpp` 回落到 `_unique_class` 猜句子里的别的类。20261024-013644 的 W1 因此生成
+    「只改 Public/TestPawn.h 与 Private/TestPawn.cpp」，与用户点名的
+    Private/PlatformRunTest.cpp 自相矛盾，模型一次 diff 都没写。
+    """
+    import agent.supervise as sm
+    from agent import run_windows as rw
+
+    with tempfile.TemporaryDirectory() as tmp_name:
+        root = Path(tmp_name) / "source"
+        (root / "Public").mkdir(parents=True)
+        (root / "Private").mkdir(parents=True)
+        (root / "Public" / "TestPawn.h").write_text("class ATestPawn {};\n", encoding="utf-8")
+        (root / "Private" / "TestPawn.cpp").write_text("// pawn\n", encoding="utf-8")
+        # 点名的这个文件没有 UCLASS（真实工程里 PlatformRunTest.cpp 是 AutomationTest）
+        (root / "Private" / "PlatformRunTest.cpp").write_text(
+            "// IMPLEMENT_SIMPLE_AUTOMATION_TEST\n", encoding="utf-8"
+        )
+
+        def records(source_type=None):
+            if source_type == "ue_cpp":
+                return [{"id": "c1", "content": "C++ 类 ATestPawn，文件 TestPawn.h", "metadata": {
+                    "source_type": "ue_cpp", "class_name": "ATestPawn", "file_name": "TestPawn.h"}}]
+            return []
+
+        saved = (sm._records, sm.UE_SOURCE_ROOT, rw.UE_SOURCE_ROOT)
+        sm._records = records
+        sm.UE_SOURCE_ROOT = root
+        rw.UE_SOURCE_ROOT = root
+        try:
+            origin = (
+                "在 L_NewTest 里做一个平台跳跃关卡：玩家操纵 ATestPawn，WASD 移动、空格跳跃，"
+                "金币会旋转发光。修改 Private/TestPawn.cpp 的跳跃落地逻辑，然后编译工程。"
+            )
+            window = {"id": "W1", "action": "edit_cpp", "title": "改 C++ 并编译", "class_name": "ATestPawn"}
+            task = rw._build_graph_task(window, origin)
+            assert task and task.get("ok") is not False, task
+
+            # WF-1：原句需求必须带到这一扇的任务句里，不许只剩标题与类名
+            text = str(task.get("query") or "")
+            assert "跳跃落地逻辑" in text, text
+            assert origin.split("。")[1] in text, text          # 需求半句整句在，不是只留几个词
+            pin_lines = [line for line in text.splitlines() if "只改" in line]
+            assert pin_lines, text
+            assert "Public/TestPawn.h" in pin_lines[0] and "Private/TestPawn.cpp" in pin_lines[0], pin_lines[0]
+            # 这一扇的判定语义（20261021-195220 的教训）不许被改动
+            assert task["verify"] == [{"kind": "cpp_build"}], task.get("verify")
+            assert task["judge_first"] is False and task["expect_source_write"] is True, task
+            assert task["id"] == "W1" and task["title"] == "改 C++ 并编译", task
+
+            # 同一个修复要能以「类」为入口复用，供 cpp_task_for_file 之外的地方调用
+            assert hasattr(sm, "cpp_task_for_class"), "WF-1 缺 cpp_task_for_class"
+            by_class = sm.cpp_task_for_class(origin, "ATestPawn")
+            assert by_class and by_class.get("ok") is not False, by_class
+            assert "跳跃落地逻辑" in str(by_class.get("query") or ""), by_class.get("query")
+            assert sm.cpp_task_for_class(origin, "ANoSuchClass") is None, "解析不出类时不许编一个"
+
+            # 索引里没有这个类时回落旧写法，且仍然不猜：返回 ok=False 而不是硬造一扇
+            fallback = rw._build_graph_task({**window, "class_name": "ANoSuchClass"}, origin)
+            assert fallback.get("ok") is False, fallback
+
+            # WF-2：唯一有名的文件没有 UCLASS，钉死这个文件，绝不许回落到句子里的别的类。
+            # 这句刻意同时提到 ATestPawn（真实 20261024-013644 就是这样），旧代码正是在这里换类。
+            named = (
+                "修改 Private/PlatformRunTest.cpp 的 AIAgent.Platform.Run 测试："
+                "新增一段跳跃落地与可达性断言；把 ATestPawn 的 MoveSpeed 设为 300，然后编译工程。"
+            )
+            pinned = sm._try_cpp(named)
+            assert pinned and pinned.get("ok") is not False, pinned
+            pinned_text = str(pinned.get("query") or "")
+            pinned_lines = [line for line in pinned_text.splitlines() if "只改" in line]
+            assert pinned_lines, pinned_text
+            pin = pinned_lines[0]
+            assert "PlatformRunTest.cpp" in pin, pin
+            assert "TestPawn" not in pin, f"WF-2 回落到别的类了：{pin}"
+            assert "PlatformRunTest.h" not in pin, f"凭空补了不存在的头文件：{pin}"
+            assert pinned["verify"] == [{"kind": "cpp_build"}], pinned.get("verify")
+            assert rw._build_graph_task(
+                {"id": "W1", "action": "edit_cpp", "title": "改 C++ 并编译",
+                 "class_name": "PlatformRunTest"}, named
+            ).get("ok") is not False
+
+            # 原句唯一点名的文件优先级最高：规划者的 class 槽位写错了也不许把点名文件甩掉。
+            # （WF-1 新分支如果先按 class 槽位命中，WF-2 就会从这条路上原样复发。）
+            def _pin_of(task: dict) -> str:
+                lines = [line for line in str((task or {}).get("query") or "").splitlines() if "只改" in line]
+                assert lines, (task or {}).get("query")
+                return lines[0].split("。")[0]
+
+            named_window = {"id": "W1", "action": "edit_cpp", "title": "改 C++ 并编译"}
+            conflict = rw._build_graph_task({**named_window, "class_name": "ATestPawn"}, named)
+            assert conflict.get("ok") is not False, conflict
+            assert "PlatformRunTest.cpp" in _pin_of(conflict), _pin_of(conflict)
+            assert "TestPawn" not in _pin_of(conflict), f"WF-2 从 WF-1 的路上复发：{_pin_of(conflict)}"
+
+            # class 槽位为空、但原句点名了文件：同样要落到点名的那个文件，不许直接失败
+            bare_slot = rw._build_graph_task(named_window, named)
+            assert bare_slot.get("ok") is not False, bare_slot
+            assert "PlatformRunTest.cpp" in _pin_of(bare_slot), _pin_of(bare_slot)
+
+            # 点名的文件在源码树里找不到唯一一份：停下来让人 r 补，不许编路径
+            missing = sm._try_cpp("修改 Private/NoSuchFile.cpp 的跳跃落地逻辑，然后编译工程。")
+            assert missing.get("ok") is False, missing
+        finally:
+            sm._records, sm.UE_SOURCE_ROOT, rw.UE_SOURCE_ROOT = saved
+
+
+def check_menu2_no_fake_success() -> None:
+    """WF-3（20261024-0215）：菜单 2 的规划者失败回退不许假成功。
+
+    `steps_for_menu2` 在 `_planner_failed` 时直接吃 `_plan_rules` 的裸结果，绕过菜单 3 也走的
+    `_rules_cover` 那道闸。实测平台跳跃整句只剩 1 步 `place_blueprint(BP_Coin)`：平台/门/进度中枢
+    全丢、没有 PIE 验证步，`run_sequence` 却一路 return 0。同一句在菜单 3 必落 `_paused` 暂停扇。
+
+    这里只断言对外行为（不依赖内部 helper 名字）：弱命中不许给出「全部 ok」的步骤清单，
+    强命中仍必须原样放行。
+    """
+    from agent.plan_windows import _rules_cover, steps_for_menu2
+
+    # 必须用需求原文的整段（含「这些逻辑已经做好了，不用改代码也不用改蓝图」）。
+    # 截断成「金币用 BP_Coin…最后进 PIE」时它反而是强命中（place_blueprint + probe_play 全 ok），
+    # 那属于 L0 正常放行，跟这里的「回退分支不许假成功」是两回事，别混为一谈。
+    # 原句落在 data/dsh/query_platform.txt，但 data/dsh/* 是 gitignore 的，CI 上没有这个文件，
+    # 所以整段内联在这里；句子内容与那次 run 的 run.query 一字不差。
+    platform = (
+        "在当前关卡 L_NewTest 里摆好平台跳跃关卡并验证能玩：金币用 BP_Coin，平台用 BP_Platform，"
+        "门用 BP_Door，进度中枢用 BP_Progress，每个都要放进当前关卡并保存。"
+        "金币会旋转发光、前段平台不动、后段平台会动、90 秒倒计时、收齐金币后开门并在 UI 显示通关，"
+        "这些逻辑已经在 C++ 和 WBP_HUD 里做好了，不用改代码也不用改蓝图。最后进 PIE 验证能玩。"
+    )
+
+    # 检索标题固定为空：这条用例只验拆句闸门，不该去拉检索模型（CI 上没有 data/chroma）
+    import agent.brief as brief_mod
+
+    saved_titles = brief_mod._retrieval_titles
+    brief_mod._retrieval_titles = lambda _query, k=3: []
+    try:
+        # 前提：这句确实是弱命中，走的才是回退分支（否则下面验的不是同一条路）
+        from agent.supervise import _plan_rules
+
+        weak_ruled = _plan_rules(platform) or []
+        assert weak_ruled and _rules_cover(platform, weak_ruled) is False, (
+            "这条用例要求弱命中（_rules_cover=False），现在被判成强命中了，用例失效",
+            [step.get("action") for step in weak_ruled],
+        )
+
+        def no_model(_messages):
+            return "不是 JSON"
+
+        weak = steps_for_menu2(platform, complete=no_model)
+        assert weak, "弱命中至少要保留规则拆出的步骤"
+        unfinished = [step for step in weak if step.get("ok") is False or step.get("blocked")]
+        assert unfinished, f"WF-3 假成功：规则只拆出 {[s.get('action') for s in weak]} 却全部 ok"
+        text = " ".join(str(step.get("error") or "") for step in unfinished)
+        assert "未完成" in text, text
+        assert "没有一次带 spec 的验证" in text, text
+        # 收尾步不许抢跑：它排在最后，前面拆出来的步骤照样执行
+        assert weak[-1].get("ok") is False and weak[-1].get("blocked") is True, weak[-1]
+        # 规则本来拆得出的可执行步骤不许被这条收尾步吞掉
+        assert [step.get("action") for step in weak[:-1]] == [
+            step.get("action") for step in weak_ruled
+        ], ([s.get("action") for s in weak], [s.get("action") for s in weak_ruled])
+
+        # 强命中（_rules_cover 为真）路径一字不改：不许被加尾巴，也不许叫模型
+        strong_sentence = "编译工程后启动 UE 编辑器"
+        ruled = _plan_rules(strong_sentence) or []
+        assert _rules_cover(strong_sentence, ruled) is True, ruled
+
+        def boom(_messages):
+            raise AssertionError("强命中不应叫模型")
+
+        strong = steps_for_menu2(strong_sentence, complete=boom)
+        assert strong == ruled, (strong, ruled)
+        assert all(step.get("ok") is not False and not step.get("blocked") for step in strong), strong
+        assert not any("未完成" in str(step.get("error") or "") for step in strong), strong
+    finally:
+        brief_mod._retrieval_titles = saved_titles
+
+
 def check_stall_fixes() -> None:
     """180852 失败的修复：build 前打转熔断、diff 冲突带定位、execute 记失败原文。不叫模型，不写场景。"""
     from agent import nodes as nodes_mod
-    from agent.nodes import _pre_build_stall
+    from agent.nodes import _editor_read_stall, _pre_build_stall
     from core import source_edit as se
 
     def state(**fields):
@@ -614,6 +972,28 @@ def check_stall_fixes() -> None:
         "is_completed": False, "retry_count": 0, "max_retries": 3,
         "tool_calls": [], "require_build": True, "build_result": "",
     }) == "build"
+
+    # 20261021-121520：控件只读打转。没写过不能进编译（会把没改的 WBP 判成通过）。
+    widget_reads = [{"tool": "GetWidgets", "ok": True, "error": ""}, {"tool": "GetWidgetDescription", "ok": True, "error": ""}] * 4
+    text, action = _editor_read_stall(state(tool_outcomes=widget_reads))
+    assert action == "stop" and "没有一次写入" in text, (action, text)
+    assert _editor_read_stall(state(tool_outcomes=widget_reads[:6])) == ("", "")
+    wrote_then_read = [{"tool": "AddWidget", "ok": True, "error": ""}] + widget_reads
+    text, action = _editor_read_stall(state(tool_outcomes=wrote_then_read))
+    assert action == "build" and "编译裁判" in text, (action, text)
+    stopped = nodes_mod.plan_node({
+        **state(tool_outcomes=widget_reads),
+        "messages": [], "user_query": "改 WBP_HUD", "available_tools": [],
+        "task": {"verify": [{"kind": "blueprint_compile"}], "allow_writes": ["GetWidgets", "AddWidget"]},
+        "retry_count": 0, "max_retries": 3,
+    })
+    assert stopped.get("is_completed") is True and stopped.get("final_success") is False
+    assert "打转" in (stopped.get("last_error") or "")
+    assert route_after_plan({
+        "is_completed": True, "retry_count": 0, "max_retries": 3,
+        "tool_calls": [], "require_build": True, "build_result": "",
+        "final_success": False,
+    }) == "end"
 
     # read_source：text 是纯代码不带行号，行号只看 numbered
     out = se.read_source("Public/TestPawn.h", 1, 4)
@@ -665,7 +1045,7 @@ def check_intent_layer(runs: Path, events_dir: Path) -> None:
     if pw.routes_path().is_file():
         pw.routes_path().unlink(missing_ok=True)
 
-    # P1：validate_intent——表外动作拒收、未声明槽位丢弃并列进 dropped、未知字段丢弃，save 开关模型说了不算
+    # P1：validate_intent——表外动作拒收、未声明槽位丢弃并列进 dropped、未知字段丢弃，save 如实记录
     intent = validate_intent({
         "bogus_top": 1,
         "goals": [
@@ -681,7 +1061,7 @@ def check_intent_layer(runs: Path, events_dir: Path) -> None:
     dropped = "；".join(intent["dropped"])
     assert "表外动作 open_marketplace" in dropped, dropped
     assert "junk" in dropped and "junk2" in dropped and "bogus" in dropped, dropped
-    assert intent["constraints"]["save"] is False
+    assert intent["constraints"]["save"] is True
     assert intent["unresolved"] == ["顺带看看商城"]
     assert validate_intent({"goals": [{"action": "nope"}]}, "原句")["ok"] is False
 
@@ -1022,10 +1402,12 @@ def main() -> int:
         from agent import brief as brief_mod
         from agent import ledger as ledger_mod
         from agent import run_windows as rw
+        from agent import snapshot as snapshot_mod
 
         saved = {
-            "runs": rw.RUNS_DIR, "events": rw.EVENTS_DIR, "snaps": rw.SNAPSHOTS_DIR,
+            "runs": rw.RUNS_DIR, "events": rw.EVENTS_DIR, "snaps": snapshot_mod.SNAPSHOTS_DIR,
             "archive": rw.ARCHIVE_DIR, "src": rw.UE_SOURCE_ROOT, "project": rw.UE_PROJECT_DIR,
+            "snap_src": snapshot_mod.UE_SOURCE_ROOT,
             "briefs": brief_mod.BRIEFS_DIR, "ledger": ledger_mod.LEDGER_PATH,
             "titles": brief_mod._retrieval_titles,
         }
@@ -1034,7 +1416,8 @@ def main() -> int:
         try:
             rw.RUNS_DIR = runs
             rw.EVENTS_DIR = events_dir
-            rw.SNAPSHOTS_DIR = snaps
+            snapshot_mod.SNAPSHOTS_DIR = snaps
+            snapshot_mod.UE_SOURCE_ROOT = src
             rw.ARCHIVE_DIR = arch
             rw.UE_SOURCE_ROOT = src
             rw.UE_PROJECT_DIR = tmp
@@ -1052,14 +1435,20 @@ def main() -> int:
             check_artifacts()
             check_brief(tmp / "briefs", tmp / "ledger.json")
             check_matrix_ledger(tmp / "briefs", tmp / "ledger.json", arch, events_dir)
+            check_widget_slots()
+            check_unasked_compile()
+            check_launch_only()
             check_board()
             check_rules_dechain()
+            check_cpp_window_context()
+            check_menu2_no_fake_success()
             check_stall_fixes()
             check_repl_commands()
         finally:
             rw.RUNS_DIR = saved["runs"]
             rw.EVENTS_DIR = saved["events"]
-            rw.SNAPSHOTS_DIR = saved["snaps"]
+            snapshot_mod.SNAPSHOTS_DIR = saved["snaps"]
+            snapshot_mod.UE_SOURCE_ROOT = saved["snap_src"]
             rw.ARCHIVE_DIR = saved["archive"]
             rw.UE_SOURCE_ROOT = saved["src"]
             rw.UE_PROJECT_DIR = saved["project"]

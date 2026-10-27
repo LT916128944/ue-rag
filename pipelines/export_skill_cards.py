@@ -1,5 +1,7 @@
 # pipelines/export_skill_cards.py
-"""从 .cursor/skills/*/SKILL.md 的 front matter 抽出 name 和 description。
+"""从 .codex/skills 与 .cursor/skills 的 SKILL.md 前 20 行抽出 name 和 description。
+
+同名时 .codex 优先。
 
 再补 triggers、tools、version、conflicts。正文不进卡片，也不进向量库。
 """
@@ -8,7 +10,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from config import SKILL_CARDS_PATH, SKILLS_DIR
+from config import SKILL_CARDS_PATH, SKILL_DIRS
 
 CARD_KEYS = ("name", "description", "path", "triggers", "tools", "version", "conflicts")
 CONFLICT_KEYS = ("switch", "when", "action", "output")
@@ -84,6 +86,30 @@ REGISTRY = {
     "ue-debug-skill": {
         "triggers": ["报错", "失败", "不生效", "查不到"],
         "tools": ["get_build_error"],
+        "version": VERSION,
+        "conflicts": [],
+    },
+    "ue-dsh-handoff-skill": {
+        "triggers": ["dsh", "交接", "handoff", "unmet"],
+        "tools": [],
+        "version": VERSION,
+        "conflicts": [],
+    },
+    "ue-dsh-route-skill": {
+        "triggers": ["dsh", "编辑器", "编译", "automation"],
+        "tools": [],
+        "version": VERSION,
+        "conflicts": [],
+    },
+    "ue-dsh-session-skill": {
+        "triggers": ["dsh", "mcp__uerag", "会话开工", "verify"],
+        "tools": ["search_ue_project", "query_actor"],
+        "version": VERSION,
+        "conflicts": [],
+    },
+    "ue-dsh-verify-skill": {
+        "triggers": ["dsh", "完成", "verify", "read_contract"],
+        "tools": [],
         "version": VERSION,
         "conflicts": [],
     },
@@ -201,14 +227,27 @@ def _front_matter(text: str) -> tuple[str, str] | None:
 def build_cards() -> tuple[list[dict], list[str]]:
     cards = []
     errors = []
-    if not SKILLS_DIR.is_dir():
-        return [], [f"找不到技能目录 {SKILLS_DIR}"]
-    for path in sorted(SKILLS_DIR.glob("*/SKILL.md")):
+    seen = set()
+    if not SKILL_DIRS:
+        return [], ["找不到技能目录"]
+    for skills_dir in SKILL_DIRS:
+        cards_from_dir, dir_errors, seen = _cards_in(skills_dir, seen)
+        cards.extend(cards_from_dir)
+        errors.extend(dir_errors)
+    return cards, errors
+
+
+def _cards_in(skills_dir: Path, seen: set) -> tuple[list[dict], list[str], set]:
+    cards = []
+    errors = []
+    for path in sorted(skills_dir.glob("*/SKILL.md")):
         parsed = _front_matter(path.read_text(encoding="utf-8", errors="replace"))
         if not parsed:
             errors.append(f"{path.parent.name} 没有 front matter")
             continue
         name, description = parsed
+        if name in seen:
+            continue
         meta = REGISTRY.get(name)
         if not meta:
             errors.append(f"{name} 没有注册字段")
@@ -222,7 +261,8 @@ def build_cards() -> tuple[list[dict], list[str]]:
             "version": meta["version"],
             "conflicts": [dict(item) for item in meta["conflicts"]],
         })
-    return cards, errors
+        seen.add(name)
+    return cards, errors, seen
 
 
 def validate_skill_cards(cards: list) -> list[str]:

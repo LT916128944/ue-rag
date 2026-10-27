@@ -1,0 +1,11 @@
+{
+  "blueprint": "BP_Platform",
+  "note": "平台跳跃关卡 · 前段四块静止平台（bStartActive=false，托着 Coin_1..4 不动）+ 终点门下的静止落脚台",
+  "actors": [
+    {"name": "Platform_Front_1", "x": 200, "y": 30, "z": 40, "props": {"bStartActive": false}},
+    {"name": "Platform_Front_2", "x": 300, "y": 60, "z": 120, "props": {"bStartActive": false}},
+    {"name": "Platform_Front_3", "x": 420, "y": 60, "z": 200, "props": {"bStartActive": false}},
+    {"name": "Platform_Front_4", "x": 560, "y": 40, "z": 260, "props": {"bStartActive": false}},
+    {"name": "Platform_Goal", "x": 1050, "y": -30, "z": 340, "props": {"bStartActive": false}}
+  ]
+}

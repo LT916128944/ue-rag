@@ -9,6 +9,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 
 from core.editor_exec import exec_tool
 from core.ue_mcp_client import get_ue_mcp_client
+from config import default_pie, default_save
 
 CLIP = 200
 
@@ -25,8 +26,11 @@ def main() -> int:
     parser.add_argument("--toolset", default="", help="Toolset full name. Empty for a top-level tool.")
     parser.add_argument("--tool", required=True, help="Short tool name")
     parser.add_argument("--args", default="{}", help="JSON object of arguments")
-    parser.add_argument("--save", action="store_true", help="Allow save_assets / save_actor for this call.")
-    parser.add_argument("--pie", action="store_true", help="Allow StartPIE / StopPIE for this call.")
+    parser.add_argument("--save", dest="save", action="store_true", help="Allow save_assets / save_actor for this call (default: UE_DEFAULT_SAVE).")
+    parser.add_argument("--no-save", dest="save", action="store_false", help="Refuse save_assets / save_actor for this call.")
+    parser.add_argument("--pie", dest="pie", action="store_true", help="Allow StartPIE / StopPIE for this call (default: UE_DEFAULT_PIE).")
+    parser.add_argument("--no-pie", dest="pie", action="store_false", help="Refuse StartPIE / StopPIE for this call.")
+    parser.set_defaults(save=None, pie=None)
     ns = parser.parse_args()
 
     try:
@@ -38,7 +42,24 @@ def main() -> int:
         print(json.dumps({"ok": False, "error": "--args must be a JSON object"}, ensure_ascii=False))
         return 1
 
-    task = {"allow_writes": [ns.tool], "save": bool(ns.save), "pie": bool(ns.pie)}
+    from backends.official import official_block
+
+    blocked = official_block()
+    if blocked:
+        sys.stdout.reconfigure(encoding="utf-8")
+        print(json.dumps({
+            "ok": False,
+            "error": blocked,
+            "toolset": ns.toolset,
+            "tool": ns.tool,
+        }, ensure_ascii=False))
+        return 1
+
+    task = {
+        "allow_writes": [ns.tool],
+        "save": default_save() if ns.save is None else bool(ns.save),
+        "pie": default_pie() if ns.pie is None else bool(ns.pie),
+    }
     try:
         result = exec_tool(ns.toolset, ns.tool, arguments, task=task)
     finally:

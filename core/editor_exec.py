@@ -2,7 +2,15 @@
 """编辑器工具的唯一出口。Cursor CLI 和 LangGraph 都走这里。"""
 import random
 
-from config import UE_EXEC_MODE, allow_anim, allow_blueprint, allow_material, allow_niagara, allow_umg
+from config import (
+    UE_EXEC_MODE,
+    allow_anim,
+    allow_blueprint,
+    allow_material,
+    allow_niagara,
+    allow_umg,
+    task_flag,
+)
 from core import risk
 from core.ue_mcp_client import get_ue_mcp_client
 
@@ -126,6 +134,11 @@ def _refused(task: dict, error: str) -> dict:
 
 def exec_tool(toolset: str, tool: str, args: dict | None, *, task: dict | None = None, timeout: float | None = None) -> dict:
     """执行一个编辑器工具。返回完整 {ok, data|error}，不在这里截断。"""
+    from backends.select import official_refusal
+
+    blocked = official_refusal()
+    if blocked:
+        return {"ok": False, "error": blocked}
     task = task or {}
     args = args or {}
     # 追加的熔断拒绝：只在现有拒绝之前，不动下面的现有文案。
@@ -140,9 +153,9 @@ def exec_tool(toolset: str, tool: str, args: dict | None, *, task: dict | None =
         return _refused(task, blueprint_error)
     if tool in BLUEPRINT_EDIT_TOOLS and tool not in allow:
         return _refused(task, "write refused")
-    if tool in SAVE_TOOLS and not task.get("save"):
+    if tool in SAVE_TOOLS and not task_flag(task, "save"):
         return _refused(task, "write refused")
-    if tool in PIE_TOOLS and not task.get("pie"):
+    if tool in PIE_TOOLS and not task_flag(task, "pie"):
         return _refused(task, "write refused")
     if is_write_tool(tool) and tool not in allow:
         return _refused(task, "write refused")

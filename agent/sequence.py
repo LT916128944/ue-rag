@@ -4,7 +4,7 @@ import re
 from datetime import datetime
 from pathlib import Path
 
-from config import PROJECT_ROOT
+from config import PROJECT_ROOT, task_flag, task_policy
 
 RUNS_DIR = PROJECT_ROOT / "data" / "runs"
 
@@ -125,12 +125,229 @@ def _runnable(step: dict) -> bool:
     return bool(step.get("verify") or step.get("action"))
 
 
+_STOP_LOSS = "已尝试 3 次，Monolith 不具备该能力"
+_BP_NAME_RE = re.compile(r"(?<![A-Za-z0-9_])((?:WBP|BP)_[A-Za-z0-9_]+)(?![A-Za-z0-9_])")
+_GAME_PATH_RE = re.compile(r"/Game(?:/[A-Za-z0-9_]+)+")
+# 本地就能判定、再试也一样的解析错误。20261026-162919：空槽位 compile_blueprint
+# 三次都在进 discover 之前返回，exec_count=0，仍被写成「Monolith 不具备该能力」。
+_LOCAL_RESOLVE_ERRORS = (
+    "没有唯一的蓝图路径",
+    "蓝图路径不是唯一的一条",
+    "蓝图名和路径对不上",
+)
+
+
+def blueprint_switch_refusal(action: str) -> dict | None:
+    """写图开关关着：立刻拒绝，次数记 0。这不是试了 3 次仍不会。"""
+    from config import allow_blueprint, allow_umg
+
+    if action in ("create_widget_blueprint", "edit_widget_blueprint"):
+        if not allow_umg():
+            return {
+                "ok": False, "paused": True, "attempts": 0, "exec_count": 0,
+                "error": "UE_ALLOW_UMG 不是 true，不改控件图。",
+            }
+        return None
+    if action == "compile_blueprint" or action == "bind_blueprint":
+        if not allow_blueprint():
+            return {
+                "ok": False, "paused": True, "attempts": 0, "exec_count": 0,
+                "error": "UE_ALLOW_BLUEPRINT 不是 true，不改蓝图。",
+            }
+    return None
+
+
+def _monolith_transport(tool_name, arguments):
+    """短超时。连不上就返回错误原文，不把 60 秒默认超时当成卡住。"""
+    import httpx
+
+    from config import monolith_url
+    from core.ue_mcp_client import UEOfficialMCPClient
+
+    client = UEOfficialMCPClient()
+    client.url = monolith_url()
+    client._http.timeout = httpx.Timeout(8.0)
+    try:
+        return client.call_tool(tool_name, arguments or {})
+    except Exception as exc:
+        return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+    finally:
+        client.close()
+
+
+def _unique_blueprint_ref(step: dict) -> dict:
+    """0 个或多个同名资产都算失败，不挑第一个。"""
+    slots = step.get("slots") if isinstance(step.get("slots"), dict) else {}
+    chunks = []
+    for key in ("blueprint", "name", "asset_name", "ref_path", "asset_path", "folder_path"):
+        if slots.get(key):
+            chunks.append(str(slots[key]))
+    for key in ("ref_path", "asset_path", "asset_name", "folder_path", "title", "query"):
+        if step.get(key):
+            chunks.append(str(step[key]))
+    blob = "\n".join(chunks)
+    paths = list(dict.fromkeys(_GAME_PATH_RE.findall(blob)))
+    names = list(dict.fromkeys(_BP_NAME_RE.findall(blob)))
+    asset_paths = []
+    for path in paths:
+        leaf = path.split(".", 1)[0].rsplit("/", 1)[-1]
+        if leaf.startswith(("BP_", "WBP_")):
+            asset_paths.append(path.split(".", 1)[0])
+    asset_paths = list(dict.fromkeys(asset_paths))
+    if len(asset_paths) > 1 or len(names) > 1:
+        return {"ok": False, "error": "蓝图路径不是唯一的一条"}
+    if len(asset_paths) == 1:
+        path = asset_paths[0]
+        leaf = path.rsplit("/", 1)[-1]
+        if names and names[0] != leaf:
+            return {"ok": False, "error": "蓝图名和路径对不上"}
+        return {"ok": True, "ref": f"{path}.{leaf}", "asset_path": path, "asset_name": leaf}
+    if len(names) == 1:
+        return {"ok": True, "ref": names[0], "asset_path": names[0], "asset_name": names[0]}
+    return {"ok": False, "error": "没有唯一的蓝图路径"}
+
+
+def _monolith_namespace(action: str) -> tuple[str, str]:
+    if action in ("create_widget_blueprint", "edit_widget_blueprint"):
+        namespace = "ui"
+    else:
+        namespace = "blueprint"
+    needle = "create" if action == "create_widget_blueprint" else "compile"
+    return namespace, needle
+
+
+def _choose_action(actions, needle: str) -> str:
+    names = []
+    for item in actions or []:
+        if isinstance(item, str) and item.strip():
+            names.append(item.strip())
+        elif isinstance(item, dict) and str(item.get("name") or "").strip():
+            names.append(str(item["name"]).strip())
+    hits = [name for name in names if needle in name.lower()]
+    if len(hits) == 1:
+        return hits[0]
+    if len(names) == 1:
+        return names[0]
+    return ""
+
+
+def repair_blueprint_once(step: dict) -> dict:
+    """一次修复：解析资产，还不知道 action 才 discover，然后 describe、exec、用 exec 结果当复查。"""
+    from backends import monolith
+
+    resolved = _unique_blueprint_ref(step)
+    if not resolved.get("ok"):
+        return {"ok": False, "error": str(resolved.get("error") or "没有唯一的蓝图路径"), "exec_count": 0}
+    namespace, needle = _monolith_namespace(str(step.get("action") or ""))
+    found = monolith.discover(namespace, transport=_monolith_transport)
+    if not found.get("ok"):
+        return {"ok": False, "error": str(found.get("error") or "discover 失败"), "exec_count": 0}
+    action_name = _choose_action(found.get("actions"), needle)
+    if not action_name:
+        return {"ok": False, "error": "discover 没有返回唯一的 action", "exec_count": 0}
+    described = monolith.describe(namespace, action_name, transport=_monolith_transport)
+    if not described.get("ok"):
+        return {"ok": False, "error": str(described.get("error") or "describe 失败"), "exec_count": 0}
+    params = {
+        "asset_path": resolved["asset_path"],
+        "path": resolved["asset_path"],
+        "blueprint": resolved["ref"],
+        "ref_path": resolved["ref"],
+    }
+    result = monolith.exec(
+        namespace, action_name, params,
+        task={"allow_writes": [action_name], **task_policy()},
+        transport=_monolith_transport,
+    )
+    if not result.get("ok"):
+        return {"ok": False, "error": _error_text(result) or "exec 失败", "exec_count": 1}
+    data = result.get("data") if isinstance(result.get("data"), dict) else {}
+    if data.get("compiled") is False or data.get("verified") is False:
+        return {"ok": False, "error": str(data.get("error") or "复查未通过"), "exec_count": 1}
+    return {
+        "ok": True,
+        "summary": "复查通过",
+        "index_note": "复查通过",
+        "ref": resolved["ref"],
+        "exec_count": 1,
+    }
+
+
+def _local_resolve_error(result: dict) -> str:
+    """解析失败且一次 exec 都没有：原样返回，不套止损句，也不再重试。"""
+    if int((result or {}).get("exec_count") or 0) != 0:
+        return ""
+    err = str((result or {}).get("error") or "")
+    if any(token in err for token in _LOCAL_RESOLVE_ERRORS):
+        return err
+    return ""
+
+
+def repair_blueprint(step: dict, *, attempts: int = 3) -> dict:
+    """同一张蓝图、同一个目标最多 attempts 次。开关关着则 0 次。
+
+    路径解析失败不算 Monolith 尝试：那种错误不进 discover，重试结果不变。
+    """
+    action = str((step or {}).get("action") or "")
+    refused = blueprint_switch_refusal(action)
+    if refused:
+        return refused
+    from backends.select import current_backend
+
+    if current_backend() != "monolith":
+        return {
+            "ok": False, "attempts": 0, "exec_count": 0,
+            "error": "UE_EDITOR_BACKEND 不是 monolith，不走这 3 次。",
+        }
+    last = {"ok": False, "error": "没有执行", "exec_count": 0}
+    total_exec = 0
+    used = 0
+    for used in range(1, max(1, int(attempts)) + 1):
+        last = repair_blueprint_once(step)
+        total_exec += int(last.get("exec_count") or 0)
+        if last.get("ok"):
+            last["attempts"] = used
+            last["exec_count"] = total_exec
+            return last
+        local = _local_resolve_error(last)
+        if local:
+            return {
+                "ok": False,
+                "error": local,
+                "summary": local,
+                "attempts": 1,
+                "exec_count": 0,
+            }
+    err = str(last.get("error") or "")
+    text = _STOP_LOSS if int(attempts) == 3 else f"已尝试 {int(attempts)} 次，Monolith 不具备该能力"
+    if err:
+        text = f"{text}：{err}"
+    return {
+        "ok": False,
+        "error": text,
+        "summary": text,
+        "attempts": used,
+        "exec_count": total_exec,
+    }
+
+
 def _run_action(step: dict) -> dict:
     from core.editor_exec import exec_tool
     from core.judge import judge
 
-    task = {"allow_writes": ["create", "add_to_scene_from_asset"], "save": False, "pie": False}
+    task = {"allow_writes": ["create", "add_to_scene_from_asset"], **task_policy()}
     action = step.get("action")
+    if action in ("compile_blueprint", "bind_blueprint", "create_widget_blueprint", "edit_widget_blueprint"):
+        from backends.select import current_backend
+
+        if current_backend() == "monolith":
+            return repair_blueprint(step)
+    if action == "launch_editor":
+        return _launch_editor(step)
+    if action == "create_level":
+        return _create_level(step)
+    if action == "open_level":
+        return _open_level(step)
     if action == "create_blueprint":
         asset_name = str(step.get("asset_name") or "")
         parent = _script_parent(asset_name, str(step.get("parent") or ""))
@@ -182,7 +399,7 @@ def _run_action(step: dict) -> dict:
         # 场景里已有同名实例时，放在它旁边 50 uu，不叠一起也不贴地（拾取流程同款约定）
         location = {"x": 0, "y": 0, "z": 100}
         snap_to_ground = True
-        place_note = "已放入当前关卡，未保存"
+        place_note = "已放入当前关卡"
         name = str(step["actor_name"])
         found = exec_tool(
             _SCENE,
@@ -202,7 +419,7 @@ def _run_action(step: dict) -> dict:
                 x, y, z = anchor["location"]
                 location = {"x": x + 50.0, "y": y, "z": z}
                 snap_to_ground = False
-                place_note = f"已放入当前关卡，与已有同名实例({len(refs)} 个)错开 50 uu，未保存"
+                place_note = f"已放入当前关卡，与已有同名实例({len(refs)} 个)错开 50 uu"
         placed = exec_tool(
             "editor_toolset.toolsets.scene.SceneTools",
             "add_to_scene_from_asset",
@@ -215,7 +432,10 @@ def _run_action(step: dict) -> dict:
             task=task,
         )
         if placed.get("ok"):
-            return {"ok": True, "id": step["actor_name"], "index_note": place_note}
+            saved = _save_level(step)
+            if not saved.get("ok"):
+                return {"ok": False, "id": step["actor_name"], "error": str(saved.get("error") or "关卡保存失败")}
+            return {"ok": True, "id": step["actor_name"], "index_note": f"{place_note}，{saved.get('note')}"}
         return {"ok": False, "id": step["actor_name"], "error": str(placed.get("error") or "放进场景失败")}
     if action == "bind_slot":
         ref = str(step.get("ref_path") or step.get("asset_path") or "")
@@ -239,12 +459,22 @@ def _run_action(step: dict) -> dict:
         return _query_actor(step)
     if action == "run_automation_test":
         return _run_automation(step)
+    if action == "implement_shooter":
+        return _implement_shooter(step)
+    if action == "apply_spec":
+        return _apply_spec(step)
+    if action == "check_platform_hud":
+        return _check_platform_hud(step)
     if action == "set_scalar_param":
         return _set_scalar_param(step)
     if action == "query_material":
         return _query_material(step)
     if action == "place_batch":
         return _place_batch(step)
+    if action == "remove_batch":
+        return _remove_batch(step)
+    if action == "create_widget_blueprint":
+        return _create_widget_blueprint(step)
     if action == "probe_move":
         return _probe_move(step)
     if action == "probe_look":
@@ -260,6 +490,41 @@ def _run_action(step: dict) -> dict:
         step["action"] = "bind_slot"
         return _run_action(step)
     return {"ok": False, "error": f"未知动作 {action}"}
+
+
+def _launch_editor(step: dict) -> dict:
+    """只把编辑器进程拉起来并等 MCP 端口。不编译、不改场景、不保存、不进 PIE。
+    「启动 UE 编辑器，其他啥也别干」这类句子走这里，不再借 compile_project 的空转。"""
+    from core.editor_launch import editor_exe, editor_running, ensure_editor, launch_editor
+
+    del step
+    was_open = editor_running()
+    if not was_open:
+        exe = editor_exe()
+        if not exe.is_file():
+            text = f"找不到 {exe}"
+            return {"ok": False, "error": text, "summary": text, "index_note": text}
+        launched = launch_editor()
+        if not launched.get("ok"):
+            text = str(launched.get("note") or "启动编辑器失败")
+            return {"ok": False, "error": text, "summary": text, "index_note": text}
+    brought = ensure_editor()
+    if not brought.get("ok"):
+        text = str(brought.get("note") or "编辑器没有起来")
+        return {"ok": False, "error": text, "summary": text, "index_note": text}
+    note = "编辑器已在运行" if was_open else "已启动编辑器"
+    note += "，MCP 已连通。未编译、未改场景、未保存、未进 PIE。"
+    judge = {"ok": True, "kind": "editor_assert", "summary": note, "errors": []}
+    return {
+        "ok": True,
+        "id": "launch_editor",
+        "summary": note,
+        "index_note": note,
+        "test": judge,
+        "judge_kind": "editor_assert",
+        "save": False,
+        "pie": False,
+    }
 
 
 def _actor_refs(data) -> list[str]:
@@ -291,6 +556,40 @@ _PICKUP_KEYS = ("bAllowPickup", "bCanBePicked", "Tags")
 
 def _read_task() -> dict:
     return {"allow_writes": [], "save": False, "pie": False}
+
+
+def _save_level(step: dict) -> dict:
+    """写场景之后按任务策略落盘当前关卡。save 关掉时直接返回 ok，附一句未保存。"""
+    from core.editor_exec import exec_tool
+
+    if not task_flag(step, "save"):
+        return {"ok": True, "saved": False, "note": "未保存"}
+    level = exec_tool(_SCENE, "get_current_level", {}, task=_read_task())
+    data = level.get("data") if isinstance(level, dict) else None
+    if isinstance(data, str):
+        try:
+            data = json.loads(data)
+        except json.JSONDecodeError:
+            data = None
+    level_path = ""
+    if isinstance(data, dict):
+        inner = data.get("returnValue") if "returnValue" in data else data
+        if isinstance(inner, str):
+            level_path = inner
+        elif isinstance(inner, dict):
+            level_path = str(inner.get("returnValue") or "")
+    if not level_path:
+        return {"ok": False, "saved": False,
+                "error": "没有当前关卡路径，关卡未保存（改动还在内存里，未落盘）"}
+    saved = exec_tool(
+        _ASSET_TOOLS, "save_assets",
+        {"asset_paths": [level_path]},
+        task={"allow_writes": [], **task_policy(save=True, pie=False)},
+    )
+    if not saved.get("ok"):
+        return {"ok": False, "saved": False,
+                "error": f"关卡保存失败：{saved.get('error') or '未存上'}"}
+    return {"ok": True, "saved": True, "note": f"已保存当前关卡 {level_path}"}
 
 
 def _as_bool(value):
@@ -433,7 +732,9 @@ def _read_location(ref: str, task: dict) -> dict:
 
 
 def _script_parent(asset_name: str, parent: str) -> str:
-    """蓝图父类用反射名。ATestActor 是 /Script/AIAgentProject.TestActor。"""
+    """蓝图父类用反射名。模块名来自 project_context。"""
+    from config import script_object_path
+
     text = (parent or "").strip()
     if text.startswith("/Script/") and "." in text:
         module, name = text.rsplit(".", 1)
@@ -445,7 +746,516 @@ def _script_parent(asset_name: str, parent: str) -> str:
         bare = bare[1:]
     if not bare:
         return ""
-    return f"/Script/AIAgentProject.{bare}"
+    return script_object_path(bare)
+
+
+_WIDGET_PARENT = "/Script/UMG.UserWidget"
+_WIDGET_CLASS = "/Script/UMG.WidgetBlueprint"
+
+
+def _named_asset_present(folder: str, asset: str, asset_path: str, class_path: str) -> dict:
+    """按给定资产类复查。找不到是 present=False，查询失败才 ok=False。"""
+    from core.editor_exec import exec_tool
+
+    found = exec_tool(
+        "editor_toolset.toolsets.asset.AssetTools",
+        "find_assets",
+        {
+            "folder_path": folder or "/Game",
+            "name": asset,
+            "asset_type": {"refPath": class_path},
+            "recursive": False,
+        },
+        task=_read_task(),
+    )
+    if not found.get("ok"):
+        err = str(found.get("error") or "查资产失败")
+        if _conn_error(err):
+            return {"ok": False, "error": f"编辑器 MCP 连不上：{err}"}
+        return {"ok": False, "error": err}
+    refs = _actor_refs(found.get("data"))
+    wanted = asset_path.rstrip("/")
+    for ref in refs:
+        short = ref.split(".", 1)[0]
+        if short == wanted or ref == wanted or short.endswith("/" + asset):
+            return {"ok": True, "present": True}
+    return {"ok": True, "present": False}
+
+
+def _widget_parent_ref(raw: str) -> str:
+    """User Widget 收到 UMG。其余 /Script 路径原样，短类名用当前工程模块。"""
+    from config import script_object_path
+
+    text = str(raw or "").strip()
+    if not text or text.lower().replace(" ", "") in {"userwidget", "user widget"}:
+        return _WIDGET_PARENT
+    if text.startswith("/Script/"):
+        return text
+    return script_object_path(text)
+
+
+def _create_widget_blueprint(step: dict) -> dict:
+    """按步骤里的目录和名字新建 Widget Blueprint。不改控件图。资产本身保存这一份。"""
+    from config import allow_umg
+    from core.editor_exec import exec_tool
+
+    if not allow_umg():
+        return {
+            "ok": False,
+            "paused": True,
+            "error": "UE_ALLOW_UMG 不是 true，不新建 Widget Blueprint。",
+        }
+    slots = step.get("slots") if isinstance(step.get("slots"), dict) else {}
+    folder = str(step.get("folder_path") or slots.get("folder_path") or slots.get("folder") or "").strip().rstrip("/")
+    name = str(step.get("asset_name") or slots.get("asset_name") or slots.get("name") or "").strip()
+    parent = _widget_parent_ref(str(step.get("parent") or slots.get("parent") or ""))
+    if not (folder == "/Game" or folder.startswith("/Game/")) or not name.startswith(("WBP_", "BP_")):
+        return {"ok": False, "error": "没有唯一的 Widget 路径"}
+    package = f"{folder}/{name}"
+    ref = f"{package}.{name}"
+    present = _named_asset_present(folder, name, package, _WIDGET_CLASS)
+    if not present.get("ok"):
+        return present
+    note = f"{ref}（已存在，不重复新建）" if present.get("present") else ref
+    write = {"allow_writes": ["create", "set_parent"], **task_policy()}
+    if not present.get("present"):
+        created = exec_tool(
+            "editor_toolset.toolsets.blueprint.BlueprintTools",
+            "create",
+            {
+                "folder_path": folder,
+                "asset_name": name,
+                "asset_type": {"refPath": parent},
+            },
+            task=write,
+        )
+        if not created.get("ok"):
+            err = str(created.get("error") or "")
+            if not any(token in err.lower() for token in ("exist", "already", "已存在")):
+                return {"ok": False, "id": name, "error": err or "创建 Widget Blueprint 失败"}
+            note = f"{ref}（已存在，不重复新建）"
+        parented = exec_tool(
+            "editor_toolset.toolsets.blueprint.BlueprintTools",
+            "set_parent",
+            {
+                "blueprint": {"refPath": ref},
+                "parent_class": {"refPath": parent},
+            },
+            task=write,
+        )
+        if not parented.get("ok"):
+            return {
+                "ok": False,
+                "id": name,
+                "error": f"资产已写到 {ref}。父类 {parent} 没设上：{parented.get('error')}",
+            }
+    again = _named_asset_present(folder, name, package, _WIDGET_CLASS)
+    if not again.get("ok"):
+        return again
+    if not again.get("present"):
+        plain = _named_asset_present(folder, name, package, "/Script/Engine.Blueprint")
+        if plain.get("present"):
+            return {
+                "ok": False,
+                "id": name,
+                "error": f"{ref} 建成的是普通蓝图，不是 Widget Blueprint。控件图未改。",
+            }
+        return {"ok": False, "id": name, "error": f"复查没有找到 Widget Blueprint {ref}"}
+    saved = exec_tool(
+        _ASSET_TOOLS, "save_assets",
+        {"asset_paths": [package]},
+        task={"allow_writes": [], "save": True, "pie": False},
+    )
+    if not saved.get("ok"):
+        return {
+            "ok": False,
+            "id": name,
+            "error": f"{name} 已在编辑器里，保存这份资产失败：{saved.get('error') or '未存上'}。",
+        }
+    return {"ok": True, "id": name, "ref": ref, "index_note": f"{note}；已保存这份资产"}
+
+
+def _level_template_path() -> str:
+    """复制关卡的源模板。UE_LEVEL_TEMPLATE 优先，否则用 project_context 的当前关卡。没有就空。"""
+    import os
+
+    from config import project_level_package
+
+    text = os.environ.get("UE_LEVEL_TEMPLATE", "").strip().replace("\\", "/").rstrip("/")
+    if text:
+        return text.split(".", 1)[0]
+    return project_level_package()
+
+
+def _as_present(result) -> bool:
+    """exists 这类只回布尔的原语：data / data.returnValue / JSON 字符串都能认，读不出当 False。"""
+    data = result.get("data") if isinstance(result, dict) else result
+    if isinstance(data, dict) and "returnValue" in data:
+        data = data["returnValue"]
+    if isinstance(data, str):
+        return data.strip().lower() in ("true", "1", "yes")
+    return bool(data)
+
+
+def _current_level_text(result) -> str:
+    """get_current_level 的读数：字符串，或 dict 里的某个路径键。读不出返回空串。"""
+    data = result.get("data") if isinstance(result, dict) else None
+    if isinstance(data, dict) and "returnValue" in data:
+        data = data["returnValue"]
+    if isinstance(data, str):
+        return data
+    if isinstance(data, dict):
+        for key in ("path", "level_path", "package_path", "name"):
+            if data.get(key):
+                return str(data[key])
+        return ""
+    return "" if data is None else str(data)
+
+
+def _level_matches(text: str, package: str, name: str) -> bool:
+    """当前关卡是不是目标关卡：先比包路径（去掉 .Object / :PersistentLevel 尾巴），
+    再按词边界比关卡名——直接拿子串比会让 L_NewTest 被 L_NewTest2 顶上。"""
+    normalized = str(text or "").replace("\\", "/").strip()
+    if not normalized:
+        return False
+    head = normalized.split(":", 1)[0]
+    folder, _, tail = head.rpartition("/")
+    if "." in tail:
+        tail = tail.split(".", 1)[0]
+        head = f"{folder}/{tail}" if folder else tail
+    if package and head == package:
+        return True
+    if name and head.rsplit("/", 1)[-1] == name:
+        return True
+    if not name:
+        return False
+    return re.search(rf"(?<![A-Za-z0-9_]){re.escape(name)}(?![A-Za-z0-9_])", normalized) is not None
+
+
+def _monolith_payload(result: dict) -> dict:
+    data = result.get("data") if isinstance(result, dict) else None
+    if isinstance(data, str):
+        try:
+            data = json.loads(data)
+        except json.JSONDecodeError:
+            return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _error_text(result: dict) -> str:
+    err = result.get("error") if isinstance(result, dict) else ""
+    if isinstance(err, dict):
+        return str(err.get("message") or err.get("error") or err)
+    return str(err or "")
+
+
+def _level_absent(error: str) -> bool:
+    """索引里没有这份资产。别的失败（连不上、子系统没有）不能当成「不存在」。"""
+    low = error.lower()
+    return (
+        "not found" in low or "does not exist" in low
+        or "未找到" in error or "不存在" in error
+    )
+
+
+def _level_collision(error: str) -> bool:
+    if _level_absent(error):
+        return False
+    low = error.lower()
+    return "already" in low or "exist" in low or "已存在" in error
+
+
+def _level_done(name: str, package: str, note: str) -> dict:
+    summary = f"{note}；已成为当前关卡。"
+    judge = {"ok": True, "kind": "editor_assert", "summary": summary, "errors": []}
+    return {
+        "ok": True,
+        "id": name,
+        "summary": summary,
+        "index_note": summary,
+        "ref": package,
+        "level_path": package,
+        "in_level": True,
+        "test": judge,
+        "judge_kind": "editor_assert",
+    }
+
+
+def _create_level_monolith(package: str, name: str, template: str, write: dict) -> dict:
+    """monolith 没有通用的关卡复制。先用 project.get_asset_details 查有没有，
+    没有就 editor.create_empty_map（会自己落盘），再按需要 editor.load_level。
+    不调用官方 exec_tool，也不在被拒绝之后改去调另一边。"""
+    from backends.monolith import exec as monolith_exec
+
+    probed = monolith_exec(
+        "project", "get_asset_details", {"asset_path": package}, task=_read_task(),
+        transport=_monolith_transport,
+    )
+    if probed.get("ok"):
+        present = True
+    else:
+        err = _error_text(probed)
+        if not _level_absent(err):
+            return {
+                "ok": False,
+                "id": name,
+                "error": f"查关卡 {package} 是否已存在失败：{err or '没有返回'}",
+            }
+        present = False
+
+    note = f"{package}（已存在，不重复新建）" if present else ""
+    if not present:
+        if template == package:
+            return {"ok": False, "id": name, "error": f"模板关卡就是 {package}，没有可复制的新关卡。"}
+        if not task_flag(write, "save"):
+            return {"ok": False, "id": name, "error": f"关卡资产 {package} 落盘失败：save 未放行"}
+        created = monolith_exec(
+            "editor",
+            "create_empty_map",
+            {"path": package, "open": True, "dirty_policy": "discard"},
+            task=write,
+            transport=_monolith_transport,
+        )
+        if not created.get("ok"):
+            err = _error_text(created)
+            if not _level_collision(err):
+                return {
+                    "ok": False,
+                    "id": name,
+                    "error": f"新建关卡 {package} 失败：{err or '没有返回'}",
+                }
+            note = f"{package}（已存在，不重复新建）"
+        else:
+            data = _monolith_payload(created)
+            world = str(data.get("current_world") or "")
+            note = f"已新建空白关卡 {package}"
+            if _as_bool(data.get("opened")) is True and _level_matches(world, package, name):
+                return _level_done(name, package, note)
+
+    if not task_flag(write, "save"):
+        return {"ok": False, "id": name, "error": f"关卡资产 {package} 落盘失败：save 未放行"}
+    loaded = monolith_exec(
+        "editor",
+        "load_level",
+        {"path": package, "dirty_policy": "discard"},
+        task=write,
+        transport=_monolith_transport,
+    )
+    if not loaded.get("ok"):
+        return {
+            "ok": False,
+            "id": name,
+            "error": f"关卡 {package} 加载失败：{_error_text(loaded) or '没有返回'}",
+        }
+    data = _monolith_payload(loaded)
+    flag = _as_bool(data.get("loaded"))
+    if flag is None:
+        flag = _as_bool(data.get("ok"))
+    if flag is not True:
+        return {
+            "ok": False,
+            "id": name,
+            "error": f"关卡 {package} 加载失败：{data.get('message') or '没有返回'}",
+        }
+    world = str(data.get("current_world") or data.get("path") or "")
+    if world and not _level_matches(world, package, name):
+        return {
+            "ok": False,
+            "id": name,
+            "error": f"加载后当前关卡是 {world}，不是 {package}。",
+        }
+    return _level_done(name, package, note)
+
+
+def _create_level(step: dict) -> dict:
+    """新建关卡并切过去。official：exists → duplicate(模板) → save_assets → load_level →
+    get_current_level。monolith：get_asset_details → create_empty_map → 按需要 load_level。
+    已存在就跳过新建（幂等，note 写明不重复新建）。
+    任一步失败都返回 {ok: False, error: 哪一步}，不猜、不静默。"""
+    from agent.plan_windows import resolve_level
+
+    slots = step.get("slots") if isinstance(step.get("slots"), dict) else {}
+    raw = (
+        step.get("level_path") or step.get("package_path") or step.get("level_name")
+        or step.get("level") or slots.get("level") or step.get("asset_name") or ""
+    )
+    found = resolve_level(raw)
+    if not found.get("ok"):
+        return {"ok": False, "error": str(found.get("error") or "缺少关卡名，不猜。")}
+    package = str(found["level_path"])
+    name = str(found["level_name"])
+    template = _level_template_path()
+    if not template:
+        return {"ok": False, "id": name, "error": "没有关卡模板。设置 UE_LEVEL_TEMPLATE，或先导出 project_context 的 level_name。"}
+    # save 跟随 task_policy()：落盘是这一步的交付，关掉 save 就让它在保存那一步如实失败。
+    write = {"allow_writes": ["duplicate", "save_assets", "load_level"], **task_policy()}
+    from backends.select import current_backend
+
+    if current_backend() == "monolith":
+        return _create_level_monolith(package, name, template, write)
+
+    from core.editor_exec import exec_tool
+
+    probed = exec_tool(
+        _ASSET_TOOLS, "exists", {"path": package}, task=_read_task(),
+    )
+    if not probed.get("ok"):
+        return {
+            "ok": False,
+            "id": name,
+            "error": f"查关卡 {package} 是否已存在失败：{probed.get('error') or '没有返回'}",
+        }
+    note = f"{package}（已存在，不重复新建）" if _as_present(probed) else ""
+    if not note:
+        if template == package:
+            return {"ok": False, "id": name, "error": f"模板关卡就是 {package}，没有可复制的新关卡。"}
+        copied = exec_tool(
+            _ASSET_TOOLS, "duplicate", {"path": template, "new_path": package}, task=write,
+        )
+        if not copied.get("ok"):
+            err = str(copied.get("error") or "")
+            if any(token in err.lower() for token in ("exist", "already", "已存在")):
+                note = f"{package}（已存在，不重复新建）"
+            else:
+                return {
+                    "ok": False,
+                    "id": name,
+                    "error": f"从模板 {template} 复制关卡 {package} 失败：{err or '没有返回'}",
+                }
+        else:
+            note = f"已从模板 {template} 复制出 {package}"
+
+    saved = exec_tool(_ASSET_TOOLS, "save_assets", {"asset_paths": [package]}, task=write)
+    if not saved.get("ok"):
+        return {
+            "ok": False,
+            "id": name,
+            "error": f"关卡资产 {package} 落盘失败：{saved.get('error') or '没有返回'}",
+        }
+
+    loaded = exec_tool(_SCENE, "load_level", {"level_path": package}, task=write)
+    if not loaded.get("ok"):
+        return {
+            "ok": False,
+            "id": name,
+            "error": f"关卡 {package} 加载失败：{loaded.get('error') or '没有返回'}",
+        }
+
+    current = exec_tool(_SCENE, "get_current_level", {}, task=_read_task())
+    if not current.get("ok"):
+        return {
+            "ok": False,
+            "id": name,
+            "error": f"复查当前关卡失败：{current.get('error') or '没有返回'}",
+        }
+    text = _current_level_text(current)
+    if not _level_matches(text, package, name):
+        return {
+            "ok": False,
+            "id": name,
+            "error": f"加载后当前关卡是 {text or '读不出'}，不是 {package}。",
+        }
+    summary = f"{note}；已成为当前关卡。"
+    judge = {"ok": True, "kind": "editor_assert", "summary": summary, "errors": []}
+    return {
+        "ok": True,
+        "id": name,
+        "summary": summary,
+        "index_note": summary,
+        "ref": package,
+        "level_path": package,
+        "in_level": True,
+        "test": judge,
+        "judge_kind": "editor_assert",
+    }
+
+
+def _level_step_target(step: dict) -> dict:
+    from agent.plan_windows import resolve_level
+
+    slots = step.get("slots") if isinstance(step.get("slots"), dict) else {}
+    raw = (
+        step.get("level_path") or step.get("package_path") or step.get("level_name")
+        or step.get("level") or slots.get("level") or step.get("asset_name") or ""
+    )
+    return resolve_level(raw)
+
+
+def _level_miss(name: str, text: str) -> dict:
+    judge = {"ok": False, "kind": "editor_assert", "summary": text, "errors": [{"file": "", "line": 0, "message": text}]}
+    return {
+        "ok": False,
+        "id": name,
+        "error": text,
+        "summary": text,
+        "index_note": text,
+        "test": judge,
+        "judge_kind": "editor_assert",
+        "in_level": False,
+        "pie": False,
+        "save": False,
+    }
+
+
+def _load_existing_level(package: str, name: str) -> dict:
+    """只加载已有关卡。不存在就失败，不复制、不新建。"""
+    from backends.monolith import exec as monolith_exec
+    from backends.select import current_backend
+
+    write = {"allow_writes": ["load_level"], **task_policy(save=True, pie=False)}
+    if current_backend() == "monolith":
+        probed = monolith_exec(
+            "project", "get_asset_details", {"asset_path": package}, task=_read_task(),
+            transport=_monolith_transport,
+        )
+        if not probed.get("ok"):
+            err = _error_text(probed)
+            if _level_absent(err):
+                return _level_miss(name, f"关卡 {package} 不存在，不新建。")
+            return _level_miss(name, f"查关卡 {package} 是否已存在失败：{err or '没有返回'}")
+        loaded = monolith_exec(
+            "editor", "load_level", {"path": package, "dirty_policy": "refuse"},
+            task=write, transport=_monolith_transport,
+        )
+        if not loaded.get("ok"):
+            return _level_miss(name, f"关卡 {package} 加载失败：{_error_text(loaded) or '没有返回'}")
+        data = _monolith_payload(loaded)
+        flag = _as_bool(data.get("loaded"))
+        if flag is None:
+            flag = _as_bool(data.get("ok"))
+        if flag is not True:
+            return _level_miss(name, f"关卡 {package} 加载失败：{data.get('message') or '没有返回'}")
+        world = str(data.get("current_world") or data.get("path") or "")
+        if world and not _level_matches(world, package, name):
+            return _level_miss(name, f"加载后当前关卡是 {world}，不是 {package}。")
+        return _level_done(name, package, f"已打开 {package}")
+
+    from core.editor_exec import exec_tool
+
+    probed = exec_tool(_ASSET_TOOLS, "exists", {"path": package}, task=_read_task())
+    if not probed.get("ok"):
+        return _level_miss(name, f"查关卡 {package} 是否已存在失败：{probed.get('error') or '没有返回'}")
+    if not _as_present(probed):
+        return _level_miss(name, f"关卡 {package} 不存在，不新建。")
+    loaded = exec_tool(_SCENE, "load_level", {"level_path": package}, task=write)
+    if not loaded.get("ok"):
+        return _level_miss(name, f"关卡 {package} 加载失败：{loaded.get('error') or '没有返回'}")
+    current = exec_tool(_SCENE, "get_current_level", {}, task=_read_task())
+    if not current.get("ok"):
+        return _level_miss(name, f"复查当前关卡失败：{current.get('error') or '没有返回'}")
+    text = _current_level_text(current)
+    if not _level_matches(text, package, name):
+        return _level_miss(name, f"加载后当前关卡是 {text or '读不出'}，不是 {package}。")
+    return _level_done(name, package, f"已打开 {package}")
+
+
+def _open_level(step: dict) -> dict:
+    """打开已有关卡。没有就停，不改成新建。"""
+    found = _level_step_target(step)
+    if not found.get("ok"):
+        text = str(found.get("error") or "缺少关卡名，不猜。")
+        return _level_miss("", text)
+    return _load_existing_level(str(found["level_path"]), str(found["level_name"]))
 
 
 def _blueprint_present(folder: str, asset: str, asset_path: str) -> dict:
@@ -499,7 +1309,7 @@ def _ensure_blueprint(slot: dict) -> dict:
     if present.get("present"):
         return {"ok": True, "note": f"{ref} 已存在"}
     parent = _script_parent(asset, str(slot.get("parent") or ""))
-    task = {"allow_writes": ["create", "set_parent"], "save": False, "pie": False}
+    task = {"allow_writes": ["create", "set_parent"], **task_policy()}
     created = exec_tool(
         "editor_toolset.toolsets.blueprint.BlueprintTools",
         "create",
@@ -542,7 +1352,7 @@ def _place_one(slot: dict, location: tuple[float, float, float], snap: bool) -> 
     ensured = _ensure_blueprint(slot)
     if not ensured.get("ok"):
         return ensured
-    task = {"allow_writes": ["add_to_scene_from_asset"], "save": False, "pie": False}
+    task = {"allow_writes": ["add_to_scene_from_asset"], **task_policy()}
     placed = exec_tool(
         _SCENE,
         "add_to_scene_from_asset",
@@ -555,7 +1365,10 @@ def _place_one(slot: dict, location: tuple[float, float, float], snap: bool) -> 
         task=task,
     )
     if placed.get("ok"):
-        return {"ok": True, "note": f"已放入 {name}，未保存"}
+        saved = _save_level(slot)
+        if not saved.get("ok"):
+            return {"ok": False, "error": str(saved.get("error") or "关卡保存失败")}
+        return {"ok": True, "note": f"已放入 {name}，{saved.get('note')}"}
     err = str(placed.get("error") or "放进场景失败")
     if _conn_error(err):
         return {"ok": False, "error": f"编辑器 MCP 连不上：{err}"}
@@ -563,7 +1376,7 @@ def _place_one(slot: dict, location: tuple[float, float, float], snap: bool) -> 
 
 
 def _place_pair(step: dict) -> dict:
-    """缺的实例才放。两者都已在关卡里则不动。不保存，不 PIE。"""
+    """缺的实例才放。两者都已在关卡里则不动。放完按任务策略保存关卡。"""
     task = _read_task()
     picker = step.get("picker") or {}
     target = step.get("target") or {}
@@ -602,7 +1415,10 @@ def _place_pair(step: dict) -> dict:
         notes.append(placed["note"])
     else:
         notes.append("两个实例都已在关卡里，不移动")
-    return {"ok": True, "index_note": "；".join(notes) + "。未保存"}
+    saved = _save_level(step)
+    if not saved.get("ok"):
+        return {"ok": False, "error": str(saved.get("error") or "关卡保存失败")}
+    return {"ok": True, "index_note": "；".join(notes) + f"。{saved.get('note')}"}
 
 
 _SPEED_BASE = 100.0
@@ -641,7 +1457,7 @@ def _pawn_stem(query: str) -> str:
     bp_names = [name for name in _BP_RE.findall(query)]
     if len(bp_names) == 1:
         return bp_names[0]
-    return fallback or "TestPawn"
+    return fallback
 
 
 def _source_move_speed(stem: str) -> float | None:
@@ -682,12 +1498,14 @@ def _live_move_speed(ref: str) -> float | None:
 
 
 def _probe_play(step: dict) -> dict:
-    """进入 PIE。移速句子再核对 PIE 里的 MoveSpeed 是否等于源码，以及是否达到所说的倍数。不保存。"""
+    """进入 PIE。移速句子再核对 PIE 里的 MoveSpeed 是否等于源码，以及是否达到所说的倍数。"""
     from core.editor_exec import exec_tool
 
     query = str(step.get("query") or "")
     stem = _pawn_stem(query)
-    pie = {"allow_writes": [], "save": False, "pie": True}
+    if not stem:
+        return {"ok": False, "error": "句子里对不上唯一的 Pawn"}
+    pie = {"allow_writes": [], **task_policy(save=False, pie=True)}
     app = "EditorToolset.EditorAppToolset"
     started = exec_tool(
         app,
@@ -723,18 +1541,20 @@ def _probe_play(step: dict) -> dict:
 
 
 def _probe_look(step: dict) -> dict:
-    """镜头自动化测试。句子要求 PIE 时再进一次，确认场景里有 Pawn，然后停掉。不保存。"""
+    """镜头自动化测试。句子要求 PIE 时再进一次，确认场景里有 Pawn，然后停掉。"""
     from core.editor_exec import exec_tool
     from core.judge import judge
 
-    filt = str(step.get("automation_filter") or "AIAgent.Pawn.Look")
+    filt = str(step.get("automation_filter") or "").strip()
+    if not filt:
+        return {"ok": False, "error": "没有 Automation 过滤器"}
     result = judge({"kind": "automation", "filter": filt}, {"allow_writes": [], "save": False, "pie": False})
     if not result.get("ok"):
         return {"ok": False, "error": str(result.get("summary") or "镜头测试没过")}
     note = str(result.get("summary") or "镜头测试通过")
     if not step.get("pie"):
         return {"ok": True, "index_note": note}
-    pie = {"allow_writes": [], "save": False, "pie": True}
+    pie = {"allow_writes": [], **task_policy(save=False, pie=True)}
     app = "EditorToolset.EditorAppToolset"
     started = exec_tool(
         app,
@@ -745,19 +1565,24 @@ def _probe_look(step: dict) -> dict:
     if not started.get("ok"):
         return {"ok": False, "error": str(started.get("error") or "PIE 没有启动")}
     try:
-        found = _find_named("TestPawn", {"allow_writes": [], "save": False, "pie": False})
+        stem = _pawn_stem(str(step.get("query") or ""))
+        if not stem:
+            return {"ok": False, "error": "句子里对不上唯一的 Pawn"}
+        found = _find_named(stem, {"allow_writes": [], "save": False, "pie": False})
         if not found.get("ok") or found.get("missing"):
-            return {"ok": False, "error": str(found.get("error") or "PIE 里没有 TestPawn")}
-        return {"ok": True, "index_note": note + "，PIE 里有 TestPawn"}
+            return {"ok": False, "error": str(found.get("error") or f"PIE 里没有 {stem}")}
+        return {"ok": True, "index_note": note + f"，PIE 里有 {stem}"}
     finally:
         exec_tool(app, "StopPIE", {}, task=pie)
 
 
 def _probe_move(step: dict) -> dict:
-    """编译之后跑移动自动化测试。不保存关卡。"""
+    """编译之后跑移动自动化测试。"""
     from core.judge import judge
 
-    filt = str(step.get("automation_filter") or "AIAgent.Pawn.Wasd")
+    filt = str(step.get("automation_filter") or "").strip()
+    if not filt:
+        return {"ok": False, "error": "没有 Automation 过滤器"}
     spec = {}
     for item in step.get("verify") or []:
         if isinstance(item, dict) and item.get("kind") == "automation":
@@ -772,7 +1597,7 @@ def _probe_move(step: dict) -> dict:
 
 
 def _move_actor(step: dict) -> dict:
-    """按已经解析好的名字和坐标移动。不进模型，不保存。写完再读位置。"""
+    """按已经解析好的名字和坐标移动。不进模型。写完再读位置，按任务策略保存关卡。"""
     from core.editor_exec import exec_tool
 
     slots = step.get("slots") if isinstance(step.get("slots"), dict) else {}
@@ -799,7 +1624,7 @@ def _move_actor(step: dict) -> dict:
 
         x, y, z = before["location"]
         capture_props(str(step.get("run_id")), ref, {"location": {"x": x, "y": y, "z": z}}, kind="location")
-    write = {"allow_writes": ["set_actor_transform"], "save": False, "pie": False}
+    write = {"allow_writes": ["set_actor_transform"], **task_policy()}
     moved = exec_tool(
         _ACTOR,
         "set_actor_transform",
@@ -824,12 +1649,15 @@ def _move_actor(step: dict) -> dict:
             "in_level": True,
             "error": f"复查位置 ({x:g}, {y:g}, {z:g})，没有到目标",
         }
+    saved = _save_level(step)
+    if not saved.get("ok"):
+        return {"ok": False, "id": name, "ref": ref, "in_level": True, "error": str(saved.get("error") or "关卡保存失败")}
     return {
         "ok": True,
         "id": name,
         "ref": ref,
         "in_level": True,
-        "index_note": f"已移到 ({target['x']:g}, {target['y']:g}, {target['z']:g})，未保存",
+        "index_note": f"已移到 ({target['x']:g}, {target['y']:g}, {target['z']:g})，{saved.get('note')}",
     }
 
 
@@ -868,7 +1696,7 @@ def _set_pickable(step: dict) -> dict:
                 ref,
                 {"bPickable": values.get("bPickable"), "Tags": values.get("Tags")},
             )
-    write = {"allow_writes": ["set_properties", "add_tag"], "save": False, "pie": False}
+    write = {"allow_writes": ["set_properties", "add_tag"], **task_policy()}
     wrote = exec_tool(
         _OBJECT,
         "set_properties",
@@ -896,12 +1724,16 @@ def _set_pickable(step: dict) -> dict:
     pickable = _as_bool(values.get("bPickable")) if isinstance(values, dict) else None
     has_tag = _has_tag(values.get("Tags"), _PICKUP_TAG) if isinstance(values, dict) else None
     if pickable is True and has_tag is True:
+        saved = _save_level(step)
+        if not saved.get("ok"):
+            return {"ok": False, "id": name, "ref": ref, "in_level": True,
+                    "error": str(saved.get("error") or "关卡保存失败")}
         return {
             "ok": True,
             "id": name,
             "ref": ref,
             "in_level": True,
-            "index_note": "bPickable 为真，带 InteractableActor",
+            "index_note": f"bPickable 为真，带 InteractableActor；{saved.get('note')}",
         }
     bits = []
     shown = values if isinstance(values, dict) else {}
@@ -949,15 +1781,374 @@ def _query_actor(step: dict) -> dict:
     return out
 
 
+_WIDGET_REF = "/Game/UI/WBP_HUD.WBP_HUD"
+
+
+def _hud_parent_class() -> str:
+    from config import script_object_path
+
+    return script_object_path("PlatformHUDWidget")
+
+
+def _check_platform_hud(step: dict) -> dict:
+    """只读核对四个合同控件名 + 父类是不是 UPlatformHUDWidget。缺了就失败。不改控件图。
+
+    HUD 的计数、倒计时、通关/失败已经不靠蓝图连线：`UPlatformHUDWidget`（C++）按名字绑
+    四个文本，`ATestPawn::EnsureHud` 负责创建并挂视口。所以这里核两件事：
+    控件名在、父类是那个 C++ 类。两条都过，HUD 才是活的。"""
+    from core.editor_exec import exec_tool
+
+    from agent.umg_manual import missing_platform_hud
+
+    del step
+    read = {"allow_writes": [], "save": False, "pie": False}
+    called = exec_tool(
+        "UMGToolSet.UMGToolSet",
+        "GetWidgets",
+        {"widgetBlueprint": {"refPath": _WIDGET_REF}},
+        task=read,
+    )
+    if not called.get("ok"):
+        summary = "GetWidgets 失败：" + str(called.get("error") or "没有返回")
+        return {"ok": False, "summary": summary, "error": summary, "index_note": summary, "pie": False, "save": False}
+    missing = missing_platform_hud(called.get("data"))
+    problems = [f"缺控件 {name}" for name in missing]
+
+    parent = exec_tool(
+        "editor_toolset.toolsets.blueprint.BlueprintTools",
+        "get_parent",
+        {"blueprint": {"refPath": _WIDGET_REF}},
+        task=read,
+    )
+    parent_ref = ""
+    data = parent.get("data")
+    if isinstance(data, dict) and isinstance(data.get("returnValue"), dict):
+        parent_ref = str(data["returnValue"].get("refPath") or "")
+    hud_parent = _hud_parent_class()
+    if parent.get("ok") and parent_ref and not parent_ref.endswith(hud_parent):
+        problems.append(f"父类是 {parent_ref.rsplit('.', 1)[-1]}，不是 {hud_parent.rsplit('.', 1)[-1]}")
+
+    if problems:
+        summary = f"{_WIDGET_REF} 不合格：" + "；".join(problems) + "。控件图能编过，不等于 HUD 真的会动。"
+    else:
+        summary = (
+            f"{_WIDGET_REF} 四个合同控件名都在，父类是 {hud_parent.rsplit('.', 1)[-1]}；"
+            "计数、倒计时、通关/失败由 C++ 驱动，Pawn 的 EnsureHud 负责挂视口。"
+        )
+    judge = {"ok": not problems, "kind": "editor_assert", "summary": summary, "errors": []}
+    out = {
+        "ok": not problems,
+        "id": _WIDGET_REF,
+        "summary": summary,
+        "index_note": summary,
+        "test": judge,
+        "judge_kind": "editor_assert",
+        "ref": _WIDGET_REF,
+        "in_level": False,
+        "pie": False,
+        "save": False,
+    }
+    if problems:
+        out["error"] = summary
+    return out
+
+
+_FPS_FILTER = "AIAgent.Fps.Hit"
+_FPS_SOURCES = (
+    "Public/FpsPawn.h",
+    "Public/FpsTarget.h",
+    "Public/FpsHealthComponent.h",
+)
+
+
+def _apply_spec(step: dict) -> dict:
+    """拆分结果里的新 C++ 文件。路径已经由 decompose.safe_files 收过，这里再收一次再写。"""
+    from config import UE_SOURCE_ROOT
+    from agent.decompose import safe_files
+
+    spec = step.get("spec") if isinstance(step.get("spec"), dict) else {}
+    files, error = safe_files(spec.get("files"))
+    if error:
+        return {"ok": False, "error": error, "summary": error, "index_note": error}
+    written = []
+    for item in files:
+        path = UE_SOURCE_ROOT / item["path"]
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(item["content"], encoding="utf-8")
+        written.append(item["path"])
+    note = "已写入 " + "、".join(written)
+    return {"ok": True, "summary": note, "index_note": note, "id": written[0]}
+
+
+_FPS_PAWN_CLASS = "/Script/AIAgentProject.FpsPawn"
+_FPS_TARGET_CLASS = "/Script/AIAgentProject.FpsTarget"
+_FPS_GAMEMODE = "/Script/AIAgentProject.FpsGameMode"
+_FPS_FLOOR_MESH = "/Engine/BasicShapes/Cube"
+# 相机在胶囊中心上方 64uu。Pawn 放在 z=96 时眼睛高度是 160，靶心对齐这条水平射线。
+_FPS_TARGET_POINTS = ([400, 0, 160], [400, 250, 160], [700, 0, 160])
+
+
+def _fps_fail(level: str, text: str) -> dict:
+    judge = {
+        "ok": False,
+        "kind": "editor_assert",
+        "summary": text,
+        "errors": [{"file": "", "line": 0, "message": text}],
+    }
+    return {
+        "ok": False,
+        "id": level,
+        "error": text,
+        "summary": text,
+        "index_note": text,
+        "test": judge,
+        "judge_kind": "editor_assert",
+        "in_level": False,
+        "pie": False,
+        "save": False,
+    }
+
+
+def _fps_stats(result: dict) -> dict:
+    """get_scene_statistics 的类计数。没有 actor_count 就当读失败，不把空字典当成「关卡是空的」。"""
+    data = _monolith_payload(result)
+    if "actor_count" not in data and isinstance(data.get("returnValue"), dict):
+        data = data["returnValue"]
+    raw = data.get("actor_count")
+    if not isinstance(raw, dict):
+        return {}
+    counts: dict[str, int] = {}
+    for key, value in raw.items():
+        try:
+            counts[str(key)] = int(value)
+        except (TypeError, ValueError):
+            continue
+    return counts
+
+
+def _fps_count(counts: dict, *names: str) -> int:
+    return sum(int(counts.get(name, 0) or 0) for name in names)
+
+
+def _fps_ready(counts: dict) -> bool:
+    return (
+        _fps_count(counts, "FpsPawn", "AFpsPawn") >= 1
+        and _fps_count(counts, "FpsTarget", "AFpsTarget") >= 1
+        and _fps_count(counts, "StaticMeshActor") >= 1
+        and _fps_count(counts, "DirectionalLight") >= 1
+    )
+
+
+def _fps_needs(counts: dict) -> dict:
+    return {
+        "pawn": _fps_count(counts, "FpsPawn", "AFpsPawn") < 1,
+        "target": _fps_count(counts, "FpsTarget", "AFpsTarget") < 1,
+        "floor": _fps_count(counts, "StaticMeshActor") < 1,
+        "light": _fps_count(counts, "DirectionalLight") < 1,
+        "start": _fps_count(counts, "PlayerStart") < 1,
+    }
+
+
+def _fps_count_text(counts: dict) -> str:
+    parts = (
+        ("FpsPawn", _fps_count(counts, "FpsPawn", "AFpsPawn")),
+        ("FpsTarget", _fps_count(counts, "FpsTarget", "AFpsTarget")),
+        ("地面", _fps_count(counts, "StaticMeshActor")),
+        ("灯", _fps_count(counts, "DirectionalLight")),
+    )
+    return "、".join(f"{label}={count}" for label, count in parts)
+
+
+def _fps_actor_specs(needs: dict) -> list[dict]:
+    actors: list[dict] = []
+    if needs.get("light"):
+        actors.append({
+            "class": "/Script/Engine.DirectionalLight",
+            "location": [0, 0, 400],
+            "rotation": [-50, 30, 0],
+            "folder": "FPS",
+        })
+    if needs.get("start"):
+        actors.append({
+            "class": "/Script/Engine.PlayerStart",
+            "location": [0, 0, 96],
+            "rotation": [0, 0, 0],
+            "folder": "FPS",
+        })
+    if needs.get("pawn"):
+        actors.append({
+            "class": _FPS_PAWN_CLASS,
+            "location": [0, 0, 96],
+            "rotation": [0, 0, 0],
+            "folder": "FPS",
+        })
+    if needs.get("target"):
+        for point in _FPS_TARGET_POINTS:
+            actors.append({
+                "class": _FPS_TARGET_CLASS,
+                "location": list(point),
+                "rotation": [0, 0, 0],
+                "folder": "FPS",
+            })
+    return actors
+
+
+def _fps_spawn_notes(payload: dict) -> str:
+    rows = payload.get("actor_instances") if isinstance(payload, dict) else None
+    bits = []
+    for row in rows or []:
+        if isinstance(row, dict) and row.get("spawned") is False:
+            bits.append(f"{row.get('class')}: {row.get('error') or '没生成'}")
+    return "；".join(bits)
+
+
+def _implement_shooter(step: dict) -> dict:
+    """把简易射击放进唯一关卡。AIAgent.Fps.Hit 在临时世界里测命中，不能单独当成关卡已做好。"""
+    from config import UE_SOURCE_ROOT
+    from agent.plan_windows import resolve_level
+    from backends.monolith import exec as monolith_exec
+    from backends.select import current_backend
+
+    missing = [rel for rel in _FPS_SOURCES if not (UE_SOURCE_ROOT / rel).is_file()]
+    if missing:
+        text = "射击玩法源文件不在：" + "、".join(missing)
+        return {"ok": False, "error": text, "summary": text, "index_note": text}
+    slots = step.get("slots") if isinstance(step.get("slots"), dict) else {}
+    raw = (
+        step.get("level_path") or step.get("level_name")
+        or slots.get("level") or step.get("level") or ""
+    )
+    found = resolve_level(raw)
+    if not found.get("ok"):
+        text = str(found.get("error") or "缺少关卡名，不猜。")
+        return {"ok": False, "error": text, "summary": text, "index_note": text}
+    level = str(found.get("level_name") or "")
+    package = str(found.get("level_path") or "")
+    if current_backend() != "monolith":
+        return _fps_fail(level, "当前后端不是 monolith，不能核对关卡里有没有射击内容。不把临时世界测试当成完成。")
+    if not task_flag(step, "save"):
+        return _fps_fail(level, "save 未放行，不能加载关卡核对场景。不把临时世界测试当成完成。")
+
+    write = {"allow_writes": [], **task_policy(save=True, pie=False)}
+
+    def call(namespace: str, action: str, params: dict) -> dict:
+        return monolith_exec(namespace, action, params, task=write, transport=_monolith_transport)
+
+    loaded = call("editor", "load_level", {"path": package, "dirty_policy": "refuse"})
+    if not loaded.get("ok"):
+        return _fps_fail(level, f"关卡 {package} 加载失败：{_error_text(loaded) or '没有返回'}")
+    loaded_data = _monolith_payload(loaded)
+    if _as_bool(loaded_data.get("loaded")) is not True:
+        return _fps_fail(
+            level,
+            f"关卡 {package} 加载失败：{loaded_data.get('message') or _error_text(loaded) or '没有返回'}",
+        )
+    world = str(loaded_data.get("current_world") or loaded_data.get("path") or "")
+    if world and not _level_matches(world, package, level):
+        return _fps_fail(level, f"加载后当前关卡是 {world}，不是 {package}。")
+
+    counted = call("mesh", "get_scene_statistics", {})
+    if not counted.get("ok"):
+        return _fps_fail(level, f"读 {level} 的场景统计失败：{_error_text(counted) or '没有返回'}")
+    counts = _fps_stats(counted)
+    if not counts:
+        return _fps_fail(level, f"读 {level} 的场景统计失败：没有按类给出的 actor 计数。")
+
+    needs = _fps_needs(counts)
+    if any(needs.values()):
+        if needs["floor"]:
+            floor = call("mesh", "spawn_actor", {
+                "class_or_mesh": _FPS_FLOOR_MESH,
+                "location": [0, 0, -50],
+                "scale": [40, 40, 1],
+                "name": "FpsFloor",
+                "folder": "FPS",
+            })
+            if not floor.get("ok"):
+                return _fps_fail(level, f"往 {level} 放地面失败：{_error_text(floor) or '没有返回'}")
+        notes = ""
+        specs = _fps_actor_specs(needs)
+        if specs:
+            authored = call("editor", "author_map_settings", {"actors": specs})
+            if not authored.get("ok"):
+                return _fps_fail(level, f"往 {level} 放射击内容失败：{_error_text(authored) or '没有返回'}")
+            notes = _fps_spawn_notes(_monolith_payload(authored))
+        saved = call("editor", "save_packages", {"packages": [package]})
+        if not saved.get("ok"):
+            return _fps_fail(level, f"关卡 {package} 保存失败：{_error_text(saved) or '没有返回'}")
+        saved_data = _monolith_payload(saved)
+        if _as_bool(saved_data.get("ok")) is not True:
+            return _fps_fail(level, f"关卡 {package} 保存失败：{saved_data.get('message') or '没有写上'}")
+        counted = call("mesh", "get_scene_statistics", {})
+        if not counted.get("ok"):
+            return _fps_fail(level, f"放完后读 {level} 的场景统计失败：{_error_text(counted) or '没有返回'}")
+        counts = _fps_stats(counted)
+        if notes or not _fps_ready(counts):
+            shown = _fps_count_text(counts)
+            detail = f"{shown}；{notes}" if notes else shown
+            return _fps_fail(
+                level,
+                f"{level} 放完后仍缺射击内容（{detail}）。"
+                "AIAgent.Fps.Hit 只在临时世界里测命中，不能当成关卡已做好。",
+            )
+
+    if not _fps_ready(counts):
+        return _fps_fail(
+            level,
+            f"{level} 里没有射击内容（{_fps_count_text(counts)}）。"
+            "AIAgent.Fps.Hit 只在临时世界里测命中，不能当成关卡已做好。",
+        )
+
+    mode = call("editor", "author_map_settings", {
+        "game_mode_override": _FPS_GAMEMODE,
+        "save": True,
+    })
+    if not mode.get("ok"):
+        return _fps_fail(level, f"设置 {level} 的 GameMode 失败：{_error_text(mode) or '没有返回'}")
+    mode_data = _monolith_payload(mode)
+    if _as_bool(mode_data.get("game_mode_override_set")) is not True:
+        return _fps_fail(
+            level,
+            f"{level} 的 GameMode 没有指到 FpsGameMode："
+            f"{mode_data.get('game_mode_override_error') or '没有设上'}。"
+            "开始游戏仍会用项目默认模式，左键打不了这关的靶。",
+        )
+    if _as_bool(mode_data.get("saved")) is not True:
+        return _fps_fail(level, f"关卡 {package} 保存 GameMode 失败：{mode_data.get('save_error') or '没有写上'}")
+
+    result = _run_automation({
+        "slots": {"filter": _FPS_FILTER},
+        "automation_filter": _FPS_FILTER,
+    })
+    note = f"{level} 关卡内 {_fps_count_text(counts)}，GameMode=FpsGameMode；{result.get('summary') or _FPS_FILTER}"
+    result["summary"] = note
+    result["index_note"] = note
+    result["id"] = level
+    result["level_path"] = package
+    result["in_level"] = True
+    if not result.get("ok"):
+        result["error"] = note
+    return result
+
+
 def _run_automation(step: dict) -> dict:
-    """契约里的 Automation。不另开 PIE，不保存。"""
+    """契约里的 Automation。不另开 PIE。"""
     from core.contract_tools import run_automation_test
 
     slots = step.get("slots") if isinstance(step.get("slots"), dict) else {}
     filt = str(step.get("automation_filter") or slots.get("filter") or "")
     result = run_automation_test(filt)
     summary = str(result.get("summary") or result.get("error") or "")
-    judge = {"ok": bool(result.get("ok")), "kind": "automation", "summary": summary, "errors": []}
+    judge = {
+        "ok": bool(result.get("ok")),
+        "kind": "automation",
+        "summary": summary,
+        "errors": list(result.get("errors") or []),
+    }
+    if isinstance(result.get("tests"), list):
+        judge["tests"] = list(result["tests"])
+    if result.get("filter"):
+        judge["filter"] = str(result["filter"])
     out = {
         "ok": bool(result.get("ok")),
         "id": filt,
@@ -999,8 +2190,25 @@ def _asset_ref_by_name(name: str, asset_class: str) -> str:
     return ""
 
 
+def _disk_blueprint_ref(name: str) -> str:
+    """资产索引落后时的兜底：Content 下唯一一个 <name>.uasset → /Game/... 路径。
+    20261021：BP_Coin/BP_Platform/BP_Door/BP_Progress 已存盘但不在 ue_assets.jsonl 里，
+    只认索引会让 place_batch 直接失败。零个或多个仍然返回空，不猜。"""
+    from config import UE_PROJECT_DIR
+
+    content = UE_PROJECT_DIR / "Content"
+    if not name or not content.is_dir():
+        return ""
+    found = [path for path in content.rglob(name + ".uasset") if path.is_file()]
+    if len(found) != 1:
+        return ""
+    rel = found[0].relative_to(content).with_suffix("").as_posix()
+    return f"/Game/{rel}.{name}"
+
+
 def _material_instance_ref(target: str) -> str:
-    """/Game 或 /Engine 路径直接归一成 object_path；名字查材质实例索引唯一命中。"""
+    """/Game 或 /Engine 路径直接归一成 object_path；名字查材质实例索引唯一命中。
+    资产索引里材质实例的类名是 MaterialInstanceConstant（不是 MaterialInstance），两个都认。"""
     text = str(target or "").strip().replace("\\", "/").rstrip("/").rstrip(".")
     if not text:
         return ""
@@ -1009,11 +2217,15 @@ def _material_instance_ref(target: str) -> str:
         if "." in leaf:
             return text
         return f"{text}.{leaf}"
-    return _asset_ref_by_name(text, "MaterialInstance")
+    for asset_class in ("MaterialInstanceConstant", "MaterialInstance"):
+        found = _asset_ref_by_name(text, asset_class)
+        if found:
+            return found
+    return ""
 
 
 def _blueprint_ref(target: str) -> str:
-    """/Game 路径归一；蓝图名查索引唯一命中。"""
+    """/Game 路径归一；蓝图名查索引唯一命中，索引落后时回落到 Content 磁盘。"""
     text = str(target or "").strip().replace("\\", "/").rstrip("/").rstrip(".")
     if not text:
         return ""
@@ -1022,7 +2234,7 @@ def _blueprint_ref(target: str) -> str:
         if "." in leaf:
             return text
         return f"{text}.{leaf}"
-    return _asset_ref_by_name(text, "Blueprint")
+    return _asset_ref_by_name(text, "Blueprint") or _disk_blueprint_ref(text)
 
 
 def _scalar_value(data) -> float | None:
@@ -1058,7 +2270,7 @@ def _scalar_value(data) -> float | None:
 def _set_scalar_param(step: dict) -> dict:
     """覆写材质实例的一个标量参数。材质域写闸：UE_ALLOW_MATERIAL 人审门挡在 editor_exec，
     allow_writes 只放 set_scalar_parameter。写完复读；blueprint 槽位给了蓝图就再编译它，
-    裁判 blueprint_compile。不改材质图，不保存。"""
+    裁判 blueprint_compile。不改材质图；save 开时保存这份材质实例。"""
     from core.editor_exec import exec_tool
     from core.judge import judge
 
@@ -1080,7 +2292,7 @@ def _set_scalar_param(step: dict) -> dict:
     if not instance_ref:
         return {"ok": False, "id": target, "error": f"{target} 没有唯一的材质实例路径，不猜。"}
     instance = {"refPath": instance_ref}
-    write = {"allow_writes": ["set_scalar_parameter"], "save": False, "pie": False}
+    write = {"allow_writes": ["set_scalar_parameter"], **task_policy()}
     wrote = exec_tool(
         _MATERIAL_INSTANCE,
         "set_scalar_parameter",
@@ -1109,8 +2321,20 @@ def _set_scalar_param(step: dict) -> dict:
         shown = current if current is not None else "未读到"
         return {"ok": False, "id": instance_ref, "ref": instance_ref,
                 "error": f"复读未通过：{param}={shown}，没有到 {value:g}"}
-    note = f"{instance_ref.rsplit('/', 1)[-1].split('.')[0]}.{param}={value:g} 已覆写并复读一致，未保存"
-    out = {"ok": True, "id": target, "ref": instance_ref, "in_level": False, "index_note": note}
+    note = f"{instance_ref.rsplit('/', 1)[-1].split('.')[0]}.{param}={value:g} 已覆写并复读一致"
+    saved_note = ""
+    if task_flag(step, "save"):
+        package = instance_ref.split(".", 1)[0]
+        saved = exec_tool(
+            _ASSET_TOOLS, "save_assets",
+            {"asset_paths": [package]},
+            task={"allow_writes": [], **task_policy(save=True, pie=False)},
+        )
+        if not saved.get("ok"):
+            return {"ok": False, "id": instance_ref, "ref": instance_ref,
+                    "error": f"材质实例保存失败：{saved.get('error') or '未存上'}"}
+        saved_note = "，已保存这份材质实例"
+    out = {"ok": True, "id": target, "ref": instance_ref, "in_level": False, "index_note": note + saved_note}
     if blueprint:
         bp_ref = _blueprint_ref(blueprint)
         if not bp_ref:
@@ -1174,13 +2398,90 @@ def _layout_entries(data) -> list:
         except (TypeError, ValueError):
             continue
         name = str(row.get("name") or "").strip()
-        out.append({"name": name, "x": x, "y": y, "z": z})
+        out.append({"name": name, "x": x, "y": y, "z": z, "props": _entry_props(row.get("props"))})
     return out
+
+
+_MAX_ENTRY_PROPS = 8
+
+
+def _entry_props(raw) -> dict:
+    """设计图条目上的 props：放完之后写一次并复读。只收标量，最多 8 个。
+    前段平台 `bStartActive: false` 就是靠这一条表达「不动」。"""
+    if not isinstance(raw, dict):
+        return {}
+    out: dict = {}
+    for key, value in list(raw.items())[:_MAX_ENTRY_PROPS]:
+        if isinstance(value, (bool, int, float, str)):
+            out[str(key)] = value
+    return out
+
+
+def _props_match(got, want) -> bool:
+    if isinstance(want, bool):
+        flag = _as_bool(got)
+        return flag is want
+    if isinstance(want, (int, float)):
+        try:
+            return abs(float(got) - float(want)) <= 1e-3
+        except (TypeError, ValueError):
+            return False
+    return str(got) == str(want)
+
+
+def _write_entry_props(ref: str, props: dict, write: dict) -> dict:
+    """写一条实例属性并复读。读不回或读回不等于给定值都算失败，不静默。"""
+    from core.editor_exec import exec_tool
+
+    wrote = exec_tool(
+        _OBJECT,
+        "set_properties",
+        {"instance": {"refPath": ref}, "values": json.dumps(props, ensure_ascii=False)},
+        task=write,
+    )
+    if not wrote.get("ok"):
+        return {"ok": False, "error": str(wrote.get("error") or "写属性失败")}
+    got = exec_tool(
+        _OBJECT,
+        "get_properties",
+        {"instance": {"refPath": ref}, "properties": list(props)},
+        task=_read_task(),
+    )
+    values = _parse_props(got.get("data")) if got.get("ok") else None
+    if not isinstance(values, dict):
+        return {"ok": False, "error": "写属性后复读失败"}
+    bad = [key for key, want in props.items() if not _props_match(values.get(key), want)]
+    if bad:
+        return {"ok": False, "error": "复读不等于给定值：" + "、".join(bad)}
+    return {"ok": True}
+
+
+def _sync_entry_location(ref: str, entry: dict, write: dict) -> dict:
+    """设计图改了坐标时，把已存在的实例挪过去。误差 1uu 以内算一致，不动。
+    幂等：同坐标重跑不写。"""
+    from core.editor_exec import exec_tool
+
+    now = _read_location(ref, _read_task())
+    if not now.get("ok"):
+        return now
+    x, y, z = now["location"]
+    if abs(x - entry["x"]) <= 1.0 and abs(y - entry["y"]) <= 1.0 and abs(z - entry["z"]) <= 1.0:
+        return {"ok": True, "moved": False}
+    moved = exec_tool(
+        _ACTOR,
+        "set_actor_transform",
+        {"actor": {"refPath": ref},
+         "xform": {"location": {"x": entry["x"], "y": entry["y"], "z": entry["z"]}}},
+        task=write,
+    )
+    if not moved.get("ok"):
+        return {"ok": False, "error": str(moved.get("error") or "挪位置失败")}
+    return {"ok": True, "moved": True}
 
 
 def _place_batch(step: dict) -> dict:
     """按设计图 JSON 批量放置同一蓝图。幂等：条目点名已存在的实例就跳过，不重复放。
-    放完逐条复查唯一性。默认不保存；窗口显式 save: true 才对当前关卡存盘一次。"""
+    放完逐条复查唯一性。save 开时对当前关卡存盘一次（缺省开）。"""
     from core.editor_exec import exec_tool
 
     read = _read_task()
@@ -1204,8 +2505,9 @@ def _place_batch(step: dict) -> dict:
     if not entries:
         return {"ok": False, "id": blueprint, "error": "设计图里没有合法条目，不放。"}
     base_name = asset_path.rsplit("/", 1)[-1]
-    write = {"allow_writes": ["add_to_scene_from_asset"], "save": bool(step.get("save")), "pie": False}
-    placed = skipped = 0
+    write = {"allow_writes": ["add_to_scene_from_asset", "set_properties", "set_actor_transform"],
+             **task_policy(save=task_flag(step, "save"), pie=False)}
+    placed = skipped = corrected = 0
     for index, entry in enumerate(entries):
         name = entry["name"] or f"{base_name}_{index + 1}"
         found = exec_tool(
@@ -1213,8 +2515,17 @@ def _place_batch(step: dict) -> dict:
             {"name": name, "tag": "", "collision_channels": []},
             task=read,
         )
-        if found.get("ok") and _actor_refs(found.get("data")):
-            skipped += 1
+        existing = _actor_refs(found.get("data")) if found.get("ok") else []
+        if existing:
+            # 已存在：按设计图校正坐标（设计图改了就该生效），一致则记跳过
+            sync = _sync_entry_location(existing[0], entry, write)
+            if not sync.get("ok"):
+                return {"ok": False, "id": blueprint,
+                        "error": f"{name} 坐标校正失败：{sync.get('error')}"}
+            if sync.get("moved"):
+                corrected += 1
+            else:
+                skipped += 1
             continue
         placed_actor = exec_tool(
             _SCENE, "add_to_scene_from_asset",
@@ -1233,7 +2544,8 @@ def _place_batch(step: dict) -> dict:
             if _conn_error(err):
                 return {"ok": False, "id": blueprint, "error": f"编辑器 MCP 连不上：{err}"}
             return {"ok": False, "id": blueprint, "error": f"{name} 放置失败：{err}"}
-    # 复查：每个条目在关卡里唯一存在
+    # 复查：每个条目在关卡里唯一存在；带 props 的条目顺手写属性并复读
+    written = 0
     for index, entry in enumerate(entries):
         name = entry["name"] or f"{base_name}_{index + 1}"
         found = exec_tool(
@@ -1245,36 +2557,24 @@ def _place_batch(step: dict) -> dict:
         if len(refs) != 1:
             return {"ok": False, "id": blueprint,
                     "error": f"复查未通过：{name} 命中 {len(refs)} 个（要 1 个）"}
-    note = f"{base_name} 按设计图 {file.name} 复核 {len(entries)} 条唯一（放置 {placed}，幂等跳过 {skipped}）"
-    save_note = ""
-    if step.get("save"):
-        level = exec_tool(_SCENE, "get_current_level", {}, task=read)
-        level_path = ""
-        data = level.get("data") if isinstance(level, dict) else None
-        if isinstance(data, str):
-            try:
-                data = json.loads(data)
-            except json.JSONDecodeError:
-                data = None
-        if isinstance(data, dict):
-            inner = data.get("returnValue") if "returnValue" in data else data
-            if isinstance(inner, str):
-                level_path = inner
-            elif isinstance(inner, dict):
-                level_path = str(inner.get("returnValue") or "")
-        if not level_path:
-            return {"ok": False, "id": blueprint, "saved": False,
-                    "error": "没有当前关卡路径，关卡未保存（放置与复查已完成的实例还在内存里，未落盘）"}
-        saved = exec_tool(
-            _ASSET_TOOLS, "save_assets",
-            {"asset_paths": [level_path]},
-            task={"allow_writes": [], "save": True, "pie": False},
-        )
-        if saved.get("ok"):
-            save_note = f"；已保存当前关卡 {level_path or ''}（一次性人授权）"
-        else:
+        props = entry.get("props") or {}
+        if not props:
+            continue
+        wrote = _write_entry_props(refs[0], props, write)
+        if not wrote.get("ok"):
             return {"ok": False, "id": blueprint,
-                    "error": f"关卡保存失败：{saved.get('error') or '未存上'}（放置与复查已完成：{note}）"}
+                    "error": f"{name} 属性没写上：{wrote.get('error')}"}
+        written += 1
+    note = f"{base_name} 按设计图 {file.name} 复核 {len(entries)} 条唯一（放置 {placed}，幂等跳过 {skipped}）"
+    if corrected:
+        note += f"，按设计图校正坐标 {corrected} 条"
+    if written:
+        note += f"，写实例属性 {written} 条"
+    saved = _save_level(step)
+    if not saved.get("ok"):
+        return {"ok": False, "id": blueprint, "saved": False,
+                "error": f"{saved.get('error')}（放置与复查已完成：{note}）"}
+    save_note = "" if not saved.get("saved") else f"；{saved.get('note')}"
     summary = note + save_note
     return {
         "ok": True,
@@ -1287,8 +2587,209 @@ def _place_batch(step: dict) -> dict:
     }
 
 
+_REMOVE_TOLERANCE = 2.0
+_MAX_REMOVE_TARGETS = 32
+
+
+def _ref_path_of(item) -> str:
+    """命中行或裸字符串统一成 refPath。"""
+    if isinstance(item, str):
+        return item.strip()
+    if isinstance(item, dict):
+        return str(item.get("refPath") or item.get("ref") or "").strip()
+    return ""
+
+
+def _coords_of(item) -> tuple[float, float, float] | None:
+    """条目或命中行上的坐标。location 字典和顶层 x/y/z 两种写法都认，读不出返回 None。"""
+    if not isinstance(item, dict):
+        return None
+    loc = item.get("location") if isinstance(item.get("location"), dict) else item
+    try:
+        return float(loc["x"]), float(loc["y"]), float(loc["z"])
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def pick_removal_target(refs, entry, tolerance: float = _REMOVE_TOLERANCE) -> dict:
+    """从 find_actors 的命中里挑出唯一要删的那个 Actor。纯函数，不连编辑器，好离线测。
+
+    名字那一道由 find_actors 做（label 子串、大小写不敏感），这里做第二道：
+    把带坐标的命中按容差筛一遍，**恰好一条**才算数。
+    - 零条命中（empty）→ 不删：可能已经删掉了，也可能名字根本没对上；
+    - 有命中但坐标一条都对不上（mismatch）→ 不删：名字对上、位置不对，不是要删的那个；
+    - 坐标对上不止一条（ambiguous）→ 不删：分不清是哪条，不猜；
+    - 命中行读不出坐标（unreadable）→ 不删：确认不了，不猜。
+
+    返回 {"ok": True, "ref", "reason": "unique", "hits"}，或
+    {"ok": False, "reason", "error", "hits"}。调用方只按 ok 决定删不删。
+    """
+    hits = [item for item in (refs or []) if _ref_path_of(item)]
+    want = _coords_of(entry)
+    if want is None:
+        return {"ok": False, "reason": "no_target_coord", "hits": len(hits),
+                "error": "条目没有坐标"}
+    matched: list[str] = []
+    unreadable = 0
+    try:
+        span = float(tolerance)
+    except (TypeError, ValueError):
+        span = _REMOVE_TOLERANCE
+    for item in hits:
+        got = _coords_of(item)
+        if got is None:
+            unreadable += 1
+            continue
+        if _dist(got, want) <= span:
+            matched.append(_ref_path_of(item))
+    name = str((entry or {}).get("name") or "").strip() if isinstance(entry, dict) else ""
+    label = name or "目标"
+    if not hits:
+        return {"ok": False, "reason": "empty", "hits": 0,
+                "error": f"{label} 零命中"}
+    if unreadable:
+        return {"ok": False, "reason": "unreadable", "hits": len(hits),
+                "error": f"{label} 命中 {len(hits)} 个，其中 {unreadable} 个读不出坐标"}
+    if not matched:
+        return {"ok": False, "reason": "mismatch", "hits": len(hits),
+                "error": f"{label} 命中 {len(hits)} 个，没有一个在目标坐标 {span:g}uu 内"}
+    if len(matched) > 1:
+        return {"ok": False, "reason": "ambiguous", "hits": len(hits),
+                "candidates": matched,
+                "error": f"{label} 命中的 {len(hits)} 个里有 {len(matched)} 个坐标都对得上，分不清"}
+    return {"ok": True, "reason": "unique", "hits": len(hits), "ref": matched[0],
+            "index_note": f"{label} 命中 {len(hits)} 个，坐标只对上一个"}
+
+
+def _removal_targets(raw) -> tuple[list[dict], str]:
+    """把 targets 归一成 [{"name","x","y","z"}]。缺名字、缺坐标、超量都整条失败，不猜。"""
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except json.JSONDecodeError:
+            return [], "targets 不是合法 JSON"
+    if not isinstance(raw, list):
+        return [], "targets 必须是 [{name, x, y, z}] 的列表"
+    if not raw:
+        return [], "targets 是空的"
+    if len(raw) > _MAX_REMOVE_TARGETS:
+        return [], f"targets 超过 {_MAX_REMOVE_TARGETS} 条"
+    out: list[dict] = []
+    for index, row in enumerate(raw, start=1):
+        if not isinstance(row, dict):
+            return [], f"第 {index} 条不是 {{name, x, y, z}}"
+        name = str(row.get("name") or "").strip()
+        if not name:
+            return [], f"第 {index} 条没有 name"
+        coords = _coords_of(row)
+        if coords is None:
+            return [], f"第 {index} 条（{name}）没有坐标"
+        out.append({"name": name, "x": coords[0], "y": coords[1], "z": coords[2]})
+    return out, ""
+
+
+def _actor_hits(name: str, task: dict) -> dict:
+    """按 label 子串找 Actor，并把每条命中的坐标读回来。
+    读不回坐标就失败：确认不了位置就不许删。"""
+    from core.editor_exec import exec_tool
+
+    found = exec_tool(
+        _SCENE, "find_actors",
+        {"name": name, "tag": "", "collision_channels": []},
+        task=task,
+    )
+    if not found.get("ok"):
+        err = str(found.get("error") or f"查找 {name} 失败")
+        if _conn_error(err):
+            return {"ok": False, "error": f"编辑器 MCP 连不上：{err}"}
+        return {"ok": False, "error": f"查找 {name} 失败：{err}"}
+    hits: list[dict] = []
+    for ref in _actor_refs(found.get("data")):
+        loc = _read_location(ref, task)
+        if not loc.get("ok"):
+            return {"ok": False, "error": f"读 {ref} 的坐标失败：{loc.get('error')}"}
+        x, y, z = loc["location"]
+        hits.append({"refPath": ref, "location": {"x": x, "y": y, "z": z}})
+    return {"ok": True, "hits": hits}
+
+
+def _remove_batch(step: dict) -> dict:
+    """按 {name, x, y, z} 条目精确删 Actor，与 _place_batch 对称。
+    名字那一道交给 find_actors（label 子串），坐标再筛（容差 2uu）：只有恰好一个对得上才删，
+    筛不出唯一一条就失败、一个都不删。全部删完逐条复查该坐标已归零，
+    最后按 save 策略把当前关卡存一次。"""
+    from core.editor_exec import exec_tool
+
+    read = _read_task()
+    slots = step.get("slots") if isinstance(step.get("slots"), dict) else {}
+    raw = slots.get("targets") if slots.get("targets") is not None else step.get("targets")
+    targets, why = _removal_targets(raw)
+    if not targets:
+        return {"ok": False, "error": f"没有要删的条目：{why}，不猜。"}
+    write = {"allow_writes": ["remove_from_scene"],
+             **task_policy(save=task_flag(step, "save"), pie=False)}
+    removed: list[dict] = []
+    for entry in targets:
+        name = entry["name"]
+        hits = _actor_hits(name, read)
+        if not hits.get("ok"):
+            return {"ok": False, "id": name, "removed": len(removed),
+                    "error": f"{hits.get('error')}（已删 {len(removed)} 条）"}
+        picked = pick_removal_target(hits["hits"], entry)
+        if not picked.get("ok"):
+            return {"ok": False, "id": name, "removed": len(removed),
+                    "error": f"{name} 没有唯一命中：{picked.get('error')}，不删。"}
+        gone = exec_tool(
+            _SCENE, "remove_from_scene",
+            {"actor": {"refPath": picked["ref"]}},
+            task=write,
+        )
+        if not gone.get("ok"):
+            err = str(gone.get("error") or "删除失败")
+            if _conn_error(err):
+                return {"ok": False, "id": name, "removed": len(removed),
+                        "error": f"编辑器 MCP 连不上：{err}"}
+            return {"ok": False, "id": name, "removed": len(removed),
+                    "error": f"{name} 删除失败：{err}"}
+        removed.append({"name": name, "ref": picked["ref"]})
+    # 复查：每条目标在那个坐标上必须已经归零（还有命中就是没删干净，不静默）
+    left_counts: list[str] = []
+    for entry in targets:
+        name = entry["name"]
+        hits = _actor_hits(name, read)
+        if not hits.get("ok"):
+            return {"ok": False, "id": name, "removed": len(removed),
+                    "error": f"复查读不到场景：{hits.get('error')}"}
+        # 名字剩余总量照报（同名前缀的正确实例本来就该留着，所以只报数、不拿它当闸）
+        left_counts.append(f"{name} 剩 {len(hits['hits'])}")
+        left = pick_removal_target(hits["hits"], entry)
+        if left.get("ok") or left.get("reason") not in ("empty", "mismatch"):
+            return {"ok": False, "id": name, "removed": len(removed),
+                    "error": f"复查未通过：{name} 在 "
+                             f"({entry['x']:g}, {entry['y']:g}, {entry['z']:g}) 附近仍有命中"
+                             f"（{left.get('error') or '未归零'}）"}
+    note = (f"按 {len(targets)} 条目标精确删掉 {len(removed)} 个 Actor，坐标复查已归零"
+            f"（目标坐标处剩余 0；{'、'.join(left_counts)}）")
+    saved = _save_level(step)
+    if not saved.get("ok"):
+        return {"ok": False, "id": "remove_batch", "saved": False,
+                "error": f"{saved.get('error')}（删除与复查已完成：{note}）"}
+    save_note = "" if not saved.get("saved") else f"；{saved.get('note')}"
+    summary = note + save_note
+    return {
+        "ok": True,
+        "id": "remove_batch",
+        "in_level": True,
+        "removed": [item["ref"] for item in removed],
+        "remaining": left_counts,
+        "index_note": summary,
+        "test": {"ok": True, "kind": "editor_assert", "summary": summary, "errors": []},
+        "judge_kind": "editor_assert",
+    }
+
+
 def _query_material(step: dict) -> dict:
-    """只读。读材质实例一个标量参数的当前值，裁判 editor_assert。不写，不保存，不 PIE。"""
+    """只读。读材质实例一个标量参数的当前值，裁判 editor_assert。不写。"""
     from core.editor_exec import exec_tool
 
     read = _read_task()
@@ -1470,6 +2971,9 @@ def run_sequence(query: str, decide, *, choices: bool = False, layered: bool = F
         from agent.run_windows import _EventBus
 
         events = _EventBus(stamp)
+    from backends.select import bind_run
+
+    bind_run(None if events is None else events.emit)
     if layered:
         from agent.plan_windows import steps_for_menu2
 
@@ -1522,9 +3026,12 @@ def run_sequence(query: str, decide, *, choices: bool = False, layered: bool = F
             continue
         action = step.get("action")
         try:
-            from agent.catalog import GRAPH_ACTIONS
+            from agent.catalog import BLUEPRINT_ATTEMPT_ACTIONS, GRAPH_ACTIONS
+            from backends.select import current_backend
 
-            if action in GRAPH_ACTIONS:
+            if action in BLUEPRINT_ATTEMPT_ACTIONS and current_backend() == "monolith":
+                summary = repair_blueprint(step)
+            elif action in GRAPH_ACTIONS:
                 task = step.get("task") if isinstance(step.get("task"), dict) and step["task"].get("verify") else None
                 if task is None:
                     from agent.run_windows import _build_graph_task

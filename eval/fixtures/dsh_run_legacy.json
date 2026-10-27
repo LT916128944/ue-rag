@@ -1,0 +1,166 @@
+{
+  "run_id": "dsh-run-legacy",
+  "query": "把 BP_Coin 放进当前关卡，跑 Automation，最后进 PIE 验证",
+  "status": "失败",
+  "criteria": [
+    {
+      "id": "c-cpp_build",
+      "text": "C++ 编译通过",
+      "evidence_kind": "cpp_build",
+      "passed": true,
+      "windows": ["W1"]
+    },
+    {
+      "id": "c-editor_assert-level",
+      "text": "关卡里摆好的实例读数与期望一致",
+      "evidence_kind": "editor_assert",
+      "passed": false,
+      "windows": ["W3", "W6"]
+    },
+    {
+      "id": "c-widget_graph-hud",
+      "text": "控件树与事件绑定已落地",
+      "evidence_kind": "widget_graph",
+      "passed": false,
+      "windows": ["W6"]
+    },
+    {
+      "id": "c-automation-platform",
+      "text": "Automation 过滤器失败数为 0",
+      "evidence_kind": "automation",
+      "passed": false,
+      "filter": "AIAgent.Platform",
+      "windows": ["W7"]
+    },
+    {
+      "id": "c-manual-plan",
+      "text": "人工在 Plan/ 里补齐门的动画",
+      "evidence_kind": "manual",
+      "passed": false
+    }
+  ],
+  "windows": {
+    "W1": {
+      "id": "W1",
+      "title": "编译 BP_Gun",
+      "action": "compile_blueprint",
+      "state": "done",
+      "ok": true,
+      "detail": {
+        "build": {"ok": true, "kind": "blueprint_compile", "summary": "已编译", "errors": []},
+        "test": {"ok": true, "kind": "skip", "summary": "no test verify", "errors": []}
+      },
+      "window": {
+        "id": "W1",
+        "title": "编译 BP_Gun",
+        "action": "compile_blueprint",
+        "slots": {"blueprint": "BP_Gun"},
+        "depends_on": [],
+        "max_retries": 1,
+        "ref_path": "/Game/BP_Gun.BP_Gun",
+        "save": true,
+        "pie": true
+      }
+    },
+    "W3": {
+      "id": "W3",
+      "title": "放进场景",
+      "action": "place_actor",
+      "state": "done",
+      "ok": true,
+      "detail": {
+        "id": "W3",
+        "ok": true,
+        "summary": "已放入当前关卡",
+        "test": {"ok": true, "kind": "skip", "summary": "no test verify", "errors": []}
+      },
+      "window": {
+        "id": "W3",
+        "title": "放进场景",
+        "action": "place_actor",
+        "slots": {"blueprint": "BP_Coin"},
+        "depends_on": [],
+        "max_retries": 1,
+        "actor_name": "BP_Coin",
+        "asset_name": "BP_Coin",
+        "folder_path": "/Game",
+        "ref_path": "/Game/BP_Coin.BP_Coin",
+        "save": true,
+        "pie": true
+      }
+    },
+    "W6": {
+      "id": "W6",
+      "title": "编译 WBP_HUD",
+      "action": "compile_blueprint",
+      "state": "done",
+      "ok": true,
+      "detail": {
+        "build": {"ok": true, "kind": "blueprint_compile", "summary": "已编译", "errors": []},
+        "test": {"ok": true, "kind": "skip", "summary": "no test verify", "errors": []}
+      },
+      "window": {
+        "id": "W6",
+        "title": "编译 WBP_HUD",
+        "action": "compile_blueprint",
+        "slots": {"blueprint": "WBP_HUD"},
+        "depends_on": ["W3"],
+        "max_retries": 1,
+        "ref_path": "/Game/UI/WBP_HUD.WBP_HUD",
+        "save": true,
+        "pie": true
+      }
+    },
+    "W7": {
+      "id": "W7",
+      "title": "run_automation_test",
+      "action": "run_automation_test",
+      "state": "done",
+      "ok": true,
+      "detail": {
+        "id": "W7",
+        "ok": true,
+        "summary": "失败数 0",
+        "test": {"ok": true, "kind": "skip", "summary": "no test verify", "errors": []}
+      },
+      "window": {
+        "id": "W7",
+        "title": "run_automation_test",
+        "action": "run_automation_test",
+        "slots": {"filter": "AIAgent.Platform"},
+        "depends_on": ["W6"],
+        "max_retries": 1,
+        "automation_filter": "AIAgent.Platform",
+        "save": true,
+        "pie": true
+      }
+    },
+    "W8": {
+      "id": "W8",
+      "title": "PIE 测试",
+      "action": "probe_play",
+      "state": "queued",
+      "ok": null,
+      "detail": null,
+      "window": {
+        "id": "W8",
+        "title": "PIE 测试",
+        "action": "probe_play",
+        "slots": {},
+        "depends_on": ["W7"],
+        "max_retries": 1,
+        "save": false,
+        "pie": true,
+        "task": {
+          "id": "W8",
+          "action": "probe_play",
+          "title": "PIE 测试",
+          "pie": true,
+          "save": false,
+          "verify": [],
+          "max_retries": 1
+        }
+      }
+    }
+  }
+}

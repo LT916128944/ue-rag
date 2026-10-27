@@ -5,7 +5,8 @@ import os
 import re
 from pathlib import Path
 
-from agent.catalog import CATALOG, allows, note_candidate, system_prompt
+from agent.catalog import CATALOG, DISPOSE_ACTION, allows, note_candidate, system_prompt
+from config import task_policy
 
 _NAME_RE = re.compile(
     r"(?<![A-Za-z0-9_])(BP_[A-Za-z0-9_]+|[AUF][A-Z][A-Za-z0-9_]*)(?![A-Za-z0-9_])"
@@ -66,6 +67,107 @@ def _unbound_demand(query: str, actions) -> bool:
     return "edit_cpp" not in set(actions or [])
 
 
+def lexicon_hint(query: str, *, detail: bool = False) -> str:
+    """D3：给人读的一句——这段文本被 lexicon（术语→动作映射表）接住了什么。
+
+    detail=False 只给一句短话（进窗口 error 文案，别把整段依据塞进用户看的错误里）；
+    detail=True 连 reason / suggested_path 一起给（进候选记录的 summary）。接不住或任何
+    异常一律回落空串。"""
+    try:
+        from agent import lexicon
+
+        rows = lexicon.lookup(query)
+        if not rows:
+            return ""
+        for row in rows:
+            if row.get("unplannable") is not True:
+                action = str(row.get("action") or "").strip()
+                if action:
+                    caveat = str(row.get("caveat") or "").strip()
+                    head = f"术语命中动作行 {action}"
+                    return f"{head}（{caveat}）" if caveat else head
+        row = rows[0]
+        verbs = "、".join(str(word) for word in (row.get("verbs") or [])[:3])
+        reason = str(row.get("reason") or "").strip()
+        path = str(row.get("suggested_path") or "").strip()
+        parts = [f"{verbs} 无表内动作"]
+        if detail and reason:
+            parts.append(reason)
+        if path:
+            parts.append(f"建议路径：{path}")
+        return "；".join(part for part in parts if part)
+    except Exception:
+        return ""
+
+
+def _lexicon_note(summary: str, query: str) -> dict | None:
+    """D3 只读挂接：表外分支的这段文本被 lexicon 接住时，要并进候选记录 / 窗口字段的补充信息。
+
+    - 命中动作行：记「术语可落到这个已有动作」，但**不在这里改动作**——改动作必须走
+      `materialize` 里那条原有校验路径（`allows()` 硬门 + 槽位解析），不许绕；
+    - 命中 unplannable：把 reason / suggested_path / 动词带进记录。
+      带 namespace（blueprint / ui / input / material / animation / niagara / mesh）的行
+      不再把窗口收成零窗口；其余表外动作仍不执行。
+
+    任何异常、或这段文本没有任何 lexicon 行接住时返回 None（调用方原样回落，形状不变）。"""
+    try:
+        from agent import lexicon
+
+        rows = lexicon.lookup(query)
+        if not rows:
+            return None
+        note: dict = {"source": "lexicon"}
+        text = lexicon_hint(query, detail=True)
+        if text:
+            note["summary"] = f"{summary}（lexicon：{text}）"
+        for row in rows:
+            if row.get("unplannable") is True:
+                reason = str(row.get("reason") or "").strip()
+                path = str(row.get("suggested_path") or "").strip()
+                if reason:
+                    note["reason"] = reason
+                if path:
+                    note["suggested_path"] = path
+                note["verbs"] = [str(word) for word in (row.get("verbs") or []) if str(word).strip()]
+                break
+        return note
+    except Exception:
+        return None
+
+
+def _lexicon_retry_action(action: str, scope: str) -> str:
+    """D3：表外动作先问一次 lexicon，命中「已有动作」就返回它，否则原样返回 action。
+
+    试映射的文本只取 `scope`（标题 + 槽位值），不拿整句去试：整句里通常还有别的动作
+    （「打开编辑器，新建一个关卡」），拿整句试会把一次具体失败换成另一个动作的占位窗，
+    那就是可观测的行为变化，超出只读挂接的边界。"""
+    try:
+        from agent import lexicon
+
+        for text in (str(action or "").strip(), str(scope or "").strip()):
+            if not text:
+                continue
+            found = lexicon.action_for(text)
+            if found and found != action:
+                return found
+    except Exception:
+        pass
+    return action
+
+
+def _lexicon_scope(slots: dict, title: str) -> str:
+    """D3：给 lexicon 试映射用的那一小段文本——标题 + 各槽位值，**不含整句**（理由见上）。"""
+    try:
+        parts = [str(title or "").strip()]
+        if isinstance(slots, dict):
+            for value in slots.values():
+                if isinstance(value, (str, int, float)) and str(value).strip():
+                    parts.append(str(value).strip())
+        return " ".join(part for part in parts if part)
+    except Exception:
+        return ""
+
+
 def _query_has(query: str, word: str) -> bool:
     if word == "标签":
         return "标签" in query or _TAG_RE.search(query) is not None
@@ -109,6 +211,8 @@ def _save_routes(routes: list[dict]) -> None:
 
 
 def _default_title(action: str, slots: dict) -> str:
+    if action == "launch_editor":
+        return "启动 UE 编辑器"
     if action == "set_pickable":
         return f"把 {slots.get('target') or '物体'} 设为可拾取"
     if action == "judge_pickup":
@@ -119,14 +223,27 @@ def _default_title(action: str, slots: dict) -> str:
         return "编译蓝图"
     if action == "edit_cpp":
         return "改 C++ 并编译"
+    if action == "edit_widget_blueprint":
+        name = slots.get("name") or slots.get("asset_name") or slots.get("blueprint") or "控件"
+        return f"改 {name} 控件图"
+    if action == "check_platform_hud":
+        return "核对 HUD 合同控件名"
     if action == "move_actor":
         return "移动 Actor"
     if action == "place_actor":
         return "放进场景"
     if action == "place_batch":
         return f"按设计图批量放置 {slots.get('blueprint') or '蓝图'}"
+    if action == "remove_batch":
+        return f"精确删除 {len(slots.get('targets') or []) or '若干'} 个离群 Actor"
     if action == "bind_blueprint":
         return "绑定蓝图"
+    if action == "create_level":
+        return f"新建关卡 {slots.get('level') or ''}".strip() or "新建关卡"
+    if action == "open_level":
+        return f"打开关卡 {slots.get('level') or ''}".strip() or "打开关卡"
+    if action == "implement_shooter":
+        return f"实现射击玩法 {slots.get('level') or ''}".strip()
     if action == "set_scalar_param":
         return f"覆写 {slots.get('target') or '材质实例'} 的 {slots.get('param') or '参数'}"
     if action == "query_material":
@@ -254,7 +371,7 @@ def _resolve_game_path(path: str) -> dict:
     if "." in leaf:
         asset = leaf.split(".", 1)[0]
         return _fields_from_ref(asset, text, from_path=True)
-    if leaf.startswith("BP_") and text.startswith("/Game/"):
+    if (leaf.startswith("BP_") or leaf.startswith("WBP_")) and text.startswith("/Game/"):
         return _fields_from_ref(leaf, f"{text}.{leaf}", from_path=True)
     return {"ok": False, "error": "路径里没有唯一的蓝图名，不猜。"}
 
@@ -287,8 +404,59 @@ def resolve_location(value) -> dict:
     return {"ok": True, "location": {"x": x, "y": y, "z": z}}
 
 
+_LEVEL_NAME_RE = re.compile(r"(?<![A-Za-z0-9_])(L_[A-Za-z0-9_]+)(?![A-Za-z0-9_])")
+_LEVEL_PATH_RE = re.compile(r"/Game(?:/[A-Za-z0-9_]+)+")
+_LEVEL_TOKEN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def resolve_level(value) -> dict:
+    """关卡槽位 → 唯一一条 /Game 下的关卡包路径。裸名 L_NewTest2 落到 /Game/Maps/L_NewTest2；
+    已给 /Game 路径原样用（去掉 .Object 后缀）；名字为空、多于一条、或名字与路径对不上就返回
+    error，不猜。超集返回链由 sequence._create_level 复用。"""
+    text = str(value or "").strip().replace("\\", "/")
+    if not text:
+        return {"ok": False, "error": "缺少关卡名，不猜。"}
+    paths = list(dict.fromkeys(
+        match.group(0).split(".", 1)[0].rstrip("/") for match in _LEVEL_PATH_RE.finditer(text)
+    ))
+    names = list(dict.fromkeys(_LEVEL_NAME_RE.findall(text)))
+    if len(paths) > 1 or len(names) > 1:
+        return {"ok": False, "error": "关卡名不是唯一的一条，不猜。"}
+    if paths:
+        package = paths[0]
+        name = package.rsplit("/", 1)[-1]
+        if names and names[0] != name:
+            return {"ok": False, "error": "关卡名和 /Game 路径对不上，不猜。"}
+    elif names:
+        name = names[0]
+        package = f"/Game/Maps/{name}"
+    elif _LEVEL_TOKEN_RE.match(text):
+        # 规划者只写了个裸名（没带 L_ 前缀）也认，落到 /Game/Maps。
+        name = text
+        package = f"/Game/Maps/{name}"
+    else:
+        return {"ok": False, "error": "槽位里没有唯一的关卡名，不猜。"}
+    if not name:
+        return {"ok": False, "error": "槽位里没有唯一的关卡名，不猜。"}
+    return {
+        "ok": True,
+        "level_name": name,
+        "level_path": package,
+        "package_path": package,
+        "asset_name": name,
+        "ref_path": f"{package}.{name}",
+    }
+
+
 def _normalize_slots(action: str, slots: dict) -> dict:
     out = {str(key): value for key, value in slots.items()}
+    if action in ("create_level", "open_level"):
+        # 规划者可能把关卡名写进别的键：只补一次，认出来的原值不动。
+        for alias in ("关卡", "关卡名", "名字", "名称", "name", "level_name", "map", "path"):
+            if str(out.get("level") or "").strip():
+                break
+            if str(out.get(alias) or "").strip():
+                out["level"] = out[alias]
     if action == "move_actor":
         if "location" not in out and out.get("coords") is not None:
             out["location"] = out["coords"]
@@ -303,9 +471,39 @@ def _normalize_slots(action: str, slots: dict) -> dict:
     return out
 
 
-def _missing_slots(action: str, slots: dict) -> str:
-    from agent.catalog import spec_of
+_GRAPH_NAMESPACES = frozenset({
+    "blueprint", "ui", "input", "material", "animation", "niagara", "mesh",
+})
 
+
+def _scope_monolith_action(text: str) -> str:
+    """蓝图/图相关的 lexicon 行不再收成零窗口。返回一个已有动作，没有就空串。"""
+    try:
+        from agent import lexicon
+        from agent.catalog import BLUEPRINT_ATTEMPT_ACTIONS
+
+        action = lexicon.action_for(text) or ""
+        if action in BLUEPRINT_ATTEMPT_ACTIONS or action == "create_level":
+            return action
+        for row in lexicon.unplannable(text):
+            ns = str(row.get("namespace") or "")
+            if ns == "ui":
+                return "edit_widget_blueprint"
+            if ns == "mesh":
+                return "create_level"
+            if ns in _GRAPH_NAMESPACES:
+                return "compile_blueprint"
+    except Exception:
+        return ""
+    return ""
+
+
+def _missing_slots(action: str, slots: dict) -> str:
+    from agent.catalog import BLUEPRINT_ATTEMPT_ACTIONS, spec_of
+
+    if action in BLUEPRINT_ATTEMPT_ACTIONS:
+        # 没有唯一名字也先放行，解析留给执行层的 3 次，不在这里判死。
+        return ""
     spec = spec_of(action)
     if not isinstance(spec, dict):
         return "表外动作，不执行。"
@@ -332,30 +530,60 @@ def _merge(fields: dict, found: dict) -> None:
 
 
 def resolve_slots(action: str, slots: dict) -> dict:
+    if action == "launch_editor":
+        # 只启动编辑器：没有槽位，也不解析资产/路径。
+        return {"ok": True}
     if action == "compile_project":
+        return {"ok": True}
+    if action == "check_platform_hud":
         return {"ok": True}
     if action == "integrate_verify":
         return {"ok": True}
     if action == "query_actor":
         return {"ok": True, "actor_name": str(slots.get("name") or "")}
+    if action in ("create_level", "open_level"):
+        # 关卡名 → 唯一一条 /Game 路径；裸名落 /Game/Maps，已给路径原样。不唯一就暂停。
+        return resolve_level(
+            slots.get("level") or slots.get("level_path") or slots.get("level_name") or ""
+        )
+    if action == "implement_shooter":
+        found = resolve_level(slots.get("level") or slots.get("level_path") or slots.get("level_name") or "")
+        if not found.get("ok"):
+            return found
+        found["automation_filter"] = "AIAgent.Fps.Hit"
+        return found
     if action == "run_automation_test":
         return {"ok": True, "automation_filter": str(slots.get("filter") or "")}
-    if action == "bind_blueprint":
-        if slots.get("blueprint"):
-            return resolve_name(str(slots["blueprint"]))
-        if slots.get("class"):
-            found = _resolve_cpp(str(slots["class"]))
-            if not found.get("ok"):
-                return found
-            from agent.supervise import _indexed_blueprint
+    if action in ("bind_blueprint", "compile_blueprint"):
+        from config import allow_blueprint
 
-            chosen = _indexed_blueprint(found["class_name"])
-            if chosen and chosen.get("ok"):
-                chosen["kind"] = "blueprint"
-                chosen["class_name"] = found["class_name"]
-                return chosen
-            return {"ok": False, "error": f"{found['class_name']} 还没有唯一蓝图路径，不猜。"}
-        return {"ok": False, "error": "缺少蓝图或类，不猜。"}
+        if not allow_blueprint():
+            return {
+                "ok": False,
+                "waiting_external": True,
+                "external_dep": "UE_ALLOW_BLUEPRINT",
+                "error": "UE_ALLOW_BLUEPRINT 不是 true，不改蓝图。",
+            }
+        token = str(slots.get("blueprint") or slots.get("class") or "").strip()
+        if token.startswith("/Game/") or token.startswith("BP_") or token.startswith("WBP_"):
+            found = resolve_name(token)
+            if found.get("ok"):
+                return found
+        elif token:
+            found = _resolve_cpp(token) if action == "bind_blueprint" else resolve_name(token)
+            if found.get("ok") and (found.get("ref_path") or found.get("kind") == "class"):
+                if found.get("kind") == "class" and not found.get("ref_path"):
+                    from agent.supervise import _indexed_blueprint
+
+                    chosen = _indexed_blueprint(found["class_name"])
+                    if chosen and chosen.get("ok"):
+                        chosen["kind"] = "blueprint"
+                        chosen["class_name"] = found["class_name"]
+                        return chosen
+                elif found.get("ref_path"):
+                    return found
+        # 没有唯一路径：窗口仍可执行，执行层用 3 次去查，这里不暂停。
+        return {"ok": True}
 
     fields = {"ok": True}
     if action == "judge_pickup":
@@ -386,6 +614,19 @@ def resolve_slots(action: str, slots: dict) -> dict:
         fields["location"] = loc["location"]
         return fields
 
+    if action in ("edit_widget_blueprint", "create_widget_blueprint"):
+        from config import allow_umg
+
+        if not allow_umg():
+            verb = "不改 Widget 图" if action == "edit_widget_blueprint" else "不新建 Widget Blueprint"
+            return {
+                "ok": False,
+                "waiting_external": True,
+                "external_dep": "UE_ALLOW_UMG",
+                "error": f"UE_ALLOW_UMG 不是 true，{verb}。",
+            }
+        return _widget_slot_fields(slots)
+
     if action == "edit_cpp":
         found = resolve_name(str(slots.get("class") or ""))
         if not found.get("ok"):
@@ -409,14 +650,69 @@ def resolve_slots(action: str, slots: dict) -> dict:
         # 蓝图与设计图的解析在执行器里做：文件与路径都要唯一命中才动场景
         return {"ok": True}
 
-    slot_name = "blueprint" if action in ("compile_blueprint", "place_actor") else "target"
+    if action == "remove_batch":
+        # targets 的逐条匹配（名字 + 坐标唯一）在执行器里做：筛不出唯一一条就整批不删
+        return {"ok": True}
+
+    slot_name = "blueprint" if action == "place_actor" else "target"
     found = resolve_name(str(slots.get(slot_name) or ""))
     if not found.get("ok"):
         return found
     _merge(fields, found)
-    if action in ("compile_blueprint", "place_actor") and not fields.get("ref_path"):
+    if action == "place_actor" and not fields.get("ref_path"):
         return {"ok": False, "error": f"{slots.get(slot_name)} 没有唯一的蓝图路径，不猜。"}
     return {key: value for key, value in fields.items() if value is not None}
+
+
+def _widget_folder(raw: str) -> str:
+    """把 UI / Game/UI / /game/ui 收成 /Game 路径。空串保持空，不默认成某一份资产。"""
+    text = str(raw or "").strip().replace("\\", "/").rstrip("/")
+    parts = [part for part in text.split("/") if part]
+    if parts and parts[0].lower() == "game":
+        parts = parts[1:]
+    if not parts:
+        return ""
+    if len(parts) == 1 and parts[0].lower() == "ui":
+        return "/Game/UI"
+    return "/Game/" + "/".join(parts)
+
+
+def _widget_parent(raw: str) -> str:
+    text = str(raw or "").strip()
+    if not text or text.lower().replace(" ", "") in {"userwidget", "/script/umg.userwidget", "umg.userwidget"}:
+        return "/Script/UMG.UserWidget"
+    return text
+
+
+def _widget_slot_fields(slots: dict) -> dict:
+    """句子里有唯一 WBP_ 或 /Game 路径就填上。没有也 ok，交给执行层的 3 次。"""
+    raw_name = str(slots.get("name") or slots.get("asset_name") or slots.get("blueprint") or "").strip()
+    raw_path = str(slots.get("ref_path") or slots.get("asset_path") or "").strip()
+    folder = _widget_folder(str(slots.get("folder") or slots.get("folder_path") or ""))
+    parent = _widget_parent(str(slots.get("parent") or ""))
+    if raw_path.startswith("/Game/"):
+        found = resolve_name(raw_path.split(".", 1)[0] if raw_path.rsplit("/", 1)[-1].startswith(("BP_", "WBP_")) else raw_path)
+        if found.get("ok") and found.get("ref_path"):
+            found["parent"] = parent
+            return found
+    name = raw_name
+    if name.startswith("/Game/"):
+        leaf = name.split(".", 1)[0].rsplit("/", 1)[-1]
+        if leaf.startswith(("BP_", "WBP_")):
+            folder = folder or name.split(".", 1)[0].rsplit("/", 1)[0]
+            name = leaf
+    if name.startswith(("WBP_", "BP_")):
+        if not folder:
+            folder = "/Game/UI" if name.startswith("WBP_") else "/Game"
+        ref = f"{folder}/{name}.{name}"
+        return {
+            "ok": True,
+            "folder_path": folder,
+            "asset_name": name,
+            "parent": parent,
+            "ref_path": ref,
+        }
+    return {"ok": True, "parent": parent}
 
 
 def materialize(action: str, slots: dict, *, title: str, wid: str, depends: list, retries: int) -> dict:
@@ -430,17 +726,53 @@ def materialize(action: str, slots: dict, *, title: str, wid: str, depends: list
         "realizable": False,
         "ok": False,
         "blocked": True,
-        "save": False,
-        "pie": False,
+        **task_policy(),
     }
+    if action == DISPOSE_ACTION:
+        window["error"] = "dispose_residual 只由代码追加，这一窗不执行。"
+        return window
+    scope = _lexicon_scope(slots, window["title"])
     if not allows(action):
+        # D3 只读挂接（原地改，不新增第三个闸门）：
+        # ① 表外动作先问一次 lexicon，命中**已有动作**就换成它，再走下面同一条原有校验路径
+        #    （`allows()` 硬门、_missing_slots、resolve_slots 一个都不绕）；换不动就原样不动。
+        # ② 仍是表外时保持「表外不执行」，只把 lexicon 的 reason / suggested_path 并进候选记录
+        #    与错误文案；未命中或任何异常都回落成接入前的逐字行为。
+        retried = _lexicon_retry_action(action, scope)
+        if retried != action and allows(retried):
+            action = retried
+            window["action"] = action
+            if not title:
+                window["title"] = _default_title(action, slots)
+            window["lexicon_action"] = retried
+            scope = _lexicon_scope(slots, window["title"])
+        else:
+            fallback = _scope_monolith_action(scope) or _scope_monolith_action(action)
+            if fallback and allows(fallback):
+                action = fallback
+                window["action"] = action
+                if not title:
+                    window["title"] = _default_title(action, slots)
+                window["lexicon_action"] = fallback
+                scope = _lexicon_scope(slots, window["title"])
+    if not allows(action):
+        window["error"] = f"表外动作 {action or '空'}，这一窗暂停，不执行。"
+        note = _lexicon_note(window["error"], scope)
+        summary = str((note or {}).get("summary") or "").strip()
         try:
-            note_candidate(action, source="planner")
+            if summary:
+                note_candidate(action, source="planner", summary=summary)
+            else:
+                note_candidate(action, source="planner")
         except Exception:
             pass
         if action:
             window["action_candidate"] = action
-        window["error"] = f"表外动作 {action or '空'}，这一窗暂停，不执行。"
+        if note:
+            window["lexicon"] = dict(note)
+            hint = lexicon_hint(scope)
+            if hint:
+                window["error"] = f"表外动作 {action or '空'}，这一窗暂停，不执行。（lexicon：{hint}）"
         return window
     slots = _normalize_slots(action, slots)
     window["slots"] = slots
@@ -451,6 +783,10 @@ def materialize(action: str, slots: dict, *, title: str, wid: str, depends: list
     resolved = resolve_slots(action, slots)
     if resolved.get("ok") is False:
         window["error"] = resolved.get("error") or "槽位解析失败，不猜。"
+        if resolved.get("waiting_external"):
+            window["waiting_external"] = True
+            window["external_dep"] = str(resolved.get("external_dep") or "")
+            window["blocked"] = False
         return window
     for key, value in resolved.items():
         if key != "ok" and value is not None:
@@ -486,8 +822,7 @@ def _create_and_goal(action: str, slots: dict, linked: dict, wid: str, title: st
         "action": "create_blueprint",
         "title": "创建蓝图",
         "query": f"创建蓝图 {asset_name}" + (f"（父类 {parent}）" if parent else "") + "，不改图",
-        "save": False,
-        "pie": False,
+        **task_policy(),
         "max_retries": 1,
     }
     for key in ("folder_path", "asset_name", "actor_name", "ref_path", "asset_path", "parent"):
@@ -503,8 +838,7 @@ def _create_and_goal(action: str, slots: dict, linked: dict, wid: str, title: st
         "realizable": create_ok,
         "ok": create_ok,
         "blocked": not create_ok,
-        "save": False,
-        "pie": False,
+        **task_policy(),
         "task": create_task,
     }
     if not create_ok:
@@ -526,8 +860,7 @@ def _create_and_goal(action: str, slots: dict, linked: dict, wid: str, title: st
         "realizable": goal_ok,
         "ok": goal_ok,
         "blocked": not goal_ok,
-        "save": False,
-        "pie": False,
+        **task_policy(),
         "goal": True,
     }
     if create_ok:
@@ -555,7 +888,14 @@ def materialize_goal(action: str, slots: dict, *, title: str, wid: str, depends:
         if linked.get("plan") == "pause_r":
             window = materialize(action, slots, title=title, wid=wid, depends=depends, retries=retries)
             window["goal"] = True
-            if not window.get("realizable"):
+            if action in ("bind_blueprint", "compile_blueprint") and not window.get("waiting_external"):
+                # 没有唯一路径不再暂停问人，执行层最多试 3 次。
+                window["realizable"] = True
+                window["ok"] = True
+                window["blocked"] = False
+                window.pop("error", None)
+                window.pop("needs", None)
+            elif not window.get("realizable"):
                 window["realizable"] = False
                 window["ok"] = False
                 window["blocked"] = True
@@ -663,8 +1003,7 @@ def _paused(message: str) -> dict:
         "ok": False,
         "blocked": True,
         "error": message,
-        "save": False,
-        "pie": False,
+        **task_policy(),
     }
 
 
@@ -1031,6 +1370,8 @@ def windows_from_rules(steps: list[dict]) -> list[dict]:
         for prev in range(1, index):
             if stems and stems & stems_list[prev - 1] and f"W{prev}" not in deps:
                 deps.append(f"W{prev}")
+        # 规则路径的「只编译」扇自带 freeze_source；空转算通过只对它们成立，
+        # 其余改码扇（edit_cpp）必须真写源码，见 run_windows._run_window 的判定。
         window = {
             "id": wid,
             "title": step.get("title") or _default_title(action, {}) or f"步骤 {index}",
@@ -1042,9 +1383,17 @@ def windows_from_rules(steps: list[dict]) -> list[dict]:
             "ok": realizable,
             "blocked": not realizable,
             "task": step,
-            "save": False,
-            "pie": bool(step.get("pie")),
+            **task_policy(pie=True if step.get("pie") else None),
         }
+        if step.get("freeze_source"):
+            window["judge_first"] = True
+            window["freeze_source"] = True
+        if action == "launch_editor":
+            # 只启动编辑器：不保存、不进 PIE，别让 run 记录写成「PIE=进入」
+            window.update(save=False, pie=False)
+        if action == "compile_project":
+            # 编译本身不进 PIE。窗口 pie 为真会让记录写成「PIE=进入」，哪怕测试被跳过。
+            window["pie"] = False
         if step.get("error"):
             window["error"] = step["error"]
         windows.append(window)
@@ -1058,6 +1407,71 @@ def _complete_live(messages: list[dict]) -> str:
 
     response, _record = complete(messages, temperature=0, caller="planner")
     return response.choices[0].message.content or ""
+
+
+_FILLER_RE = re.compile(
+    r"[\s，。、的了后并再以及和把将在里中也就都吧呢啊吗去来让使得可以能够进行普通当前整个这个一下请帮我]+"
+)
+
+
+def _residue_blank(text: str) -> bool:
+    return _FILLER_RE.sub("", text or "") == ""
+
+
+def _strip_owned_spans(clause: str, steps: list[dict]) -> str:
+    """抹掉这条半句里、已经被拆出的基础动作接住的那一段。剩下的字另算。"""
+    from agent.supervise import (
+        _LAUNCH_EDITOR_RE, _LEVEL_CREATE_RE, _PROJECT_COMPILE_RE, _wants_create_level,
+    )
+
+    text = clause or ""
+    actions = {_action_of(step) for step in steps}
+    launches = "launch_editor" in actions or any(step.get("launch_editor") for step in steps)
+    if "compile_project" in actions:
+        text = _PROJECT_COMPILE_RE.sub(" ", text)
+    if "edit_cpp" in actions:
+        text = re.sub(r"编译(?:一下)?(?:工程|项目|代码)?|error\s*C\d*|构建", " ", text, flags=re.I)
+    if "compile_blueprint" in actions:
+        text = re.sub(r"编译|蓝图|BP_[A-Za-z0-9_]+", " ", text)
+    if launches and not re.search(r"关卡|地图", clause or ""):
+        text = _LAUNCH_EDITOR_RE.sub(" ", text)
+    if "create_level" in actions and _wants_create_level(clause):
+        text = _LEVEL_CREATE_RE.sub(" ", text)
+        text = re.sub(r"名字为|名为|叫做|叫|L_[A-Za-z0-9_]+|/Game(?:/[A-Za-z0-9_]+)+", " ", text)
+    return text
+
+
+def _clauses_accounted(query: str, steps: list[dict]) -> bool:
+    """每一半句都要被已经拆出的规则动作接住。没逗号的单句也看剩下的字。
+
+    判别盖不住的剩余文字交给理解器，不在这里按玩法词补动作。"""
+    clauses = [part.strip() for part in re.split(r"[，,；;。]", query or "") if part.strip()]
+    if not clauses:
+        return True
+    return all(_clause_accounted(clause, steps) for clause in clauses)
+
+
+def _clause_accounted(clause: str, steps: list[dict]) -> bool:
+    from agent.supervise import _is_cpp_edit, _is_source_fix, _wants_scene_move
+
+    if _residue_blank(_strip_owned_spans(clause, steps)):
+        return True
+    actions = {_action_of(step) for step in steps}
+    if "edit_cpp" in actions and (_is_cpp_edit(clause) or _is_source_fix(clause)):
+        return True
+    if "move_actor" in actions and _wants_scene_move(clause):
+        return True
+    if ({"set_pickable", "judge_pickup", "check_pickup"} & actions) and re.search(r"拾取|可交互|标签|交互", clause):
+        return True
+    if ({"place_actor", "place_blueprint", "place_batch"} & actions) and re.search(r"放进|放入|放置|摆", clause):
+        return True
+    # 上一扇的槽位续句：名字、L_、/Game。不是新的要求。
+    if re.fullmatch(r"[\s名字为叫叫做：:，,._/A-Za-z0-9\-]+", clause) and re.search(r"L_|/Game|名字|名为", clause):
+        return True
+    # 「其他啥也别干」这种限制，不是还没分配的半句。
+    if re.search(r"别|不要|无需|不用", clause) and not re.search(r"关卡|地图|蓝图|编译|测试", clause):
+        return True
+    return False
 
 
 def _rules_cover(query: str, steps: list[dict]) -> bool:
@@ -1076,91 +1490,285 @@ def _rules_cover(query: str, steps: list[dict]) -> bool:
     for step in steps:
         if step.get("ok") is False or step.get("blocked") or step.get("needs"):
             return False
-    return True
+    # 规则判别盖不住的字，不算强命中。交给理解器分配。
+    return _clauses_accounted(query, steps)
+
+
+def _window_launches(window: dict) -> bool:
+    """这扇自己会不会把编辑器拉起来：专门的 launch_editor 扇，或编译/改码扇带的 launch_editor。"""
+    if str(window.get("action") or "") == "launch_editor":
+        return True
+    sources = [window]
+    if isinstance(window.get("task"), dict):
+        sources.append(window["task"])
+    for item in sources:
+        if any(bool(item.get(key)) for key in ("launch_editor", "launch_without_source", "wait_mcp")):
+            return True
+    return False
+
+
+def _ensure_requested_launch(query: str, windows: list[dict]) -> list[dict]:
+    """句子里要求启动编辑器，但窗口清单里没有一扇会启动它时，补一扇 launch_editor。
+    已经有编译/改码扇的，按现有约定给那扇挂上 launch 标志（编译通过后启动），不另加一扇。
+    （20261022-113402：只要求启动编辑器，整句拆出 0 扇，报「没有窗口」。）"""
+    from agent.supervise import _wants_launch_editor
+
+    if not _wants_launch_editor(query):
+        return windows
+    current = [window for window in (windows or []) if isinstance(window, dict)]
+    if any(_window_launches(window) for window in current):
+        return windows
+    # 「一个动作都没拆出来」的占位窗（blocked、action 为空）不挡住补窗：它只说明上一次拆句失败
+    current = [window for window in current if str(window.get("action") or "").strip()]
+    compiles = [
+        window for window in current
+        if str(window.get("action") or "") in _COMPILE_ACTIONS and window.get("ok") is not False
+    ]
+    if compiles:
+        for window in compiles:
+            window["launch_editor"] = True
+            window["launch_without_source"] = True
+            window["wait_mcp"] = True
+        return current
+    dep = str(current[-1]["id"]) if current else ""
+    window = materialize(
+        "launch_editor", {},
+        title="启动 UE 编辑器", wid=_fresh_window_id(current), depends=[dep], retries=0,
+    )
+    window.update(save=False, pie=False)
+    return current + [window]
 
 
 def _without_unasked_project_compile(query: str, windows: list[dict]) -> list[dict]:
-    """没有说编译工程时，规划者若写出 compile_project，这一窗暂停，不拖住别的窗口。"""
+    """没说编译工程时，规划者写出的 compile_project 直接拿掉。
+    留着会变成「这一窗暂停」，再问人要 /Game 路径或类名，问题对不上，后面的窗口也开不了。"""
     from agent.supervise import _is_project_compile
 
     if _is_project_compile(query):
         return windows
-    dropped = {window["id"] for window in windows if window.get("action") == "compile_project"}
+    dropped = {str(window.get("id")) for window in windows if window.get("action") == "compile_project"}
     if not dropped:
         return windows
+    kept = []
     for window in windows:
-        if window["id"] in dropped:
-            window["realizable"] = False
-            window["ok"] = False
-            window["blocked"] = True
-            window["error"] = "这句话没有要编译整个工程，这一窗暂停。"
+        if str(window.get("id")) in dropped:
             continue
-        window["depends_on"] = [dep for dep in (window.get("depends_on") or []) if dep not in dropped]
-    return windows
+        window["depends_on"] = [str(dep) for dep in (window.get("depends_on") or []) if str(dep) not in dropped]
+        kept.append(window)
+    if not kept:
+        # 全拿掉后不能留空清单：空清单在集成段只报「没有窗口」，看不出是「这句话根本没有
+        # 可执行动作」还是「规划者写错了动作被拿掉」。留一扇暂停窗把原因写清楚。
+        # （20261022-113402：只要求启动编辑器，规划者写了 compile_project，被拿掉后 0 扇 → 静默失败。）
+        return [_paused(
+            "这一句没有可执行的动作：只写了 compile_project，但这句没要求编译工程，已拿掉。"
+            "只要求启动编辑器时用 launch_editor。"
+        )]
+    return kept
 
 
-_TEST_ACTIONS = frozenset({
-    "probe_move", "probe_look", "probe_play", "judge_pickup", "check_pickup",
-})
 _COMPILE_ACTIONS = frozenset({"edit_cpp", "compile_project", "compile_blueprint"})
 
 
-def _needs_play_test(query: str) -> bool:
-    """用户说了测试。拾取那类已经写明不进 PIE 的句子除外。"""
-    if not re.search(r"测试|PIE", query or "", re.I):
-        return False
-    if re.search(r"不进\s*PIE|不要\s*PIE|不\s*PIE", query, re.I):
-        return False
-    return True
+def _fresh_window_id(windows: list) -> str:
+    """下一个窗口 id：取现有 W 编号的最大值 +1。不能用 len()+1——中间有扇被拿掉
+    （比如没说编译工程时的 compile_project）时 len()+1 会和已有的 id 撞上。"""
+    highest = 0
+    for window in windows or []:
+        if not isinstance(window, dict):
+            continue
+        found = re.fullmatch(r"W(\d+)", str(window.get("id") or "").strip())
+        if found:
+            highest = max(highest, int(found.group(1)))
+    return f"W{highest + 1}"
 
 
-def _ensure_requested_test(query: str, windows: list[dict]) -> list[dict]:
-    """规划者或手写规则把「测试」留在标题里时，补一扇真正进入 PIE 的窗口。"""
-    if not _needs_play_test(query) or not windows:
+def _ensure_requested_create_level(query: str, windows: list[dict]) -> list[dict]:
+    """句子里要求新建关卡、但清单里没有 create_level 扇时，由代码按同一 materialize 路径补一扇。
+    补在各路径的 _ensure_requested_launch 之后：launch_editor 先起来，建关卡才有地方落。
+    （20261024-192858：整句只拆出 launch_editor，「新建关卡 L_NewTest2」那半句静默蒸发。）"""
+    from agent.supervise import _level_token, _wants_create_level
+
+    if not _wants_create_level(query):
         return windows
-    if any(str(window.get("action") or "") in _TEST_ACTIONS for window in windows):
+    current = [window for window in (windows or []) if isinstance(window, dict)]
+    if any(str(window.get("action") or "") == "create_level" for window in current):
         return windows
-    # PIE 接在最后一扇后面：前面的编译/改码/建蓝图/放置都先落地，上游暂停时也不抢跑
-    dep = windows[-1]["id"]
-    already = False
-    from agent.sequence import _pawn_stem, _source_move_speed, _times_factor
+    # 「一个动作都没拆出来」的占位窗（blocked、action 为空）不挡住补窗
+    current = [window for window in current if str(window.get("action") or "").strip()]
+    token = _level_token(query)
+    dep = str(current[-1]["id"]) if current else ""
+    made = materialize_goal(
+        "create_level",
+        {"level": token} if token else {},
+        title="",
+        wid=_fresh_window_id(current),
+        depends=[dep] if dep else [],
+        retries=1,
+    )
+    return current + made
 
-    times = _times_factor(query)
-    if times is not None:
-        source = _source_move_speed(_pawn_stem(query))
-        already = source is not None and abs(source - 100.0 * times) <= 0.1
-    for window in windows:
-        if window.get("action") in _COMPILE_ACTIONS and not window.get("blocked"):
-            window["launch_editor"] = True
-            window["launch_without_source"] = True
-            window["wait_mcp"] = True
-            if already and window.get("action") == "edit_cpp":
-                window["judge_first"] = True
-    wid = f"W{len(windows) + 1}"
-    windows.append({
-        "id": wid,
-        "title": "PIE 测试",
-        "action": "probe_play",
+
+def _ensure_requested(query: str, windows: list[dict]) -> list[dict]:
+    """句子里点名的启动、建关卡，在规划之后由代码补上。
+    测试和其余半句不在这里按词补动作，交给理解器分配。"""
+    windows = _ensure_requested_launch(query, windows)
+    return _ensure_requested_create_level(query, windows)
+
+
+def _scope_text(scope: dict) -> str:
+    """范围自己的话：标题 + 待办说明 + 交付清单。不带原句，避免把别的范围的需求混进来。"""
+    parts = [str(scope.get("title") or ""), str(scope.get("pending_note") or "")]
+    deliverables = scope.get("deliverables")
+    if isinstance(deliverables, (list, tuple)):
+        parts.extend(str(item) for item in deliverables)
+    elif deliverables:
+        parts.append(str(deliverables))
+    return " ".join(part for part in parts if str(part).strip())
+
+
+def _scope_prefix(scope: dict) -> str:
+    """窗口 id 前缀：S + 范围 id + W（范围 B → SBW1）。范围没写 id 时退成 SW。"""
+    sid = str(scope.get("id") or "").strip()
+    return f"S{sid}W" if sid else "SW"
+
+
+def _scope_reid(windows: list[dict], prefix: str) -> list[dict]:
+    """把窗口 id 换成「范围 id 前缀 + 本调用内序号」，依赖只在本调用返回的列表内重映射，
+    指向列表外的依赖一律丢掉（契约：不引用返回列表之外的 id）。每扇都记 goal=True。"""
+    mapping = {
+        str(window.get("id") or ""): f"{prefix}{index}"
+        for index, window in enumerate(windows or [], 1)
+    }
+    out = []
+    for window in windows or []:
+        item = dict(window)
+        wid = mapping.get(str(window.get("id") or ""), "")
+        if not wid:
+            continue
+        item["id"] = wid
+        deps = []
+        for dep in window.get("depends_on") or []:
+            mapped = mapping.get(str(dep), "")
+            if mapped and mapped != wid and mapped not in deps:
+                deps.append(mapped)
+        item["depends_on"] = deps
+        item["goal"] = True
+        out.append(item)
+    return out
+
+
+def _ambiguous_filter_window(filters: list[str]) -> dict:
+    """多条过滤器都不选。问一次全名，不把任何一条写进槽位。"""
+    shown = "、".join(str(name) for name in filters)
+    return {
+        "id": "W1",
+        "title": "跑 Automation",
+        "action": "run_automation_test",
         "slots": {},
-        "depends_on": [dep],
+        "depends_on": [],
         "max_retries": 1,
-        "realizable": True,
-        "ok": True,
-        "blocked": False,
-        "save": False,
-        "pie": True,
-        "task": {
-            "id": wid,
-            "action": "probe_play",
-            "title": "PIE 测试",
-            "query": query,
-            "pie": True,
-            "save": False,
-            "verify": [],
-            "max_retries": 1,
-        },
-    })
-    return windows
+        "realizable": False,
+        "ok": False,
+        "blocked": True,
+        "error": f"过滤器不是唯一的一条：{shown}。只给一次：r 过滤器全名。",
+        **task_policy(),
+    }
+
+
+def scope_windows(scope: dict, query: str = "", complete=None, titles=None) -> list[dict]:
+    """范围补窗（T2 接口）：任务书或理解器把「新建关卡 X」这类范围写成 0 扇窗口时，
+    代码按同一 materialize 路径补出窗口，窗口带 goal=True。
+    规则：「新建/创建/建一个/做一个关卡」→ create_level（名字从范围文字取，
+    取不到再从 query 取）；「新建/创建蓝图」→ 复用已有的 create_blueprint 归地
+    （supervise._try_blueprint_create + windows_from_rules）。
+    「看看 / 检查 / 核对 / 是否有问题」且不含实现、新建、创建、修改、摆、放置：
+    归地到唯一的 Automation 过滤器，收成 run_automation_test。
+    零条维持 []，多条暂停问过滤器全名，不再调用 complete。
+    匹配不上返回 []；任何异常也返回 []，绝不抛出。
+
+    id 契约（T2 依赖）：窗口 id = S<范围 id>W<本调用内序号>，例如范围 B → SBW1、SBW2，
+    范围 C → SCW1；范围没写 id 时用 SW1 起。id 只在本调用内唯一，
+    depends_on 只引用本次返回列表里的 id。"""
+    try:
+        scope = scope if isinstance(scope, dict) else {}
+        if str(scope.get("id") or "").strip() == "INT" or str(scope.get("kind") or "") == "integration":
+            return []
+        text = _scope_text(scope)
+        if not str(text).strip():
+            text = str(query or "")
+        prefix = _scope_prefix(scope)
+        from agent.supervise import _level_token, _try_blueprint_create, _wants_create_level
+
+        if _wants_create_level(text):
+            token = _level_token(text) or _level_token(query)
+            made = materialize_goal(
+                "create_level",
+                {"level": token} if token else {},
+                title="",
+                wid=f"{prefix}1",
+                depends=[],
+                retries=1,
+            )
+            return _scope_reid(made, prefix)
+        blueprint_steps = _try_blueprint_create(text)
+        if (
+            blueprint_steps
+            and any(step.get("blocked") for step in blueprint_steps)
+            and query
+            and not re.search(r"/Game(?:/[A-Za-z0-9_]+)+", text)
+        ):
+            # 范围自己只写了「新建蓝图」、没写 /Game 路径时，路径提示从原句借一次；
+            # 意图仍然只认范围自己的话，别把别的范围的需求混进来。
+            widened = _try_blueprint_create(f"{text} {query}")
+            if widened and not any(step.get("blocked") for step in widened):
+                blueprint_steps = widened
+        if blueprint_steps:
+            return _scope_reid(windows_from_rules(blueprint_steps), prefix)
+        from agent.diagnose import ground_diagnostic, is_diagnostic
+
+        if is_diagnostic(text):
+            # 诊断句不再交给分解器。唯一过滤器收成现成的只读动作；多条只问全名；零条维持缺口。
+            grounded = ground_diagnostic(text)
+            if grounded.get("ok") and str(grounded.get("filter") or "").strip():
+                made = materialize_goal(
+                    "run_automation_test",
+                    {"filter": str(grounded["filter"]).strip()},
+                    title="",
+                    wid=f"{prefix}1",
+                    depends=[],
+                    retries=1,
+                )
+                return _scope_reid(made, prefix)
+            names = [str(item) for item in (grounded.get("filters") or []) if str(item).strip()]
+            if len(names) > 1:
+                return _scope_reid([_ambiguous_filter_window(names)], prefix)
+            return []
+        # 对不上新建关卡、新建蓝图、只读诊断时，交给分解回调。不按术语命名空间收成某一个动作。
+        if callable(complete):
+            from agent.decompose import windows_for_clause
+
+            made = windows_for_clause(text, complete, titles if titles is not None else [])
+            if made:
+                return _scope_reid(made, prefix)
+        return []
+    except Exception:
+        return []
+
+
+def _gate_scene(query: str, windows: list[dict], criteria: list | None,
+                unresolved: list | None = None) -> dict:
+    """场景内容闸门：句子里点名要摆进关卡的东西，理解器或已学模板没接住时由代码补窗。
+    20261021-221446：理解器把「金币、门、平台的摆放位置」整段扔进 unresolved，
+    窗口清单里一扇放置都没有，关卡是空的却仍记 6/7 扇成功。补不出来就进 unmet，不静默。"""
+    empty = {"windows": windows, "criteria": criteria, "added": [], "unmet": [],
+             "unresolved": [str(item) for item in (unresolved or [])]}
+    try:
+        from agent.scene_gate import ensure_scene_windows
+
+        return ensure_scene_windows(query, windows, criteria, unresolved)
+    except Exception as exc:  # 闸门自己坏了也不能把整句规划打断，但要说出来
+        empty["unmet"] = [f"场景内容闸门没跑通：{exc}"]
+        return empty
 
 
 def _try_understand(query: str, complete) -> dict | None:
@@ -1178,6 +1786,79 @@ def _try_understand(query: str, complete) -> dict | None:
     return None
 
 
+_WIDGET_EDIT_TOOLS = (
+    "GetWidgets",
+    "GetWidgetDescription",
+    "GetWidgetTreeDepth",
+    "GetNamedSlots",
+    "ListWidgetClasses",
+    "GetWidgetClassInfo",
+    "AddWidget",
+    "MoveWidget",
+    "RemoveWidget",
+    "RenameWidget",
+    "ToggleWidgetAsVariable",
+    "SetNamedSlotContent",
+    "BindToEventProperty",
+    "CompileWidgetBlueprint",
+)
+
+
+def widget_edit_task(query: str, wid: str = "W2") -> dict:
+    """开关打开时交给图去改句子里那份控件。没有唯一名字也不在这里判死。"""
+    from config import allow_umg
+
+    if not allow_umg():
+        return {
+            "id": wid,
+            "ok": False,
+            "paused": True,
+            "error": "UE_ALLOW_UMG 不是 true，不改 Widget 图。",
+        }
+    text = (query or "").strip()
+    names = list(dict.fromkeys(re.findall(r"(?<![A-Za-z0-9_])(WBP_[A-Za-z0-9_]+)", text)))
+    paths = [
+        item for item in dict.fromkeys(re.findall(r"/Game(?:/[A-Za-z0-9_]+)+", text))
+        if item.rsplit("/", 1)[-1].startswith("WBP_")
+    ]
+    probe = {}
+    if len(paths) == 1:
+        probe["ref_path"] = paths[0]
+    elif len(names) == 1:
+        probe["name"] = names[0]
+    fields = _widget_slot_fields(probe)
+    ref = str(fields.get("ref_path") or "")
+    asset = str(fields.get("asset_name") or "")
+    folder = str(fields.get("folder_path") or "")
+    named = ref or "句子里的 Widget Blueprint"
+    task = {
+        "id": wid,
+        "action": "edit_widget_blueprint",
+        "title": f"改 {asset or '控件'} 图" if asset else "改控件图",
+        "query": (
+            f"{text}\n"
+            f"可以改 Widget Blueprint {named} 的控件树和事件绑定。\n"
+            "先读现有控件树，再最小改动。"
+            "改完不要再调用工具，让裁判编译并保存这份资产。编译失败会进入 fix。"
+            "达到 max_retries 后停止，不要换一张蓝图。"
+        ),
+        "allow_writes": list(_WIDGET_EDIT_TOOLS),
+        **task_policy(),
+        "max_retries": 3,
+    }
+    if ref:
+        task["folder_path"] = folder
+        task["asset_name"] = asset
+        task["ref_path"] = ref
+        task["verify"] = [{
+            "kind": "blueprint_compile",
+            "refPath": ref,
+            "toolset": "UMGToolSet.UMGToolSet",
+            "tool": "CompileWidgetBlueprint",
+        }]
+    return task
+
+
 def _plan_windows_body(query: str, complete=None) -> dict:
     """拆窗口主链（20261015-1705 P1）：
     L0 快路径（离线零成本）：手写规则强命中（每一步都能落地）、learned_routes 已学句式；
@@ -1188,7 +1869,7 @@ def _plan_windows_body(query: str, complete=None) -> dict:
 
     ruled = _plan_rules(query)
     if ruled is not None and _rules_cover(query, ruled):
-        windows = _ensure_requested_test(query, windows_from_rules(ruled))
+        windows = _ensure_requested(query, _gate_scene(query, windows_from_rules(ruled), None)["windows"])
         mark_dangling(windows)
         return {
             "source": "rules",
@@ -1207,7 +1888,7 @@ def _plan_windows_body(query: str, complete=None) -> dict:
         if _unbound_demand(query, learned_actions):
             learned = None
     if learned is not None:
-        windows = _ensure_requested_test(query, learned)
+        windows = _ensure_requested(query, _gate_scene(query, learned, None)["windows"])
         mark_dangling(windows)
         return {
             "source": "learned",
@@ -1225,8 +1906,19 @@ def _plan_windows_body(query: str, complete=None) -> dict:
         from agent.intent import intent_decision
 
         windows = _materialize_goals(intent, query)
-        # 句尾说了测试但模型把「测试」扔进 unresolved 时，测试扇由代码兜底补上
-        windows = _ensure_requested_test(query, _without_unasked_project_compile(query, windows))
+        windows = _without_unasked_project_compile(query, windows)
+        # 句子里点名要摆进关卡的东西，理解器扔进 unresolved 时由代码补放置扇（不静默丢需求）
+        gated = _gate_scene(query, windows, intent.get("criteria"), intent.get("unresolved"))
+        windows = gated["windows"]
+        if gated["criteria"] is not None:
+            intent["criteria"] = gated["criteria"]
+        if gated["added"]:
+            intent["scene_gate"] = {"added": list(gated["added"])}
+        unresolved = list(gated.get("unresolved") or [])
+        unresolved.extend(item for item in gated["unmet"] if item not in unresolved)
+        intent["unresolved"] = unresolved[:4]
+        # 句尾说了测试、打开关卡或看结果，模型没写进窗口时由代码补上
+        windows = _ensure_requested(query, windows)
         mark_dangling(windows)
         decision = intent_decision(intent)
         decision.update({
@@ -1252,6 +1944,12 @@ def _plan_windows_body(query: str, complete=None) -> dict:
         {"role": "system", "content": system_prompt()},
         {"role": "user", "content": query},
     ]
+    try:
+        from agent.cli_log import status
+
+        status("正在规划窗口")
+    except Exception:
+        pass
     try:
         text = complete(messages) if complete is not None else _complete_live(messages)
     except Exception as exc:
@@ -1288,7 +1986,8 @@ def _plan_windows_body(query: str, complete=None) -> dict:
             depends=item["depends_on"],
             retries=item["max_retries"],
         ))
-    windows = _ensure_requested_test(query, _without_unasked_project_compile(query, windows))
+    windows = _gate_scene(query, windows, None)["windows"]
+    windows = _ensure_requested(query, _without_unasked_project_compile(query, windows))
     mark_dangling(windows)
     wrote = False
     if windows and all(window.get("realizable") for window in windows):
@@ -1313,7 +2012,7 @@ def _stamp_decision(planned: dict) -> None:
     if source == "rules":
         planned["intent"] = {
             "actions": actions,
-            "unresolved": [],
+            "unresolved": list(intent.get("unresolved") or []),
             "skill_id": "",
             "version": 0,
             "status": "rules",
@@ -1341,7 +2040,7 @@ def _stamp_decision(planned: dict) -> None:
     planned["intent"] = intent
 
 
-def _finish_plan(query: str, planned: dict) -> dict:
+def _finish_plan(planned: dict) -> dict:
     if not isinstance(planned, dict):
         return planned
     planned = dict(planned)
@@ -1349,14 +2048,15 @@ def _finish_plan(query: str, planned: dict) -> dict:
     if isinstance(windows, list):
         from agent.harness import build_criteria
 
-        planned["criteria"] = build_criteria(query, windows)
+        understood = planned.get("intent_full") if isinstance(planned.get("intent_full"), dict) else {}
+        planned["criteria"] = build_criteria(understood.get("criteria"), windows)
     _stamp_decision(planned)
     return planned
 
 
 def plan_windows(query: str, complete=None) -> dict:
-    """拆窗口主链。收尾时补巡逻只读条款和决策字段，不因此再叫一次模型。"""
-    return _finish_plan(query, _plan_windows_body(query, complete))
+    """拆窗口主链。验收合同取自 L1 的 criteria，没有才按窗口动作类型兜底；不为此再叫一次模型。"""
+    return _finish_plan(_plan_windows_body(query, complete))
 
 
 def _planner_failed(planned: dict) -> bool:
@@ -1369,15 +2069,47 @@ def _planner_failed(planned: dict) -> bool:
     return "规划者没有写出窗口清单" in text
 
 
+def _unfinished_tail(query: str, ruled: list[dict]) -> dict:
+    """弱命中回退的收尾步（WF-3）：手写规则只拆出几个动作，却没有任何一步用带 spec 的验证
+    把整句需求收口。标 ok=False / blocked=True，让 run_sequence 暂停问人、退出码非 0，
+    不让「平台跳跃整句只拆出 1 步 place_blueprint」这种半拆结果跑完就 return 0。"""
+    actions: list[str] = []
+    for step in ruled:
+        action = _action_of(step)
+        if action and action not in actions:
+            actions.append(action)
+    listed = "、".join(actions) if actions else "空"
+    return {
+        "id": f"W{len(ruled) + 1}",
+        "title": "整句需求还没有收口",
+        "action": "",
+        "slots": {},
+        "depends_on": [],
+        "max_retries": 0,
+        "realizable": False,
+        "ok": False,
+        "blocked": True,
+        "error": (
+            f"手写规则只拆出 {len(ruled)} 步（动作 {listed}），"
+            "没有一次带 spec 的验证把整句需求收口，当成未完成，不要报成功。"
+        ),
+        **task_policy(),
+    }
+
+
 def steps_for_menu2(query: str, complete=None) -> list[dict]:
-    """菜单 2 和菜单 3 共用 plan_windows。理解器失败时退回手写步骤，再不行才是老规划者留下的暂停窗。"""
+    """菜单 2 和菜单 3 共用 plan_windows。理解器失败时退回手写步骤，再不行才是老规划者留下的暂停窗。
+    回退分支同样要过 _rules_cover（WF-3）：强命中才原样返回规则步骤；弱命中保留可执行步骤，
+    末尾补一扇未完成窗，免得半拆的规则结果被当成整句成功。"""
     planned = plan_windows(query, complete=complete)
     if _planner_failed(planned):
         from agent.supervise import _plan_rules
 
         ruled = _plan_rules(query)
         if ruled:
-            return ruled
+            if _rules_cover(query, ruled):
+                return ruled
+            return list(ruled) + [_unfinished_tail(query, ruled)]
     steps = []
     for window in planned.get("windows") or []:
         if not isinstance(window, dict):

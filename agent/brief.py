@@ -2,12 +2,15 @@
 """任务书：一句话 → 范围 / 尚未完成内容清单 / 估时区间 / 依赖 / 外部依赖。
 估算与免责只是记录字段，执行层不读、不作为预算。表外内容由代码丢弃。
 人审门：确认 / 修改意见 / 放弃；意见会带进下一轮并记审阅轮次。"""
+import contextlib
 import json
+import os
 import re
+import sys
 from datetime import datetime
 from pathlib import Path
 
-from agent.catalog import CATALOG, INTEGRATE_ACTION
+from agent.catalog import CATALOG, DISPOSE_ACTION, INTEGRATE_ACTION
 from agent.ledger import ledger_summary_text
 from config import PROJECT_ROOT
 
@@ -19,9 +22,11 @@ _DISCLAIMER = ("任务之间有重叠", "估算是粗的，不构成承诺", "�
 
 # 估时按动作类型给区间（小时）：新功能宽、只读裁决窄。只进文档。
 _ACTION_ESTIMATE = {
+    "launch_editor": (0.1, 0.5),
     "edit_cpp": (4.0, 16.0),
     "compile_project": (2.0, 8.0),
     "compile_blueprint": (1.0, 4.0),
+    "edit_widget_blueprint": (1.0, 4.0),
     "bind_blueprint": (1.0, 4.0),
     "place_actor": (1.0, 3.0),
     "set_pickable": (1.0, 4.0),
@@ -29,9 +34,12 @@ _ACTION_ESTIMATE = {
     "judge_pickup": (0.5, 2.0),
     "query_actor": (0.5, 2.0),
     "run_automation_test": (0.5, 2.0),
+    "implement_shooter": (1.0, 4.0),
+    "open_level": (0.2, 1.0),
     "set_scalar_param": (0.5, 2.0),
     "query_material": (0.5, 1.0),
     "place_batch": (1.0, 4.0),
+    "remove_batch": (0.5, 2.0),
     "probe_move": (1.0, 4.0),
     "probe_look": (1.0, 4.0),
     "probe_play": (1.0, 4.0),
@@ -43,6 +51,408 @@ _SCOPE_KEYS = ("id", "title", "deliverables", "pending_note", "estimate_hours", 
 _WINDOW_KEYS = ("id", "title", "action", "slots", "depends_on", "max_retries")
 _INTEGRATION_KEYS = ("title", "deliverables", "estimate_hours")
 _EXT_KEYS = ("name", "provides", "status")
+
+# 零窗口范围的话术（20261024-192858：B/C 整段蒸发在那句「只记录待办」上）。
+# 交付清单非空却没有一扇能跑的窗口，这不是「待办」，是能力缺口：确认后先试着补窗，
+# 补不出就不执行，并且要在人审门和收尾里显式说出来。
+# 「能力缺口」四个字放最前面：人审门的表格很窄，rich 会截到 20 字左右，
+# 放在句尾就等于没显示（md 里也一样，先说的先被看见）。
+_GAP_NOTE = "能力缺口：没有可执行的窗口（不是待办）。确认后先按同一路径试补窗，补不出就不执行。"
+_LEGACY_ZERO_WINDOW_NOTE = "没有可执行的窗口，只记录待办，不进执行。"
+# 「动作表里没有建关卡的动作」→ 抠出「建关卡」。抠不到就空着，不瞎编动作名。
+_GAP_ACTION_RE = re.compile(r"(?:没有|缺少|缺|没)([^，。；、\s“”\"']{2,12}?)的动作")
+
+
+def _zero_window_scope(scope: dict) -> bool:
+    """结构性零窗口：交付清单非空、不等外部、也不是集成末行，却没有一扇窗口。
+    人审门的集成行（没有 id、没有 windows）不走这条。"""
+    if not isinstance(scope, dict):
+        return False
+    if not str(scope.get("id") or "").strip():
+        return False
+    if scope.get("blocked") or str(scope.get("external_dep") or "").strip():
+        return False
+    if str(scope.get("kind") or "") == "integration" or str(scope.get("id") or "") == "INT":
+        return False
+    return not [item for item in (scope.get("windows") or []) if isinstance(item, dict)]
+
+
+def capability_gap_note(scope: dict) -> str:
+    """零窗口范围给人看的话：说清是能力缺口，不是「只记录待办」。
+    老任务书文件里存的旧文案在这里被换掉，免得人审门照着旧句放行。
+    D6：光说「缺口」不够，人审要看见「缺什么」，所以把抠得出的动作词缀在后面
+    （抠不到就不缀，不瞎编——`_gap_missing_actions` 的口径）。"""
+    text = str((scope or {}).get("block_note") or "").replace(_LEGACY_ZERO_WINDOW_NOTE, "").strip()
+    if "能力缺口" not in text:
+        text = (text + " " if text else "") + _GAP_NOTE
+    missing = _gap_missing_actions(scope)
+    if missing and "缺：" not in text:
+        text += " 缺：" + "、".join(missing) + "。"
+    return text
+
+
+def _gap_missing_actions(scope: dict) -> list[str]:
+    """从 pending_note/交付清单里抠「缺的动作词」。抠不到就空着——不瞎编动作名。"""
+    text = " ".join(
+        [str(scope.get("pending_note") or "")]
+        + [str(item) for item in (scope.get("deliverables") or [])]
+    )
+    found: list[str] = []
+    for match in _GAP_ACTION_RE.finditer(text):
+        name = match.group(1).strip()
+        if name and name not in found:
+            found.append(name)
+    return found[:3]
+
+
+def _capability_gap_record(scope: dict) -> dict:
+    """范围整段没有可执行窗口时的结构化记录：原因 + 交付清单 + 缺的动作词 + 现状原话。"""
+    return {
+        "reason": _GAP_NOTE,
+        "deliverables": [str(item) for item in (scope.get("deliverables") or [])],
+        "missing_actions": _gap_missing_actions(scope),
+        "pending_note": str(scope.get("pending_note") or ""),
+    }
+
+
+def _note_gap_candidate(scope: dict, gap: dict) -> None:
+    """真能提名一个动作时才记候选表；抠不到动作名就只留在 capability_gap 里。"""
+    names = [str(item) for item in (gap.get("missing_actions") or []) if str(item).strip()]
+    if not names:
+        return
+    try:
+        from agent.catalog import note_candidate
+
+        for name in names:
+            note_candidate(
+                name,
+                source="capability_gap",
+                summary=(
+                    f"范围 {scope.get('id')} 没有可执行的窗口，缺这个动作："
+                    + str(scope.get("pending_note") or "")[:80]
+                ),
+            )
+    except Exception:
+        pass
+
+
+def _rescue_scope_windows(scope: dict, query: str, complete=None, titles=None) -> list[dict]:
+    """零窗口范围先补救：调 T1 的 agent.plan_windows.scope_windows 按同一 materialize 路径补窗。
+    那个函数还没落地、导入失败、或它自己抛异常，都只当补不出（返回 []），不能把物化整段打断。"""
+    try:
+        from agent.plan_windows import scope_windows
+    except ImportError:
+        return []
+    except Exception:
+        return []
+    if not callable(scope_windows):
+        return []
+    use_titles = titles
+    if complete is not None and use_titles is None:
+        try:
+            use_titles = _retrieval_titles(str(query or "")[:200], 3)
+        except Exception:
+            use_titles = []
+    try:
+        try:
+            made = scope_windows(scope, query, complete=complete, titles=use_titles)
+        except TypeError:
+            made = scope_windows(scope, query)
+    except Exception:
+        return []
+    out: list[dict] = []
+    sid = str(scope.get("id") or "S")
+    for index, item in enumerate(made or [], 1):
+        if not isinstance(item, dict) or not str(item.get("action") or "").strip():
+            continue
+        row = dict(item)
+        if not str(row.get("id") or "").strip():
+            # T1 的补窗 id 形如 SBW1；只兜底无 id 的，带上范围 id 防跨范围撞号
+            row["id"] = f"SBW-{sid}-{index}"
+        out.append(row)
+    return out
+
+
+# ---------------------------------------------------------------- D6 覆盖预演
+# 人审发生在物化之前（[事实] agent/run_windows.py:2458 brief_flow → :2470 materialize_scopes），
+# 所以人审那一刻 scope["windows"] 可能本来就是空的——那是模型没给窗口，不是我们没物化。
+# 只看声明字段，人审门看到的是「模型写了什么」；人审要判的是「跑起来有没有东西跑」，
+# 那是「声明窗口 + 补窗救援」之后的结果。两者差在零窗口范围上，所以人审前做一次预演。
+
+# 缺口显式确认协议（§7 不做清单第 7 条：不引入「缺省回车即通过」）。
+# 只有存在能力缺口范围时才生效；正常任务书仍是一句「确认」或直接回车通过（反例守卫）。
+GAP_ACK_PHRASE = "确认缺口"
+GAP_ACK_ESCALATE_ENV = "UE_ESCALATE_GAPS"
+_LEGACY_CONFIRM_WORDS = ("确认", "confirm", "y", "yes", "ok", "通过")
+_CONFIRM_WORD_RE = re.compile(r"(?:确认|confirm|yes|ok)", re.I)
+
+
+def _escalate_gaps() -> bool:
+    """缺口是否阻塞人审门。默认开；只有显式写成 false/0/no/off 才旁路（§3.2 允许）。
+    [事实] docs/upgrade/next-upgrade-plan.md:204「可用环境变量旁路（UE_ESCALATE_GAPS=false
+    时只记录不阻塞）——但不允许它在真实 run 里默认关闭」。"""
+    raw = str(os.environ.get(GAP_ACK_ESCALATE_ENV, "") or "").strip().lower()
+    return raw not in ("false", "0", "no", "off")
+
+
+@contextlib.contextmanager
+def _no_candidate_writes():
+    """dry-run 期间把「记能力候选」这条写盘腿临时掐掉。
+
+    为什么需要：预演走的是 `_rescue_scope_windows` → `agent.plan_windows.scope_windows`，
+    里面会 `materialize`/`materialize_goal`；而 `materialize` 在表外动作分支会调
+    `note_candidate(...)`（[事实] agent/plan_windows.py:570），后者 `_write_rows` 真写
+    `data/skills/action_candidates.json`（[事实] agent/catalog.py:327）。人审前先写盘等于
+    「还没确认就先改了项目状态」，而且人审可能被放弃/重出。
+
+    为什么不能用别的办法：`materialize_scopes` 的补窗路径是同一个 `_rescue_scope_windows`，
+    但在人审阶段物化会把 `brief["scopes"][i]["windows"]` 真的填上，人审看到的就是物化后的
+    任务书 —— 那是另一个对象、另一件事（且候选窗口继承会吃掉 candidates）。这里的职责只是
+    「算一算会有几扇窗口」，所以只掐写盘腿。
+
+    为什么安全：`note_candidate` 只往候选表追加/累加命中次数（source="planner"），它不参与
+    `allows()` 判定、不改 CATALOG、不影响 `materialize` 的返回值（[事实] agent/catalog.py:329-355
+    只读写候选文件；`allows()` 读的是 CATALOG 与 promoted，`catalog.py:368` 的硬门不提候选表）。
+    也就是说掐掉它只丢一次「这个表外动作被提过一次」的计数，不改变任何决策。
+    而且 `_rescue_scope_windows` 内部调的是模块级 `from agent.plan_windows import scope_windows`，
+    那个模块在 import 时就把 `note_candidate` 绑成了局部名（[事实] agent/plan_windows.py:8），
+    所以必须**同时**替换 `agent.plan_windows.note_candidate` 与 `agent.catalog.note_candidate`。
+    两个名字都在 `finally` 里原样恢复；恢复失败也只可能是 AttributeError，不吞别的异常。"""
+    from agent import catalog as catalog_mod
+
+    try:
+        from agent import plan_windows as plan_windows_mod
+    except Exception:
+        plan_windows_mod = None
+
+    saved: list[tuple[object, str, object]] = []
+    targets = [("note_candidate", catalog_mod)]
+    if plan_windows_mod is not None:
+        targets.append(("note_candidate", plan_windows_mod))
+    try:
+        for name, module in targets:
+            if hasattr(module, name):
+                saved.append((module, name, getattr(module, name)))
+                setattr(module, name, _noop_candidate)
+            else:
+                saved.append((module, name, None))
+                setattr(module, name, _noop_candidate)
+        yield
+    finally:
+        for module, name, original in reversed(saved):
+            if original is None:
+                try:
+                    delattr(module, name)
+                except AttributeError:
+                    pass
+            else:
+                setattr(module, name, original)
+
+
+def _noop_candidate(*_args, **_kwargs):
+    """`note_candidate` 的干跑替身：不写盘、不返回记录。"""
+    return None
+
+
+def _planned_scope_windows(scope: dict, query: str) -> list[dict]:
+    """预演单个范围的覆盖：模型声明了就照声明，没声明就按同一救援路径补一次。
+    与 `materialize_scopes` 的判定顺序一致（[事实] agent/brief.py:900-906）：
+    blocked / 等外部 的范围不补窗，也不计入缺口。"""
+    declared = [raw for raw in (scope.get("windows") or []) if isinstance(raw, dict)]
+    if declared:
+        return declared
+    if scope.get("blocked") or str(scope.get("external_dep") or "").strip():
+        return []
+    return _rescue_scope_windows(scope, query)
+
+
+def _window_runnable(window: dict) -> bool:
+    """这一扇预演窗口是否真能跑。`materialize` 造出来的窗口带 blocked/realizable
+    （[事实] agent/plan_windows.py:552-598：表外动作、缺槽位、归地失败都会 blocked=True，
+    返回前才 realizable=True）；任务书自己声明的 raw 窗口没有这两个字段，
+    按「不知道 = 先算能跑」处理，免得把模型写的窗口一律当成暂停窗。"""
+    if not isinstance(window, dict):
+        return False
+    if window.get("blocked") is True or window.get("realizable") is False:
+        return False
+    return bool(str(window.get("action") or "").strip())
+
+
+def preview_coverage(brief: dict) -> dict:
+    """人审用的覆盖预演（dry-run，不写盘）：算出「若现在物化，各范围会有几扇窗口」。
+
+    返回 {"scopes": [{"id","title","count","runnable","actions","declared","rescued","gap"}],
+          "total": 业务窗口总数, "gaps": [{"id","title","missing_actions","pending_note","note"}]}。
+    结果同时写回 `brief["coverage"]`（新增字段，供 run_windows 侧与断言读）。
+
+    `count` 是窗口扇数，`runnable` 是其中真能跑的扇数。两个数分开：
+    「补窗补出一扇暂停窗」与「补出可跑窗口」在人审眼里完全不同，前者仍是洞，
+    只显示「窗口：1 扇」等于拿一个跑不起来的窗口冒充覆盖。
+    """
+    query = str(brief.get("query") or "")
+    rows: list[dict] = []
+    gaps: list[dict] = []
+    total = 0
+    for scope in brief.get("scopes") or []:
+        if not isinstance(scope, dict):
+            continue
+        declared = [raw for raw in (scope.get("windows") or []) if isinstance(raw, dict)]
+        with _no_candidate_writes():
+            planned = _planned_scope_windows(scope, query)
+        actions = [str(item.get("action") or "") for item in planned]
+        runnable = [item for item in planned if _window_runnable(item)]
+        blocked = bool(scope.get("blocked"))
+        external = str(scope.get("external_dep") or "").strip()
+        # 整段没窗口 ⇒ 缺口；有窗口但一扇都跑不起来且不等外部 ⇒ 同样是缺口
+        # （交付清单非空却没有任何可执行路径，这与「0 扇窗口」在人审眼里是同一件事）
+        gap = _zero_window_scope({**scope, "windows": planned})
+        if not gap and planned and not runnable and not blocked and not external:
+            gap = True
+        row = {
+            "id": str(scope.get("id") or ""),
+            "title": str(scope.get("title") or ""),
+            "count": len(planned),
+            "runnable": len(runnable),
+            "actions": [name for name in actions if name],
+            "declared": len(declared),
+            "rescued": len(planned) - len(declared),
+            "gap": bool(gap),
+            "blocked": blocked,
+            "external_dep": external,
+        }
+        rows.append(row)
+        total += len(planned)
+        if gap:
+            gaps.append({
+                "id": row["id"],
+                "title": row["title"],
+                "missing_actions": _gap_missing_actions(scope),
+                "pending_note": str(scope.get("pending_note") or ""),
+                "note": capability_gap_note(scope),
+            })
+    coverage = {"scopes": rows, "total": total, "gaps": gaps, "dry_run": True}
+    brief["coverage"] = coverage
+    return coverage
+
+
+def _acked_gap_ids(brief: dict) -> set[str]:
+    """人审门已经显式确认「不执行」的范围 id。没确认过就是空集。"""
+    if not isinstance(brief, dict):
+        return set()
+    ack = brief.get("gap_ack")
+    if not isinstance(ack, dict) or not ack.get("acknowledged"):
+        return set()
+    return {str(item) for item in (ack.get("scopes") or []) if str(item).strip()}
+
+
+def gap_scopes(brief: dict) -> list[dict]:
+    """人审门认的缺口范围。优先用预演结果（已算过补窗），没预演就退回声明字段判定。
+    [事实] 结构化 capability_gap 只在 materialize_scopes（:906/:997）写，那是人审之后，
+    所以人审阶段不能读它。"""
+    coverage = brief.get("coverage")
+    if isinstance(coverage, dict) and isinstance(coverage.get("gaps"), list):
+        return [item for item in coverage["gaps"] if isinstance(item, dict) and item.get("id")]
+    return [
+        {"id": str(scope.get("id")), "title": str(scope.get("title") or ""),
+         "missing_actions": _gap_missing_actions(scope),
+         "pending_note": str(scope.get("pending_note") or ""),
+         "note": capability_gap_note(scope)}
+        for scope in brief.get("scopes") or []
+        if isinstance(scope, dict) and _zero_window_scope(scope)
+    ]
+
+
+def _coverage_of(scope: dict, coverage: dict | None) -> dict | None:
+    """从预演结果里取这一行的覆盖（集成末行没有对应行，返回 None）。"""
+    if not isinstance(coverage, dict):
+        return None
+    sid = str((scope or {}).get("id") or "")
+    if not sid:
+        return None
+    for row in coverage.get("scopes") or []:
+        if str((row or {}).get("id") or "") == sid:
+            return row
+    return None
+
+
+def _coverage_text(row: dict | None) -> str:
+    """覆盖列的一句话：`窗口：N 扇`，能列出动作就列出来（给人审看能不能真跑）。
+
+    有窗口但一扇都跑不起来时写出 `可跑 0 扇`：否则「窗口：1 扇（no_such_action）」
+    在人眼里与「有一扇能跑」无法区分，等于用一个暂停窗冒充覆盖。"""
+    if not isinstance(row, dict):
+        return ""
+    count = int(row.get("count") or 0)
+    runnable = int(row.get("runnable", count) or 0)
+    text = f"窗口：{count} 扇"
+    actions = [str(name) for name in (row.get("actions") or []) if str(name).strip()]
+    if actions:
+        text += f"（{'、'.join(actions)}）"
+    if count and not runnable:
+        text += " ※可跑 0 扇（全是暂停窗）"
+    if int(row.get("rescued") or 0) > 0:
+        text += f" ※含补窗 {int(row['rescued'])} 扇"
+    return text
+
+
+def _review_state(scope: dict, coverage: dict | None) -> str:
+    """这一行在人审眼里算什么：""（正常）/ "gap"（真缺口）/ "rescued"（模型没给但补得出）。
+
+    [事实] 有预演结果时以预演为准：B 段这种「模型给了 0 扇、代码按同一路径补得出」的范围
+    如果还照着声明字段喊「能力缺口」，人审会同时看到「缺口」和「窗口 1 扇」两个说法，
+    比空白更糟。没有预演（直接 render 的任务书文件）则退回声明判定，保持旧口径。
+    """
+    if isinstance(scope, dict) and scope.get("blocked"):
+        return ""
+    row = _coverage_of(scope, coverage) if isinstance(coverage, dict) else None
+    if row is not None:
+        if row.get("gap"):
+            return "gap"
+        if int(row.get("rescued") or 0) > 0:
+            return "rescued"
+        return ""
+    return "gap" if _zero_window_scope(scope) else ""
+
+
+def _rescued_note(row: dict) -> str:
+    """补窗预告的措辞：说清是预演、没写盘、真补不出来才会变成缺口。"""
+    return (
+        f"模型没给窗口，预演按同一路径补出 {int(row.get('rescued') or 0)} 扇"
+        "（dry-run 未写盘；补不出来才算能力缺口）"
+    )
+
+
+def _gap_ack_prompt(gaps: list[dict]) -> str:
+    """缺口确认的提示语：把要人表态的东西逐条摆出来，并写清协议。
+    §7 不做清单第 7 条禁止「缺省回车即通过」，所以这里必须明说回车不算。"""
+    ids = "、".join(f"{item.get('id')}" for item in gaps) or "?"
+    lines = [
+        f"存在能力缺口（范围 {ids}）：这些范围有交付清单，但没有一扇能跑的窗口。",
+    ]
+    for item in gaps:
+        missing = [str(name) for name in (item.get("missing_actions") or []) if str(name).strip()]
+        lines.append(
+            f"  · {item.get('id')} {item.get('title') or ''}".rstrip()
+            + "：" + ("缺动作 " + "、".join(missing) if missing else "缺可落地的动作（抠不出动作名）")
+        )
+    lines.append(
+        f"    输入「{GAP_ACK_PHRASE}」= 承认缺口、只跑有窗口的范围（缺的部分不执行）；"
+        "带「确认/ok/yes」的其它说法 = 同样承认；"
+        "「放弃/q」= 这次不执行。"
+    )
+    lines.append("    直接回车不算确认（缺口必须显式表态）。")
+    return "\n".join(lines)
+
+
+def _ack_is_explicit(answer: str) -> bool:
+    """缺口任务的确认词：必须真的写了确认词（回车、空串都不算）。
+    「确认缺口」与「确认」「ok」都认，但必须是敲进来的字。"""
+    text = str(answer or "").strip()
+    if not text:
+        return False
+    if text == GAP_ACK_PHRASE:
+        return True
+    return _CONFIRM_WORD_RE.search(text) is not None
 
 
 def needs_brief(query: str, windows: list[dict] | None, intent: dict | None = None) -> bool:
@@ -81,6 +491,7 @@ def brief_system_prompt() -> str:
         "你只输出 JSON 任务书，不解释。",
         "把用户一句话拆成范围（A、B、C…），每个范围列「尚未完成」的交付条目，最后带一行累计集成。",
         "deliverables 枚举还没完成的内容，包括「代码已有但未接线、未验证」这类现状，写进 pending_note。",
+        "台账摘要只用来标出原句里已经做过的部分。原句没提到的台账条目不要写进 scopes，也不要写进 integration。",
         "windows 只能用动作表里的动作和槽位名；看不准就不要编。windows 的 depends_on 只引用先出现的窗口 id。",
         "候选窗口给了 id 时，范围 windows 必须原样引用候选的 id 和 action，不要自己编动作、槽位或路径，也不要漏掉候选窗口。",
         "只能等、不能跑的外部服务写进 external_dependencies。范围等外部服务时，把服务名写进该范围的 external_dep。",
@@ -107,7 +518,7 @@ def brief_system_prompt() -> str:
         "动作表：",
     ]
     for name, spec in CATALOG.items():
-        if name == INTEGRATE_ACTION:
+        if name in (INTEGRATE_ACTION, DISPOSE_ACTION):
             continue
         slots = "、".join(spec["slots"]) if spec["slots"] else "无"
         if spec.get("mode") == "one":
@@ -230,7 +641,7 @@ def validate_brief(data: dict, query: str) -> dict:
             scope["blocked"] = True
             scope["block_note"] = "交付清单为空，这一范围暂停，不执行它的窗口。"
         if not wins and not scope.get("blocked"):
-            scope["block_note"] = "没有可执行的窗口，只记录待办，不进执行。"
+            scope["block_note"] = _GAP_NOTE
         scopes.append(scope)
     brief["scopes"] = scopes
 
@@ -283,13 +694,155 @@ def validate_brief(data: dict, query: str) -> dict:
     return brief
 
 
+_SCOPE_CITE_RE = re.compile(r"(?<![A-Za-z0-9_])([A-Z])(?![A-Za-z0-9_])")
+
+
+def _cited_scope_ids(text: str) -> list[str]:
+    found: list[str] = []
+    for match in _SCOPE_CITE_RE.finditer(text or ""):
+        sid = match.group(1)
+        if sid not in found:
+            found.append(sid)
+    return found
+
+
+def _remap_scope_ids(text: str, mapping: dict[str, str]) -> str:
+    def repl(match):
+        old = match.group(1)
+        if old not in mapping:
+            return match.group(0)
+        return "\u0000" + mapping[old]
+
+    return _SCOPE_CITE_RE.sub(repl, text or "").replace("\u0000", "")
+
+
+def _recompute_total(brief: dict) -> None:
+    low = high = 0.0
+    for scope in brief.get("scopes") or []:
+        hours = scope.get("estimate_hours") or [0, 0]
+        low += float(hours[0])
+        high += float(hours[1])
+    hours = (brief.get("integration") or {}).get("estimate_hours") or []
+    if len(hours) == 2:
+        low += float(hours[0])
+        high += float(hours[1])
+    brief["total_estimate"] = {"min_hours": round(low, 1), "max_hours": round(high, 1)}
+
+
+def strip_unrelated_carryover(brief: dict, query: str, ledger_path: Path | None = None) -> dict:
+    """原句没提到的台账条目，模型若照抄进范围，这里丢掉并重新编号。"""
+    from agent.ledger import overlap_size, read_ledger, same_subject, scope_text
+
+    unrelated = []
+    for old in read_ledger(ledger_path).get("scopes") or []:
+        if isinstance(old, dict) and old.get("id") and not same_subject(scope_text(old), query):
+            unrelated.append(old)
+    if not unrelated:
+        return brief
+    kept = []
+    dropped_ids: list[str] = []
+    notes = list(brief.get("dropped") or [])
+    for scope in brief.get("scopes") or []:
+        blob = scope_text(scope)
+        if same_subject(blob, query):
+            kept.append(scope)
+            continue
+        matched = None
+        matched_n = 0
+        for old in unrelated:
+            score = overlap_size(blob, scope_text(old))
+            if score > matched_n:
+                matched = old
+                matched_n = score
+        if matched is None:
+            kept.append(scope)
+            continue
+        sid = str(scope.get("id") or "")
+        dropped_ids.append(sid)
+        notes.append(
+            f"范围 {sid}「{scope.get('title') or sid}」沿用了台账里原句没提到的"
+            f"「{matched.get('title') or matched.get('id')}」，已从本次任务书去掉"
+        )
+    if not dropped_ids:
+        return brief
+    integration = brief.get("integration") if isinstance(brief.get("integration"), dict) else {}
+    deliverables: list[str] = []
+    for item in integration.get("deliverables") or []:
+        text = str(item)
+        cited = _cited_scope_ids(text)
+        if cited and all(sid in dropped_ids for sid in cited):
+            notes.append(f"集成条目只引用已去掉的范围 {'、'.join(cited)}，已去掉：{text}")
+            continue
+        deliverables.append(text)
+    dropped_wids = {
+        str(window.get("id"))
+        for scope in brief.get("scopes") or []
+        if str(scope.get("id") or "") in dropped_ids
+        for window in scope.get("windows") or []
+        if window.get("id")
+    }
+    mapping: dict[str, str] = {}
+    for index, scope in enumerate(kept):
+        old = str(scope.get("id") or "")
+        mapping[old] = chr(ord("A") + index) if index < 26 else old
+    for scope in kept:
+        for window in scope.get("windows") or []:
+            window["depends_on"] = [
+                str(dep) for dep in (window.get("depends_on") or []) if str(dep) not in dropped_wids
+            ]
+        scope["depends_on"] = [
+            mapping[str(dep)] for dep in (scope.get("depends_on") or []) if str(dep) in mapping
+        ]
+        if scope.get("pending_note"):
+            scope["pending_note"] = _remap_scope_ids(str(scope["pending_note"]), mapping)
+        old_id = str(scope.get("id") or "")
+        scope["id"] = mapping.get(old_id, old_id)
+    if integration:
+        integration["deliverables"] = [_remap_scope_ids(item, mapping) for item in deliverables]
+        brief["integration"] = integration
+    for item in brief.get("external_dependencies") or []:
+        if not isinstance(item, dict):
+            continue
+        for key in ("status", "provides"):
+            if item.get(key):
+                item[key] = _remap_scope_ids(str(item[key]), mapping)
+    brief["scopes"] = kept
+    brief["dropped"] = notes
+    _recompute_total(brief)
+    return brief
+
+
+def _unresolved_list(unresolved) -> list[str]:
+    """理解器的 unresolved → 任务书要落的字符串列表。非列表、空串都丢掉，不做补全。"""
+    if not isinstance(unresolved, (list, tuple)):
+        return []
+    out: list[str] = []
+    for item in unresolved:
+        text = str(item or "").strip()
+        if text and text not in out:
+            out.append(text)
+    return out
+
+
 def generate_brief(query: str, windows: list[dict] | None = None, complete=None,
-                   feedback: str = "", ledger_text: str | None = None) -> dict | None:
-    """生成器只看：原句、动作表、任务书 schema、台账摘要、3 条检索标题、候选窗口。"""
+                   feedback: str = "", ledger_text: str | None = None,
+                   unresolved=None) -> dict | None:
+    """生成器只看：原句、动作表、任务书 schema、台账摘要、3 条检索标题、候选窗口。
+
+    D9：`unresolved`（理解器扔掉的原句半句）原样写进 `brief["unresolved"]`，
+    render_brief_md 的「尚未完成清单」据此渲染。**不传时行为与今天完全一致**
+    （不带这个键，章节不渲染）。[事实] 20261024-192858 的任务书 md 只有 21 行、
+    没有这个章节，因为 brief_flow 不接收 intent、generate_brief 签名里没有 unresolved。"""
     from agent.plan_windows import _complete_live
 
+    try:
+        from agent.cli_log import status
+
+        status("正在写任务书")
+    except Exception:
+        pass
     titles = _retrieval_titles(query)
-    ledger = ledger_text if ledger_text is not None else ledger_summary_text()
+    ledger = ledger_text if ledger_text is not None else ledger_summary_text(query=query)
     user = brief_user_prompt(query, windows, ledger, titles)
     if feedback:
         user += "\n上一轮审阅意见（据此修改）：" + str(feedback)[:600]
@@ -304,11 +857,41 @@ def generate_brief(query: str, windows: list[dict] | None = None, complete=None,
     data = parse_brief_json(text)
     if data is None:
         return None
-    return validate_brief(data, query)
+    brief = strip_unrelated_carryover(validate_brief(data, query), query)
+    pending = _unresolved_list(unresolved)
+    if pending:
+        brief["unresolved"] = pending
+    return brief
+
+
+def _scope_coverage_row(scope: dict, coverage: dict | None) -> dict | None:
+    """这一行该显示的覆盖。有预演结果就用预演（已含补窗），否则退回声明窗口。
+    集成末行（无 id）人审时还没有 integrate_verify，不画覆盖，免得编一个数出来。"""
+    row = _coverage_of(scope, coverage)
+    if row is not None:
+        return row
+    if not str((scope or {}).get("id") or "").strip():
+        return None
+    declared = [raw for raw in (scope.get("windows") or []) if isinstance(raw, dict)]
+    return {
+        "id": str(scope.get("id")),
+        "count": len(declared),
+        "actions": [str(item.get("action") or "") for item in declared if str(item.get("action") or "")],
+        "declared": len(declared),
+        "rescued": 0,
+    }
 
 
 def render_brief_md(brief: dict) -> str:
-    """渲染成模版样式：三列表 + 依赖 + 外部依赖 + 总工作量与免责。"""
+    """渲染成模版样式：三列表 + 依赖 + 外部依赖 + 总工作量与免责。
+
+    D6：表从三列变四列（多一列「窗口覆盖」），原三列语义不动。**只有存在能力缺口范围时
+    才加这一列与缺口小节**：覆盖齐全的任务书必须与旧版逐字一致（反例守卫），
+    不能给正常任务加噪音。
+    """
+    coverage = brief.get("coverage") if isinstance(brief.get("coverage"), dict) else None
+    gaps = gap_scopes(brief)
+    show_coverage = bool(gaps)
     lines: list[str] = ["# 任务书" + (" " + str(brief["stamp"]) if brief.get("stamp") else ""), ""]
     lines.append(f"- 原句：{brief.get('query')}")
     if brief.get("json_path"):
@@ -316,24 +899,61 @@ def render_brief_md(brief: dict) -> str:
     review = brief.get("review") or {}
     if review.get("rounds"):
         lines.append(f"- 审阅：{review['rounds']}（{review.get('status') or '待确认'}）")
-    lines += ["", "| 任务范围 | 尚未完成的全部主要内容 | 估时区间（小时） |", "| --- | --- | --- |"]
+    lines.append("")
+    if show_coverage:
+        lines.append("| 任务范围 | 尚未完成的全部主要内容 | 估时区间（小时） | 窗口覆盖 |")
+        lines.append("| --- | --- | --- | --- |")
+    else:
+        lines.append("| 任务范围 | 尚未完成的全部主要内容 | 估时区间（小时） |")
+        lines.append("| --- | --- | --- |")
     for scope in brief.get("scopes") or []:
         items = "<br>".join("- " + d for d in scope.get("deliverables") or []) or "（空）"
         if scope.get("pending_note"):
             items += f"<br>现状：{scope['pending_note']}"
+        state = _review_state(scope, coverage)
         if scope.get("blocked"):
             items += f"<br>※ {scope.get('block_note') or '这一范围暂停'}"
+        elif state == "gap":
+            items += f"<br>※ {capability_gap_note(scope)}"
         deps = "、".join(scope.get("depends_on") or []) or "无"
         items += f"<br>依赖：{deps}"
         if scope.get("external_dep"):
             items += f"<br>等外部：{scope['external_dep']}"
         hours = scope.get("estimate_hours") or [0, 0]
-        lines.append(f"| {scope['id']} {scope.get('title') or ''} | {items} | {hours[0]:g}–{hours[1]:g} |")
+        row = f"| {scope['id']} {scope.get('title') or ''} | {items} | {hours[0]:g}–{hours[1]:g} |"
+        if show_coverage:
+            # 零窗口范围写「窗口：0 扇」，与「一切正常」的空白区分开
+            cover = _coverage_text(_scope_coverage_row(scope, coverage)) or "窗口：0 扇"
+            if state == "rescued":
+                cover += " ※" + _rescued_note(_scope_coverage_row(scope, coverage) or {})
+            row += f" {cover} |"
+        lines.append(row)
     integration = brief.get("integration") or {}
     if integration:
         items = "<br>".join("- " + d for d in integration.get("deliverables") or [])
         hours = integration.get("estimate_hours") or [0, 0]
-        lines.append(f"| （末行）{integration.get('title') or '累计集成、验证与交付'} | {items} | {hours[0]:g}–{hours[1]:g} |")
+        row = f"| （末行）{integration.get('title') or '累计集成、验证与交付'} | {items} | {hours[0]:g}–{hours[1]:g} |"
+        if show_coverage:
+            row += " 物化后追加 |"
+        lines.append(row)
+    if show_coverage:
+        lines += ["", "## 能力缺口（人审必须逐条表态）", ""]
+        for gap in gaps:
+            missing = [str(name) for name in (gap.get("missing_actions") or []) if str(name).strip()]
+            row = _coverage_of({"id": gap.get("id")}, coverage) or {}
+            count = int(row.get("count") or 0)
+            runnable = int(row.get("runnable", count) or 0)
+            line = f"- 范围 {gap.get('id')}「{gap.get('title') or ''}」："
+            line += f"窗口：{count} 扇，可跑 {runnable} 扇，" if count else "窗口：0 扇，"
+            line += ("缺动作 " + "、".join(missing)) if missing else "缺可落地的动作（抠不出动作名）"
+            if gap.get("pending_note"):
+                line += f"。现状：{str(gap['pending_note'])[:120]}"
+            lines.append(line)
+        lines.append("")
+        lines.append(
+            "- 这些范围有交付清单却没有可跑的窗口：确认后只跑有窗口的范围，缺口部分不执行。"
+            f"人审门必须输入「{GAP_ACK_PHRASE}」或明确确认词（直接回车不算）。"
+        )
     lines += ["", "## 外部依赖（目前依赖）", ""]
     ext = brief.get("external_dependencies") or []
     if ext:
@@ -352,15 +972,21 @@ def render_brief_md(brief: dict) -> str:
     if brief.get("dropped"):
         lines += ["", "## 代码验收丢弃的内容", ""]
         lines.extend("- " + str(x) for x in brief["dropped"])
-    pending = unfinished_text(unresolved=brief.get("unresolved") if isinstance(brief.get("unresolved"), list) else None)
+    pending = unfinished_text(
+        unresolved=brief.get("unresolved") if isinstance(brief.get("unresolved"), list) else None,
+        query=str(brief.get("query") or ""),
+    )
     if pending:
         lines += ["", "## 尚未完成清单", "", pending]
     return "\n".join(lines) + "\n"
 
 
-def unfinished_text(ledger_path: Path | None = None, unresolved=None) -> str:
-    """台账范围、未提升技能、unresolved 合成尚未完成清单。人不审不执行。"""
-    from agent.ledger import read_ledger
+def unfinished_text(ledger_path: Path | None = None, unresolved=None, query: str | None = None) -> str:
+    """台账范围、未提升技能、unresolved 合成尚未完成清单。人不审不执行。
+
+    带了 query 时，台账里和这句话不是同一件事的范围不列进这份任务书。
+    """
+    from agent.ledger import read_ledger, same_subject, scope_text
 
     bits = []
     try:
@@ -370,9 +996,15 @@ def unfinished_text(ledger_path: Path | None = None, unresolved=None) -> str:
     for scope in data.get("scopes") or []:
         if not isinstance(scope, dict) or not scope.get("id"):
             continue
+        if query and not same_subject(scope_text(scope), query):
+            continue
         status = str(scope.get("status") or "pending")
         label = {"done": "完成", "partial": "部分完成", "pending": "未完成"}.get(status, status)
-        bits.append(f"{scope.get('id')} {label}")
+        title = str(scope.get("title") or "").strip()
+        piece = f"{scope.get('id')} {label}"
+        if title:
+            piece += f"（{title}）"
+        bits.append(piece)
     lines = []
     if bits:
         lines.append("；".join(bits))
@@ -496,7 +1128,15 @@ def _apply_manual_edit(brief: dict, answer: str) -> tuple[bool, str]:
 
 
 def _print_brief_pretty(brief: dict, printer=print) -> None:
-    """人审门里给眼睛看的表。文件里落的仍是 render_brief_md 的 markdown。"""
+    """人审门里给眼睛看的表。文件里落的仍是 render_brief_md 的 markdown。
+
+    D6：有缺口范围时每行都显式写「窗口：N 扇」（零窗口写「窗口：0 扇」+ 能力缺口），
+    空白的行与「一切正常」在人眼里本来无法区分。覆盖齐全的任务书仍走旧版画法
+    （只在有窗口时画「窗口：…」行），逐字一致。
+    """
+    coverage = brief.get("coverage") if isinstance(brief.get("coverage"), dict) else None
+    gaps = gap_scopes(brief)
+    show_coverage = bool(gaps)
     try:
         from rich.console import Console
         from rich.table import Table
@@ -510,8 +1150,13 @@ def _print_brief_pretty(brief: dict, printer=print) -> None:
             bits = ["• " + item for item in scope.get("deliverables") or []] or ["（空）"]
             if scope.get("pending_note"):
                 bits.append(f"[dim]现状：{scope['pending_note']}[/dim]")
+            state = _review_state(scope, coverage) if show_coverage else (
+                "gap" if _zero_window_scope(scope) else ""
+            )
             if scope.get("blocked"):
                 bits.append(f"[yellow]※ {scope.get('block_note') or '这一范围暂停'}[/yellow]")
+            elif state == "gap":
+                bits.append(f"[yellow]※ {capability_gap_note(scope)}[/yellow]")
             deps = "、".join(scope.get("depends_on") or []) or "无"
             bits.append(f"[dim]依赖：{deps}[/dim]")
             if scope.get("external_dep"):
@@ -520,6 +1165,13 @@ def _print_brief_pretty(brief: dict, printer=print) -> None:
             if wins:
                 marks = "、".join(f"{w.get('id') or ''} {w.get('action') or ''}".strip() for w in wins)
                 bits.append(f"[dim]窗口：{marks}[/dim]")
+            row = _scope_coverage_row(scope, coverage) if show_coverage else None
+            if row is not None:
+                text = _coverage_text(row) or "窗口：0 扇"
+                style = "yellow" if not int(row.get("count") or 0) else "dim"
+                bits.append(f"[{style}]{text}[/{style}]")
+                if state == "rescued":
+                    bits.append(f"[cyan]{_rescued_note(row)}[/cyan]")
             return "\n".join(bits)
 
         for scope in brief.get("scopes") or []:
@@ -538,13 +1190,21 @@ def _print_brief_pretty(brief: dict, printer=print) -> None:
     total = brief.get("total_estimate") or {"min_hours": 0, "max_hours": 0}
     printer(f"外部依赖：{'；'.join(f"{x.get('name')}（{x.get('status') or '未登记'}）" for x in ext) or '无'}")
     printer(f"合计：{total.get('min_hours', 0):g}–{total.get('max_hours', 0):g} 小时（估算只记录，不作为执行预算）")
+    if show_coverage and _escalate_gaps():
+        # 缺口必须在人审门里出声，且说清「怎么才算表态」——否则人会照着旧习惯直接回车
+        printer(_gap_ack_prompt(gaps))
 
 
 def brief_flow(query: str, windows: list[dict] | None = None, complete=None,
-               reader=input, printer=print, directory: Path | None = None):
+               reader=input, printer=print, directory: Path | None = None, unresolved=None):
     """生成任务书并走人审门。确认键是人按；e 命令就地编辑并实时落盘同一对文件。
-    返回 (status, brief, md, js)；status ∈ confirm / abort。生成失败返回 None（调用方按窄任务继续）。"""
-    brief = generate_brief(query, windows=windows, complete=complete)
+    返回 (status, brief, md, js)；status ∈ confirm / abort。生成失败返回 None（调用方按窄任务继续）。
+
+    D6/D9：① 显示给人之前先做一次 dry-run 覆盖预演（不写盘），人审看得到每范围的窗口数；
+    ② `unresolved` 透传进任务书（「尚未完成清单」章节），不传时行为与旧版完全一致；
+    ③ 存在能力缺口范围时空输入不再等于确认（§7 不做清单第 7 条），必须显式表态，
+       表态结果写进 `brief["gap_ack"]`。"""
+    brief = generate_brief(query, windows=windows, complete=complete, unresolved=unresolved)
     if brief is None:
         printer("写不出任务书：生成器没有给出可验收的 JSON。这次按窄任务直接执行。")
         return None
@@ -556,24 +1216,63 @@ def brief_flow(query: str, windows: list[dict] | None = None, complete=None,
         if md is None:
             rounds += 1
             brief["review"] = {"rounds": rounds, "status": "待确认"}
+            # 人审前预演：物化之后各范围会有几扇窗口。必须不写盘（见 _no_candidate_writes）。
+            preview_coverage(brief)
             md, js = write_brief(brief, directory)
         printer(f"任务书第 {rounds} 版：{md}")
         _print_brief_pretty(brief, printer)
         if edits:
             printer(f"人工编辑 {edits} 次，已实时保存进上面这对 .md/.json。")
+        gaps = gap_scopes(brief)
+        escalate = bool(gaps) and _escalate_gaps()
+        # 缺口说明已在上面 _print_brief_pretty 里逐条摆过（见 _gap_ack_prompt），
+        # 这里只给一行提示，不重复第二遍整段。
         try:
             answer = str(reader(
+                "任务书审阅（输入「" + GAP_ACK_PHRASE + "」或确认词才算表态 / 放弃 / "
+                "e 就地编辑，e help 看写法 / 写修改意见交生成器）: "
+                if escalate else
                 "任务书审阅（确认 / e 就地编辑，e help 看写法 / 写修改意见交生成器 / 放弃）: "
             )).strip()
         except (EOFError, KeyboardInterrupt):
             printer("\n放弃")
             return ("abort", brief, md, js)
-        if not answer or answer in ("确认", "confirm", "y", "yes", "ok", "通过"):
+        if escalate and not answer:
+            # 缺口 + 空输入：不是确认。只记录「问过一次但没表态」，继续循环。
+            printer(
+                "存在能力缺口，直接回车不算确认：请显式输入「" + GAP_ACK_PHRASE
+                + "」或确认词（放弃就输入「放弃」）。"
+            )
+            continue
+        if not answer or answer in _LEGACY_CONFIRM_WORDS or answer == GAP_ACK_PHRASE:
+            # 缺口任务书：只有敲进来的确认词才算（`_ack_is_explicit` 对空串返回 False）。
+            # 正常任务书仍是「空输入 = 通过」，与旧版一致（反例守卫）。
+            if escalate and not _ack_is_explicit(answer):
+                continue
             brief["review"]["status"] = "通过" if (rounds == 1 and not edits) else "通过，附修改"
             brief["manual_edits"] = edits
+            if gaps:
+                # 结构化表态：run_windows 侧与断言都读它。旁路时也记，只是不阻塞。
+                brief["gap_ack"] = {
+                    "acknowledged": True,
+                    "scopes": [str(item.get("id")) for item in gaps],
+                    "by": "人",
+                    "answer": answer,
+                    "escalated": escalate,
+                    "acknowledged_at": datetime.now().isoformat(timespec="seconds"),
+                }
             write_brief(brief, directory)
             return ("confirm", brief, md, js)
         if answer in ("放弃", "abort", "q", "quit", "停止"):
+            if gaps:
+                brief["gap_ack"] = {
+                    "acknowledged": False,
+                    "scopes": [str(item.get("id")) for item in gaps],
+                    "by": "人",
+                    "answer": answer,
+                    "escalated": escalate,
+                    "acknowledged_at": datetime.now().isoformat(timespec="seconds"),
+                }
             return ("abort", brief, md, js)
         if answer in ("e", "e help"):
             printer(_EDIT_HELP)
@@ -596,7 +1295,8 @@ def brief_flow(query: str, windows: list[dict] | None = None, complete=None,
         md = None
 
 
-def materialize_scopes(brief: dict, candidates: list[dict] | None = None) -> tuple[list[dict], list[dict]]:
+def materialize_scopes(brief: dict, candidates: list[dict] | None = None, complete=None,
+                       titles=None) -> tuple[list[dict], list[dict]]:
     """确认后把范围物化成窗口。范围窗口引用了候选窗口 id 的，原样继承候选
     （快路径已解析的路径、父类、task 一并保留，不叫生成器重编）；引用不上才
     按动作表 materialize，表外照旧暂停。asset 槽位动作统一走归地 materialize_goal
@@ -642,8 +1342,27 @@ def materialize_scopes(brief: dict, candidates: list[dict] | None = None) -> tup
     # 候选可能排到最后才被补跑，提前换算会把还没进表的候选 id 错当成新 id，撞出自环。
     plan: list[tuple[int, dict | None, dict | None, str]] = []
     scope_wids: dict[int, list[str]] = {}
+    query = str(brief.get("query") or "")
+    declared_windows: dict[int, list[dict]] = {}
+    scope_gaps: dict[int, dict] = {}
+    # 人审已经确认「这段不执行」的范围。预演补窗不带模型；这里再把 complete 传进去，
+    # 会在确认之后另拆出任务书里没有的窗口（20261027-142031：拆出没有 name 的
+    # query_actor，执行器只能拿 /Game 目录或头文件来问）。确认过的范围只走预演那条。
+    acked_gaps = _acked_gap_ids(brief)
     for si, scope in enumerate(raw_scopes):
-        for raw in scope.get("windows") or []:
+        declared = [raw for raw in (scope.get("windows") or []) if isinstance(raw, dict)]
+        if not declared and not scope.get("blocked") and not str(scope.get("external_dep") or "").strip():
+            # 零窗口范围先补救（20261024-192858：B/C 在这里整段蒸发）。补窗 id 形如 SBW1，
+            # 天然不撞 W<n>；补不出窗口才标能力缺口，不再静默记「待办」。
+            rescue_complete = None if str(scope.get("id") or "") in acked_gaps else complete
+            declared = _rescue_scope_windows(
+                scope, query, complete=rescue_complete, titles=titles,
+            )
+        declared_windows[si] = declared
+        if not declared and not scope.get("blocked") and not str(scope.get("external_dep") or "").strip():
+            scope_gaps[si] = _capability_gap_record(scope)
+    for si, scope in enumerate(raw_scopes):
+        for raw in declared_windows.get(si) or []:
             counter += 1
             wid = f"W{counter}"
             if raw.get("id"):
@@ -721,7 +1440,7 @@ def materialize_scopes(brief: dict, candidates: list[dict] | None = None) -> tup
         win_by_id[wid] = window
 
     for si, scope in enumerate(raw_scopes):
-        scopes_meta.append({
+        row = {
             "id": str(scope.get("id") or ""),
             "title": str(scope.get("title") or ""),
             "window_ids": list(scope_wids.get(si) or []),
@@ -729,7 +1448,12 @@ def materialize_scopes(brief: dict, candidates: list[dict] | None = None) -> tup
             "blocked": bool(scope.get("blocked")),
             "deliverables": list(scope.get("deliverables") or []),
             "pending_note": str(scope.get("pending_note") or ""),
-        })
+        }
+        gap = scope_gaps.get(si)
+        if gap:
+            row["capability_gap"] = gap
+            _note_gap_candidate(scope, gap)
+        scopes_meta.append(row)
 
     # 范围级依赖：本范围第一扇接在依赖范围的最后一扇后面
     for si, scope in enumerate(raw_scopes):
@@ -787,10 +1511,9 @@ def materialize_scopes(brief: dict, candidates: list[dict] | None = None) -> tup
     try:
         from agent.harness import build_criteria
 
-        origin = str(brief.get("query") or "")
         for meta in scopes_meta:
             scoped = [win_by_id[wid] for wid in (meta.get("window_ids") or []) if wid in win_by_id]
-            meta["criteria"] = build_criteria(origin, scoped)
+            meta["criteria"] = build_criteria(windows=scoped)
     except Exception:
         pass
     return windows, scopes_meta

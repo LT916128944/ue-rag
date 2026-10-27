@@ -20,7 +20,28 @@ _COLLECTION = None
 def _get_model():
     global _MODEL
     if _MODEL is None:
+        # 权重条打在 stderr 上，Live 盖不住，最后一行会停在 100%，看起来像卡死。
+        os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
+        os.environ["TQDM_DISABLE"] = "1"
+        try:
+            from transformers.utils import logging as tf_logging
+
+            tf_logging.disable_progress_bar()
+        except Exception:
+            pass
+        try:
+            from core.console import status
+
+            status("正在加载检索模型")
+        except Exception:
+            print("正在加载检索模型", flush=True)
         _MODEL = SentenceTransformer(_MODEL_NAME)
+        try:
+            from core.console import status
+
+            status("检索模型已加载")
+        except Exception:
+            print("检索模型已加载", flush=True)
     return _MODEL
 
 def _get_collection():

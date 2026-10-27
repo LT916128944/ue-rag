@@ -1,5 +1,5 @@
 {
   "low": ["read", "search", "retrieve", "query_actor", "run_automation_test", "judge_pickup", "check_pickup", "query_material", "get_scalar_parameter"],
-  "mid": ["edit_cpp", "compile_project", "compile_blueprint", "move_actor", "set_pickable", "place_actor", "place_blueprint", "set_scalar_param", "place_batch", "apply_unified_diff"],
+  "mid": ["launch_editor", "edit_cpp", "compile_project", "compile_blueprint", "move_actor", "set_pickable", "place_actor", "place_blueprint", "set_scalar_param", "place_batch", "apply_unified_diff"],
   "high": ["save_assets", "save_actor", "StartPIE", "StopPIE", "delete", "graph_write"]
 }

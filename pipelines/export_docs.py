@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from config import CONVENTIONS_PATH, DOCS_DIR, DOCS_JSONL
+from config import CONVENTIONS_PATHS, DOCS_DIR, DOCS_JSONL
 
 
 def _kind_meta(path: Path) -> dict:
@@ -48,8 +48,9 @@ def main() -> None:
         harness = DOCS_DIR / "harness"
         if harness.is_dir():
             files.extend(sorted(harness.glob("*.md")))
-    if CONVENTIONS_PATH.is_file():
-        files.append(CONVENTIONS_PATH)
+    for conventions in CONVENTIONS_PATHS:
+        if conventions.is_file():
+            files.append(conventions)
     records = []
     for path in files:
         text = path.read_text(encoding="utf-8", errors="replace")

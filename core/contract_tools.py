@@ -183,8 +183,12 @@ def run_automation_test(filter: str) -> dict:
         return _err("filter 为空")
     result = judge({"kind": "automation", "filter": filt}, task=_TASK)
     if result.get("ok"):
-        return {"ok": True, "summary": str(result.get("summary") or "")}
-    return _err(str(result.get("summary") or "测试失败"))
+        out = {"ok": True, "summary": str(result.get("summary") or "")}
+        if isinstance(result.get("tests"), list):
+            out["tests"] = list(result["tests"])
+        out["filter"] = str(result.get("filter") or filt)
+        return out
+    return _err(str(result.get("summary") or "测试失败"), errors=result.get("errors") or [])
 
 
 def call_named(name: str, arguments: dict | None = None) -> dict:

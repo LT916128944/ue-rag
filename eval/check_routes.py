@@ -237,6 +237,9 @@ ASecond : public AActor
     spec = importlib.util.spec_from_file_location("refuse_graph_writes", hook_path)
     hook = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(hook)
+    from core.graph_write_policy import decide as _core_decide
+
+    assert hook.decide is _core_decide, "Cursor hook 必须复用 core.graph_write_policy.decide"
     denied = hook.decide(
         'python scripts/call_mcp_tool.py --toolset editor_toolset.toolsets.blueprint.BlueprintTools --tool create_node --args {}',
         False,
@@ -271,14 +274,41 @@ ASecond : public AActor
     )
     assert read_mat["permission"] == "allow"
     assert hook.blueprint_allowed(UE_PROJECT_DIR / ".env-missing-for-test") is False
-    from core.editor_exec import exec_tool as _exec_tool
-    blocked_mat = _exec_tool(
-        "editor_toolset.toolsets.material.MaterialTools",
-        "add_expressions",
-        {},
-        task={"allow_writes": ["add_expressions"]},
+    codex_spec = importlib.util.spec_from_file_location(
+        "refuse_graph_writes_codex",
+        UE_PROJECT_DIR / ".codex" / "hooks" / "refuse_graph_writes.py",
     )
-    assert blocked_mat.get("error") == "UE_ALLOW_MATERIAL 不是 true"
+    codex_hook = importlib.util.module_from_spec(codex_spec)
+    codex_spec.loader.exec_module(codex_hook)
+    assert codex_hook.load_policy().decide is _core_decide, "Codex hook 必须复用 core.graph_write_policy.decide"
+    codex_denied = codex_hook.codex_result(
+        'python scripts/call_mcp_tool.py --toolset editor_toolset.toolsets.blueprint.BlueprintTools --tool create_node --args {}',
+        False,
+    )
+    assert codex_denied["hookSpecificOutput"]["permissionDecision"] == "deny"
+    codex_allowed = codex_hook.codex_result(
+        'python scripts/call_mcp_tool.py --toolset editor_toolset.toolsets.blueprint.BlueprintTools --tool compile_blueprint --args {}',
+        False,
+    )
+    assert codex_allowed["hookSpecificOutput"]["permissionDecision"] == "allow"
+    from core.editor_exec import exec_tool as _exec_tool
+    # 这条验的是「开关为 false 时写被拒」，不是本机 .env 的当前取值：
+    # 本机把 UE_ALLOW_MATERIAL 打开后，直接吃环境变量会让这条必挂。
+    previous_material = os.environ.get("UE_ALLOW_MATERIAL")
+    try:
+        os.environ["UE_ALLOW_MATERIAL"] = "false"
+        blocked_mat = _exec_tool(
+            "editor_toolset.toolsets.material.MaterialTools",
+            "add_expressions",
+            {},
+            task={"allow_writes": ["add_expressions"]},
+        )
+    finally:
+        if previous_material is None:
+            os.environ.pop("UE_ALLOW_MATERIAL", None)
+        else:
+            os.environ["UE_ALLOW_MATERIAL"] = previous_material
+    assert blocked_mat.get("error") == "UE_ALLOW_MATERIAL 不是 true", blocked_mat
 
     from core.editor_launch import launch_command
     assert launch_command()[-1] == "-AutoDeclinePackageRecovery"
@@ -371,6 +401,7 @@ ASecond : public AActor
     assert not edited[0].get("freeze_source")
 
     check_windows()
+    check_remove_batch()
 
     from eval.check_upgrade import main as upgrade_main
 
@@ -384,6 +415,129 @@ ASecond : public AActor
 
     print("routes ok")
     return 0
+
+
+def check_remove_batch() -> None:
+    """remove_batch：确定性删除，不叫模型。钉住三件事：
+    ①动作在 DIRECT_ACTIONS（run_task --task 直接派发，不进图、不调模型）；
+    ②匹配规则是纯函数 pick_removal_target，只有「名字命中 + 坐标唯一」才删；
+    ③名字命中多条但坐标只对一条时才删，坐标对不上/唯一命中/多条都对得上三种都给对结论。
+    不连编辑器：find_actors 与坐标读数都在纯函数的入参里造。"""
+    from agent.catalog import CATALOG, DIRECT_ACTIONS, EDITOR_LOCK_ACTIONS, READ_ONLY_ACTIONS, action_meta
+    from agent.sequence import _removal_targets, pick_removal_target
+
+    assert "remove_batch" in DIRECT_ACTIONS, "remove_batch 必须在 DIRECT_ACTIONS 里，否则 --task 会去叫模型"
+    assert "remove_batch" in CATALOG, "remove_batch 没有动作卡片"
+    assert "remove_batch" in EDITOR_LOCK_ACTIONS, "remove_batch 要写场景，必须占编辑器锁"
+    assert "remove_batch" not in READ_ONLY_ACTIONS, "remove_batch 会删 Actor，不能算只读"
+    card = CATALOG["remove_batch"]
+    assert card["slots"] == ("targets",), card
+    assert "坐标" in card["summary"] and "不删" in card["summary"], card
+    assert action_meta("remove_batch")["verification"], action_meta("remove_batch")
+
+    # 坐标容差 2uu：这些用例的坐标都是真实读数（data/dsh/_level_actors.json）附近摆的
+    stray_coin = {"name": "BP_Coin_C_6", "x": 0, "y": 0, "z": 300}
+    good_coin = {"refPath": "Coin_1", "location": {"x": 1050, "y": 40, "z": 420}}
+    stray_hit = {"refPath": "BP_Coin_C_6", "location": {"x": 0, "y": 0, "z": 300}}
+
+    # 用例 1：唯一命中 → 删它
+    only = pick_removal_target([stray_hit], stray_coin)
+    assert only["ok"] is True, only
+    assert only["ref"] == "BP_Coin_C_6" and only["reason"] == "unique", only
+
+    # 用例 2：名字命中多条，坐标只对一条 → 删对上的那条（不能删正确位置的实例）
+    many = pick_removal_target([good_coin, stray_hit], stray_coin)
+    assert many["ok"] is True, many
+    assert many["ref"] == "BP_Coin_C_6" and many["hits"] == 2, many
+
+    # 用例 3：名字命中但坐标对不上 → 一个都不删
+    off = pick_removal_target([good_coin], stray_coin)
+    assert off["ok"] is False and off["reason"] == "mismatch", off
+    assert "不删" in (off.get("error") or "") or "没有一个" in (off.get("error") or ""), off
+
+    # 补充：坐标都对得上多于一条 / 零命中 / 读不出坐标 / 容差边界，一律不删
+    twin = pick_removal_target([stray_hit, dict(stray_hit, refPath="BP_Coin_C_7")], stray_coin)
+    assert twin["ok"] is False and twin["reason"] == "ambiguous", twin
+    assert pick_removal_target([], stray_coin)["reason"] == "empty"
+    assert pick_removal_target([{"refPath": "X"}], stray_coin)["reason"] == "unreadable"
+    assert pick_removal_target([{"refPath": "X", "x": 0, "y": 0, "z": 302}], stray_coin)["ok"] is True
+    assert pick_removal_target([{"refPath": "X", "x": 0, "y": 0, "z": 302.5}], stray_coin)["ok"] is False
+    assert pick_removal_target([stray_hit], {"name": "BP_Coin_C_6"})["reason"] == "no_target_coord"
+
+    # targets 归一：缺 name / 缺坐标 / 不是 list 都要整批失败，不许猜
+    rows, why = _removal_targets([{"name": "BP_Coin_C_6", "x": 0, "y": 0, "z": 300}])
+    assert len(rows) == 1 and why == "" and rows[0]["z"] == 300.0, (rows, why)
+    for bad in ([], [{"x": 0, "y": 0, "z": 0}], [{"name": "A"}], "不是 JSON", [1]):
+        got, reason = _removal_targets(bad)
+        assert not got and reason, (bad, got, reason)
+
+    # 整条路径：假编辑器（坐标照 data/dsh/_level_actors.json 的真实读数摆），
+    # 证明「删游离实例、不碰正确实例」在动作层也成立，不只看纯函数。
+    import core.editor_exec as editor_exec
+    from agent.sequence import _remove_batch
+
+    level = {
+        "Coin_1": {"x": 1050.0, "y": 40.0, "z": 420.0},      # 正确实例，必须留
+        "BP_Coin_C_6": {"x": 0.0, "y": 0.0, "z": 300.0},     # 游离实例，要删
+        "BP_Progress_C_0": {"x": 100.0, "y": 30.0, "z": 60.0},
+    }
+    calls: list[tuple[str, tuple]] = []
+
+    def fake_exec_tool(toolset, tool, args=None, *, task=None, timeout=None):
+        args = args or {}
+        calls.append((tool, tuple((task or {}).get("allow_writes") or [])))
+        if tool == "find_actors":
+            needle = str(args.get("name") or "").lower()
+            return {"ok": True, "data": {"returnValue": [
+                {"refPath": f"/Game/Maps/L_NewTest.L_NewTest:PersistentLevel.{label}"}
+                for label in level if needle in label.lower()]}}
+        if tool == "get_actor_transform":
+            label = str((args.get("actor") or {}).get("refPath") or "").rsplit(".", 1)[-1]
+            if label not in level:
+                return {"ok": False, "error": "actor not found"}
+            return {"ok": True, "data": {"returnValue": {"location": dict(level[label])}}}
+        if tool == "remove_from_scene":
+            label = str((args.get("actor") or {}).get("refPath") or "").rsplit(".", 1)[-1]
+            if label not in level:
+                return {"ok": False, "error": "actor not found"}
+            del level[label]
+            return {"ok": True, "data": {"returnValue": True}}
+        if tool == "get_current_level":
+            return {"ok": True, "data": {"returnValue": "/Game/Maps/L_NewTest"}}
+        if tool == "save_assets":
+            return {"ok": True, "data": {"returnValue": True}}
+        return {"ok": False, "error": f"假编辑器没实现 {tool}"}
+
+    original = editor_exec.exec_tool
+    editor_exec.exec_tool = fake_exec_tool
+    try:
+        done = _remove_batch({
+            "action": "remove_batch",
+            "save": True,
+            "slots": {"targets": [{"name": "BP_Coin_C_6", "x": 0, "y": 0, "z": 300}]},
+        })
+        assert done.get("ok") is True, done
+        assert "BP_Coin_C_6" not in level, level
+        assert "Coin_1" in level and "BP_Progress_C_0" in level, level
+        assert done.get("judge_kind") == "editor_assert", done
+        # 写闸只授 remove_from_scene；删完复查 + 存关卡
+        used = [allow for tool, allow in calls if tool == "remove_from_scene"]
+        assert used and all(allow == ("remove_from_scene",) for allow in used), used
+        assert any(tool == "save_assets" for tool, _a in calls), calls
+
+        # 幂等：目标已不在时零命中 → 失败，不能报「又删成功一次」
+        again = _remove_batch({"action": "remove_batch", "save": False, "slots": {"targets": [
+            {"name": "BP_Coin_C_6", "x": 0, "y": 0, "z": 300}]}})
+        assert again.get("ok") is False and "零命中" in str(again.get("error")), again
+
+        # 坐标对不上时整批一个都不删
+        before = dict(level)
+        wrong = _remove_batch({"action": "remove_batch", "save": False, "slots": {"targets": [
+            {"name": "Coin_1", "x": 0, "y": 0, "z": 300}]}})
+        assert wrong.get("ok") is False, wrong
+        assert level == before, level
+    finally:
+        editor_exec.exec_tool = original
 
 
 def check_skill_registry() -> None:
@@ -443,6 +597,69 @@ def check_windows() -> None:
     from agent.sequence import _set_pickable
     from agent.supervise import plan_sequence
     from config import UE_PROJECT_DIR
+
+    hud = "启动UE编辑器，Content Browser 新建目录 /Game/UI，新增一个Widget Blueprint， 父类选 User Widget，命名 WBP_HUD"
+
+    # 20261021：WBP_HUD 的固定窗口规则已删。现在 L1 直接给出 goals 和 criteria，
+    # 代码只按 evidence_kind 验证。这里用 mock 理解器代替真实模型。
+    hud_intent = json.dumps({
+        "goals": [
+            {"action": "create_widget_blueprint",
+             "slots": {"folder": "/Game/UI", "name": "WBP_HUD", "parent": "User Widget"}},
+            {"action": "edit_widget_blueprint", "slots": {}},
+        ],
+        "criteria": [
+            {"id": "c-blueprint_compile", "evidence_kind": "blueprint_compile",
+             "text": "WBP_HUD 控件图编译通过"},
+            {"id": "c-widget_graph", "evidence_kind": "widget_graph",
+             "text": "WBP_HUD 控件树与事件绑定已落地"},
+        ],
+    }, ensure_ascii=False)
+
+    def _hud_model(_messages):
+        return hud_intent
+
+    import config as _config
+
+    _saved_allow = _config.allow_umg
+    try:
+        _config.allow_umg = lambda: True
+        opened = plan_windows(hud, complete=_hud_model)
+        assert opened["planner_called"] is False
+        assert opened["windows"][0]["action"] == "create_widget_blueprint"
+        assert opened["windows"][0]["save"] is True
+        assert opened["windows"][0]["pie"] is True
+        assert [item["id"] for item in opened["criteria"]] == ["c-blueprint_compile", "c-widget_graph"]
+        _config.allow_umg = lambda: False
+        held = plan_windows(hud, complete=_hud_model)
+        assert held["planner_called"] is False
+        assert held["windows"][0].get("waiting_external") is True
+        assert "没有写出窗口清单" not in str(held["windows"][0].get("error") or "")
+
+        content = (
+            "启动UE编辑器，在目录/Game/UI找到蓝图 WBP_HUD，在左上角增加一个当前得分UI，"
+            "每碰到一个 BP_Coin 加一分，然后有一个是否允许开门的UI，"
+            "当碰完场上所有BP_Coin后变成绿色，显示 允许开门，否则都是红色的 禁止开门"
+        )
+        _config.allow_umg = lambda: True
+        scored = plan_windows(content, complete=_hud_model)
+        assert scored["planner_called"] is False
+        assert scored["windows"][0]["action"] == "create_widget_blueprint"
+        edit = scored["windows"][1]
+        assert edit["action"] == "edit_widget_blueprint"
+        assert edit.get("waiting_external") is not True
+        assert edit.get("realizable") is True
+        manuals = [item for item in scored.get("criteria") or [] if item.get("evidence_kind") == "manual"]
+        assert manuals == []
+        assert any(item.get("evidence_kind") == "blueprint_compile" for item in scored.get("criteria") or [])
+        assert not (scored.get("intent") or {}).get("unresolved")
+        _config.allow_umg = lambda: False
+        held_score = plan_windows(content, complete=_hud_model)
+        assert held_score["planner_called"] is False
+        assert held_score["windows"][0].get("waiting_external") is True
+        assert "UE_ALLOW_UMG" in str(held_score["windows"][1].get("error") or "")
+    finally:
+        _config.allow_umg = _saved_allow
 
     mark = "给场景的 BP_TestActor 的 tag 标记为可交互物，使得 BP_TestPawn 可以与它交互"
     second = "给 BP_Sphere 打上可交互标签，让 BP_TestPawn 与它交互"
@@ -673,24 +890,19 @@ def check_windows() -> None:
                 "目前测试下来是无法移动的，你帮我修复它并且测试"
             )
             fixed = plan_windows(wasd, complete=partial)
-            assert fixed["planner_called"] is False
-            assert fixed["source"] == "rules"
-            assert [window["action"] for window in fixed["windows"]] == ["edit_cpp", "probe_move"]
-            assert all(window["realizable"] for window in fixed["windows"])
-            assert fixed["windows"][1]["depends_on"] == ["W1"]
-            assert "写不出唯一的 Actor" not in str(fixed["windows"])
+            assert fixed["source"] != "rules"
+            assert "probe_play" not in [window["action"] for window in fixed["windows"]]
+            assert "probe_move" not in [window["action"] for window in fixed["windows"]]
 
             look_query = (
                 "检查ATestPawn代码，使得可以满足跟随鼠标旋转镜头的需求，"
                 "编译后启动编辑器，并进行PIE测试是否跟随鼠标移动视角了"
             )
             look = plan_windows(look_query, complete=partial)
-            assert look["planner_called"] is False
-            assert [window["action"] for window in look["windows"]] == ["edit_cpp", "probe_look"]
-            assert all(window["realizable"] for window in look["windows"])
-            assert look["windows"][1]["depends_on"] == ["W1"]
-            assert look["windows"][1]["pie"] is True
-            assert "写不出唯一的 Actor" not in str(look["windows"])
+            assert look["source"] != "rules"
+            assert "probe_look" not in [window["action"] for window in look["windows"]]
+            assert "probe_play" not in [window["action"] for window in look["windows"]]
+            assert any(window["action"] == "launch_editor" for window in look["windows"])
 
             def only_edit(_messages):
                 return json.dumps({
@@ -706,10 +918,7 @@ def check_windows() -> None:
 
             speed = plan_windows("将ATestPawn的移速提升十倍并测试", complete=only_edit)
             assert speed["planner_called"] is True
-            assert [window["action"] for window in speed["windows"]] == ["edit_cpp", "probe_play"]
-            assert speed["windows"][1]["pie"] is True
-            assert speed["windows"][1]["depends_on"] == ["W1"]
-            assert speed["windows"][0].get("wait_mcp") is True
+            assert [window["action"] for window in speed["windows"]] == ["edit_cpp"]
 
             bat = (UE_PROJECT_DIR / "start.bat").read_text(encoding="utf-8")
             assert "run_multi.py" in bat

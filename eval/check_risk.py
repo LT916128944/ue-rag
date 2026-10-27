@@ -27,12 +27,29 @@ def fail(msg: str, fix: str) -> None:
 
 
 def check_write_refusals() -> None:
-    """缺省任务下 save_assets / StartPIE 被拒，error 精确等于 write refused。"""
+    """任务显式写 save/pie=false 时 save_assets / StartPIE 被拒，error 精确等于 write refused。"""
     for tool in ("save_assets", "StartPIE"):
         refused = exec_tool(ASSET_TOOLSET, tool, {}, task={"save": False, "pie": False, "allow_writes": []})
         if refused.get("error") != "write refused":
-            fail(f"缺省任务下 {tool} 的 error={refused.get('error')!r}，应为 'write refused'",
+            fail(f"任务显式关掉 save/pie 时 {tool} 的 error={refused.get('error')!r}，应为 'write refused'",
                  f"core/editor_exec.py 里 {tool} 的拒绝分支改回 error='write refused'，policy 键不动")
+
+
+def check_default_policy() -> None:
+    """全闭环缺省：任务没写 save/pie 时按 UE_DEFAULT_SAVE / UE_DEFAULT_PIE 放行。
+    只读配置，不调编辑器。"""
+    from config import default_pie, default_save, task_flag, task_policy
+
+    if not (default_save() and default_pie()):
+        fail(f"缺省 save={default_save()} pie={default_pie()}，全闭环要求两个都开",
+             "config.py 的 default_save/default_pie 缺省改回 True；要关在 .env 里写 UE_DEFAULT_SAVE=false")
+    policy = task_policy()
+    if policy != {"save": True, "pie": True}:
+        fail(f"task_policy() 是 {policy}，应为 save/pie 都为 True",
+             "config.py 的 task_policy 缺省跟随 default_save/default_pie")
+    if not (task_flag({}, "save") and task_flag({}, "pie")):
+        fail("空任务下 task_flag 没有放行 save/pie",
+             "config.py 的 task_flag 在任务没写键时取缺省，不取 False")
 
 
 def check_read_allowed() -> None:
@@ -106,15 +123,27 @@ def check_circuit() -> None:
 
 
 def check_context_switch_drift() -> None:
-    """context-switch-drift：config.allow_blueprint() 与 project_context.json 的开关一致。"""
-    from config import allow_blueprint
+    """context-switch-drift：project_context.json 的五个开关都要与 config 的实时读数一致。
+    只比 UE_ALLOW_BLUEPRINT 一条时，其它四个开关漂了也查不出来（20261021 本机五个全开、
+    JSON 里四个还是 false，check_routes 因此挂过一次）。"""
+    import config
 
     context_path = ROOT / "data" / "project_context.json"
-    recorded = bool((json.loads(context_path.read_text(encoding="utf-8")).get("switches") or {}).get("UE_ALLOW_BLUEPRINT"))
-    live = bool(allow_blueprint())
-    if recorded != live:
-        print("❌ project_context.json 记 UE_ALLOW_BLUEPRINT="
-              f"{recorded}，config.allow_blueprint()={live}，开关漂移")
+    recorded_switches = json.loads(context_path.read_text(encoding="utf-8")).get("switches") or {}
+    live_readers = {
+        "UE_ALLOW_BLUEPRINT": config.allow_blueprint,
+        "UE_ALLOW_MATERIAL": config.allow_material,
+        "UE_ALLOW_UMG": config.allow_umg,
+        "UE_ALLOW_ANIM": config.allow_anim,
+        "UE_ALLOW_NIAGARA": config.allow_niagara,
+    }
+    drifted = [
+        f"{name}: JSON={bool(recorded_switches.get(name))} config={bool(reader())}"
+        for name, reader in live_readers.items()
+        if bool(recorded_switches.get(name)) != bool(reader())
+    ]
+    if drifted:
+        print("❌ project_context.json 与 config 的开关漂移：" + "；".join(drifted))
         print("✅ FIX: 重跑 python pipelines/export_project_context.py 重新导出；不要手改 JSON，也不要改 .env")
         print(f"📖 See: {context_path}")
         sys.exit(1)
@@ -122,6 +151,7 @@ def check_context_switch_drift() -> None:
 
 def main() -> int:
     check_write_refusals()
+    check_default_policy()
     check_read_allowed()
     check_blueprint_switch()
     check_high_tiers()

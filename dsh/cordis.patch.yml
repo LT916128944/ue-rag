@@ -1,0 +1,53 @@
+# DSH 配置模板（仓库内唯一事实源）
+#
+# 把本文件的条目**追加**到 DSH profile 的 patch 层：
+#   C:\Users\X\.dsh\profiles\desktop\cordis.patch.yml
+# （home 级 C:\Users\X\.dsh\cordis.patch.yml 优先级更高，二选一，不要两处都写。）
+#
+# 校验：python eval/check_dsh_config.py   -> dsh-config ok
+# 回滚：用 C:\Users\X\.dsh\backups\ue-rag\ 下的时间戳备份恢复 profile。
+#
+# patch 方言（DSH `cordis-composition-reference`）：
+# - 新行必须包在 `- insert:` 列表里；裸行只用于覆盖 base bundle 已有的同名 id。
+# - `config` 是整条替换，不是深合并：覆盖行要重述该行需要的全部字段。
+# - `mcp-uerag` 是本项目新增行 -> 放 insert；`skill-filesystem` / `tool-skill`
+#   是 @deepseek-ai/dsh-base 已有行 -> 按 id 覆盖。
+#
+# 技能发现：DSH 默认扫 `<projectRoot>/.dsh/skills` 与 `<projectRoot>/.agents/skills`。
+# 本工作区根（E:\UEProject\AIWork）不是 git 仓库，projectRoot 回退为工作区根，
+# 所以技能用 E:\UEProject\AIWork\.dsh\skills（junction -> AIAgentProject\.agents\skills）。
+# profile 里的 customSkillDirs 指同一物理目录，作为 host 层的冗余配置。
+#
+# 注意：
+# - DSH 没有 .mcp.json；MCP server 就是一条 Cordis patch 条目。
+# - 只接薄网关（server/dsh_bridge.py，9 个工具）。绝不把官方 UE MCP 的
+#   830 个工具接进来：DSH 会把 server 的全部工具 schema 注入每个请求。
+# - 写策略只读 data/dsh/session_task.json，该文件只由人写；模型传不了 allow_writes。
+# - stdio 子进程环境会清掉 *KEY/*TOKEN/*SECRET/*PASSWORD* 与 DSH_*；
+#   ue-rag 自己从 cwd 的 .env 读配置，不要把密钥写进本文件。
+
+# ---- ue-rag / DSH 绑定（最终 3 条）----
+- insert:
+    - id: mcp-uerag
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: uerag
+        transport: stdio
+        command: 'E:\UEProject\AIWork\RAG\ue-rag\.venv\Scripts\python.exe'
+        args: ['E:\UEProject\AIWork\RAG\ue-rag\server\dsh_bridge.py']
+        cwd: 'E:\UEProject\AIWork\RAG\ue-rag'
+        toolCallTimeoutMs: 320000
+
+# ---- 技能发现：指向工作区 .dsh/skills（junction -> .codex/skills 的 .agents 联接根）----
+- id: skill-filesystem
+  name: '@deepseek-ai/dsh-skill-filesystem'
+  config:
+    customSkillDirs:
+      - 'E:\UEProject\AIWork\.dsh\skills'
+    watch: true
+
+# ---- 技能目录控制 token：只渲染 name + 截短 description ----
+- id: tool-skill
+  name: '@deepseek-ai/dsh-tool-skill'
+  config:
+    catalogDescriptionMaxLength: 240

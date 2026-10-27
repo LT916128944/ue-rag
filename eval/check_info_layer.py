@@ -43,7 +43,7 @@ def main() -> None:
     if len(lines) > 120:
         fail(f"AGENTS.md {len(lines)} 行，超过 120", "AGENTS.md 行数压回 120 行以内（AGENTS.md 全文长度）")
     agents_text = "\n".join(lines)
-    for key in ("禁探索", "默认不保存", "语义查询必须 RAG 先行"):
+    for key in ("禁探索", "默认保存", "语义查询必须 RAG 先行"):
         if key not in agents_text:
             fail(f"AGENTS.md 缺铁律关键词「{key}」", f"AGENTS.md 铁律段补回「{key}」")
 
@@ -55,6 +55,27 @@ def main() -> None:
         n = len(path.read_text(encoding="utf-8").splitlines())
         if n > limit:
             fail(f"{name} {n} 行，超过 {limit}", f".cursor/rules/{name} 压到 {limit} 行以内")
+
+    # Codex 对照：四份短文、钩子、发现脚本。短文行数与对应 .mdc 同一上限。
+    codex_root = Path(r"E:\UEProject\AIWork\AIAgentProject\.codex")
+    instr_limits = {
+        "ue-rag-route.md": 40,
+        "ue-history.md": 40,
+        "ue-cpp-plan.md": 40,
+        "ue-harness-session.md": 25,
+    }
+    for name, limit in instr_limits.items():
+        path = codex_root / "instructions" / name
+        if not path.is_file():
+            fail(f"缺 .codex/instructions/{name}", f".codex/instructions/{name} 新建（status: 文件存在）")
+        n = len(path.read_text(encoding="utf-8").splitlines())
+        if n > limit:
+            fail(f"{name} {n} 行，超过 {limit}", f".codex/instructions/{name} 压到 {limit} 行以内")
+    for rel in ("hooks.json", "hooks/session_start.py", "hooks/refuse_graph_writes.py", "link_agents_skills.ps1"):
+        if not (codex_root / rel).is_file():
+            fail(f"缺 .codex/{rel}", f".codex/{rel} 新建（status: 文件存在）")
+    if ".codex/instructions" not in agents_text:
+        fail("AGENTS.md 没有指向 .codex/instructions", "AGENTS.md 的 Codex 节指向 .codex/instructions")
 
     # 五份 harness 文档：存在 + 抬头 + 二级标题
     for name in HARNESS_DOCS:
@@ -103,8 +124,17 @@ def main() -> None:
         fail("progress.json 的 goal 为空", "progress.json 的 goal 写回目标句（goal 字段）")
     if prog.get("phase") != "automation":
         fail(f"progress.json phase={prog.get('phase')}，应为 automation", "progress.json 的 phase 改为 automation（升级 3 已落地）")
-    if "pending" not in str(prog.get("next_action", "")) or "feature_list" not in str(prog.get("next_action", "")):
+    action = str(prog.get("next_action", ""))
+    if "pending" not in action or "feature_list" not in action:
         fail("progress.json 的 next_action 未指向 feature_list 的 pending", "progress.json 的 next_action 改为「下一次只从 feature_list 的第一条 pending 做起」")
+    # 只写「看 feature_list」不够：next_action 必须点名第一条 pending 的 id，
+    # 否则两个词凑齐就算通过，下一次开工仍然不知道从哪条做起。
+    first_pending = next((item for item in items if item.get("status") == "pending"), None)
+    if first_pending and str(first_pending.get("id") or "") not in action:
+        fail(
+            f"progress.json 的 next_action 没点名第一条 pending「{first_pending.get('id')}」",
+            f"progress.json 的 next_action 里写明 feature_list 第一条 pending 的 id「{first_pending.get('id')}」",
+        )
 
     # boundaries.md：已知例外
     boundaries = (HARNESS_DOCS_DIR / "boundaries.md").read_text(encoding="utf-8")

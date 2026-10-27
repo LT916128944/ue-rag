@@ -1,0 +1,24 @@
+{
+  "listen": { "host": "127.0.0.1", "port": 8787 },
+
+  "stripPrefix": "custom-",
+
+  "modelAliases": {},
+
+  "rewriteResponseModel": true,
+  "logRequests": true,
+  "timeoutMs": 900000,
+
+  "upstream": {
+    "openai": {
+      "baseUrl": "https://YOUR-RELAY-HOST/v1",
+      "apiKey": "",
+      "authStyle": "bearer"
+    },
+    "anthropic": {
+      "baseUrl": "https://YOUR-RELAY-HOST",
+      "apiKey": "",
+      "authStyle": "both"
+    }
+  }
+}

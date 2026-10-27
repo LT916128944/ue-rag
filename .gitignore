@@ -6,6 +6,8 @@ data/events/
 data/archive/
 data/snapshots/
 data/briefs/
+data/handoffs/
+data/logs/
 data/ledger.json
 data/index_queue.jsonl
 data/index_status.json
@@ -21,3 +23,10 @@ data/ue_mcp_index.json
 __pycache__/
 *.pyc
 agent_checkpoints.db
+data/dsh/*
+# fixture 是离线检查的输入，要进仓库；运行态导出（人从 DSH 导出的会话日志）不入库。
+!data/dsh/exports/
+data/dsh/exports/*
+!data/dsh/exports/fixture-*.jsonl
+data/locks/
+data/spill/

@@ -1,7 +1,7 @@
 # agent/patrol_manual.py
 """巡逻敌人的蓝图人工步骤。C++ 半边已经在工程里，这里只写给人绑的步骤。
 
-不改蓝图 Graph，不保存关卡，不 PIE。"""
+不改蓝图 Graph。保存与 PIE 跟随任务策略，缺省都开。"""
 from pathlib import Path
 
 
@@ -23,7 +23,7 @@ C++ 半边是 `UTestEnemyPatrolComponent` 和 `ATestEnemy`。组件绕出生点�
 - `StartPatrol` 之后应进入巡逻。`bEnableChase` 为真且玩家进入 `DetectRadius` 后应追击。
 - 距离进入 `AttackRange` 后 `MeleeAttackCount` 增加，间隔不短于 `AttackInterval`。
 - 编译看 `cpp_build`。蓝图只编译已有资产，不改 Graph。
-- 不保存关卡，不 PIE，除非这句话单独要求。
+- 保存与 PIE 跟随任务策略（缺省都开），除非这句话单独要求关掉。
 
 ## 不做
 
