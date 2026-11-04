@@ -138,6 +138,28 @@ def check_scope_windows() -> None:
     # 标题对不上已有脚本时不硬收成蓝图窗。要拆开得把 complete 传进来。
     fps = scope_windows({"id": "C", "title": "在 L_NewTest2 内实现简易 FPS 射击玩法"}, QUERY)
     assert fps == [], fps
+    # 20261028-124154：字段拼接缝上的假相邻。上一条交付尾巴是「…的创建」，
+    # 下一条以「关卡内…」开头，空格拼接曾把这句读成「创建关卡」，
+    # 给范围 C 补出一扇缺 level 槽位的 create_level（跑都不该跑的窗）。
+    # 各字段是各自独立的话，缝上不算意图；字段内部动词紧邻关卡仍照常补出。
+    grenade = scope_windows({
+        "id": "C",
+        "title": "手榴弹道具：拾取、投掷与简易爆炸",
+        "pending_note": "动作表里没有创建 C++ 类、编辑蓝图图或制作特效资产的窗口；这部分目前既没有代码，也没有可接线资产，更未验证。",
+        "deliverables": [
+            "手榴弹道具资产（C++ 类或蓝图）的创建",
+            "关卡内可拾取的手榴弹道具放置",
+            "投掷输入触发：从持有者处生成投掷物并施加投掷力度",
+            "投掷物落地/命中后的简易爆炸效果（视觉效果 + 半径内反馈）",
+        ],
+    }, "")
+    assert grenade == [], grenade
+    in_field = scope_windows({
+        "id": "E", "title": "搭测试场",
+        "deliverables": ["新建关卡 L_Seam1 并放两个靶子"],
+    }, "")
+    assert [w.get("action") for w in in_field] == ["create_level"], in_field
+    assert in_field[0].get("level_path") == "/Game/Maps/L_Seam1", in_field
     assert scope_windows({}, "") == []
     # 任何脏输入都不许抛异常
     for bad in (None, "不是字典", 42, {"id": None, "title": None, "deliverables": 7},

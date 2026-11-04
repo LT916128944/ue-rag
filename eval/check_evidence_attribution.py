@@ -30,6 +30,9 @@ import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from eval._pin_offline import close_now
+
+close_now()  # 离线封闭：本机 .env 的求解/放行开关不进断言（20261028 check_upgrade 漂红教训）
 
 
 def _quiet(*_args, **_kwargs):

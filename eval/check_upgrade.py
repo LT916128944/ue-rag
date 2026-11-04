@@ -13,6 +13,9 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from eval._pin_offline import close_now
+
+close_now()  # 离线封闭：本机 .env 的求解/放行开关不进断言（20261028 check_upgrade 漂红教训）
 
 
 def _quiet(*_args, **_kwargs):
@@ -228,8 +231,16 @@ def check_snapshot_restore(src: Path, snaps: Path) -> None:
     assert window["realizable"] is True, window.get("error")
 
     def breaking(task, trace_path=None, thread_id=None, on_row=None):
-        target.write_bytes(b"broken by window\n")
+        # 只有 edit_cpp 才写坏源码。stitch 在有失败扇时会叫一次真模型并可能补出别的扇
+        # （如 compile_project），那些扇不该替这扇重写文件。
+        if str(task.get("action") or "") == "edit_cpp":
+            target.write_bytes(b"broken by window\n")
         return {"id": task.get("id"), "ok": False, "summary": "error C9999: 编译失败", "thread_id": thread_id}
+
+    import core.llm_call as llm_mod
+
+    original_llm = llm_mod.complete_logged
+    llm_mod.complete_logged = lambda *args, **kwargs: ("", {"error": "离线检查不调模型"})
 
     original_run = run_task_mod.run_task
     run_task_mod.run_task = breaking
@@ -238,6 +249,7 @@ def check_snapshot_restore(src: Path, snaps: Path) -> None:
                                             windows=[dict(window)], echo=_quiet)
     finally:
         run_task_mod.run_task = original_run
+        llm_mod.complete_logged = original_llm
     assert code == 1
     assert target.read_bytes() == original_bytes, "失败编辑窗口应还原源码字节"
 
@@ -248,11 +260,13 @@ def check_snapshot_restore(src: Path, snaps: Path) -> None:
         "save": False, "pie": False,
     }
     run_task_mod.run_task = breaking
+    llm_mod.complete_logged = lambda *args, **kwargs: ("", {"error": "离线检查不调模型"})
     try:
         code, _run_path = rw.execute_windows("修改 ATestPawn 的移速并编译", planned={"source": "rules"},
                                              windows=[kept], echo=_quiet)
     finally:
         run_task_mod.run_task = original_run
+        llm_mod.complete_logged = original_llm
     assert code == 1
     assert target.read_bytes() == b"broken by window\n", "keep_source 不应还原"
     target.write_bytes(original_bytes)
@@ -1410,10 +1424,15 @@ def main() -> int:
             "snap_src": snapshot_mod.UE_SOURCE_ROOT,
             "briefs": brief_mod.BRIEFS_DIR, "ledger": ledger_mod.LEDGER_PATH,
             "titles": brief_mod._retrieval_titles,
+            # 20261028：eval 必须封闭——本机 .env 开了 UE_SOLVER_ENABLED 后，零窗口范围
+            # 会多出一扇 solve，固定序列断言（如 check_brief 的 set_pickable…）随环境漂移。
+            # 补窗救援整体替身掉，与 check_solve_gap_fallback 同口径。
+            "rescue": brief_mod._rescue_scope_windows,
         }
         prev_routes = os.environ.get("UE_LEARNED_ROUTES")
         os.environ["UE_LEARNED_ROUTES"] = str(tmp / "learned_routes.json")
         try:
+            brief_mod._rescue_scope_windows = lambda scope, query, complete=None, titles=None: []
             rw.RUNS_DIR = runs
             rw.EVENTS_DIR = events_dir
             snapshot_mod.SNAPSHOTS_DIR = snaps
@@ -1455,6 +1474,7 @@ def main() -> int:
             brief_mod.BRIEFS_DIR = saved["briefs"]
             ledger_mod.LEDGER_PATH = saved["ledger"]
             brief_mod._retrieval_titles = saved["titles"]
+            brief_mod._rescue_scope_windows = saved["rescue"]
             if prev_routes is None:
                 os.environ.pop("UE_LEARNED_ROUTES", None)
             else:

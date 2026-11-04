@@ -35,6 +35,9 @@ import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from eval._pin_offline import close_now
+
+close_now()  # 离线封闭：本机 .env 的求解/放行开关不进断言（20261028 check_upgrade 漂红教训）
 
 REPO = Path(__file__).resolve().parent.parent
 REAL_BRIEF = REPO / "data" / "briefs" / "20261024-192830-L_NewTest2-FPS.json"
@@ -1029,7 +1032,8 @@ def check_binding_parity() -> None:
             return None
 
     for action, producer in (("create_widget_blueprint", sequence._create_widget_blueprint),
-                             ("bind_blueprint", sequence._run_action)):
+                             # U1 起 bind_blueprint 的判词在 _bind_evidence（_run_action 只改写再递归）
+                             ("bind_blueprint", sequence._bind_evidence)):
         declared = _declares_judge(producer)
         if declared is None:
             continue  # 读不到 producer 源码（冻结/exec 部署）：不猜，别制造假红

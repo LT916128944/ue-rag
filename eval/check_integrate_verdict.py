@@ -27,6 +27,9 @@ import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from eval._pin_offline import close_now
+
+close_now()  # 离线封闭：本机 .env 的求解/放行开关不进断言（20261028 check_upgrade 漂红教训）
 
 
 def _quiet(*_args, **_kwargs):
@@ -490,6 +493,49 @@ def check_external_scope_wording() -> None:
         assert "C" in label, ("限定说明要点名等外部的范围 id", label)
 
 
+def check_done_requires_change_evidence() -> None:
+    """窗口都成功、但 solve 只有 automation、没有改动证据 → 台账不得是 done。"""
+    from agent import ledger as ledger_mod
+
+    brief = {
+        "query": "把子弹射速调整到原先的100倍",
+        "scopes": [{
+            "id": "A", "title": "改射速",
+            "deliverables": ["子弹射速变为原先的100倍"],
+            "pending_note": "", "depends_on": [], "external_dep": "",
+            "criteria": [{"id": "c1", "passed": True, "evidence_kind": "automation"}],
+            "windows": [{"id": "W1", "title": "求解改射速", "action": "solve",
+                         "slots": {}, "depends_on": [], "max_retries": 0}],
+        }],
+        "integration": {"title": "集成", "deliverables": []},
+        "external_dependencies": [],
+    }
+
+    def fake(task, trace_path=None, thread_id=None, on_row=None):
+        return {
+            "id": task.get("id"), "ok": True, "summary": "求解收口：失败数 0",
+            "judge_kind": "automation",
+            "test": {"ok": True, "kind": "automation", "filter": "AIAgent.Fps.Hit",
+                     "summary": "失败数 0", "errors": []},
+            "thread_id": thread_id,
+        }
+
+    windows = [dict(brief["scopes"][0]["windows"][0])]
+    scopes = [{
+        "id": "A", "title": "改射速",
+        "deliverables": ["子弹射速变为原先的100倍"],
+        "pending_note": "", "depends_on": [], "external_dep": "",
+        "window_ids": ["W1"],
+        "criteria": [{"id": "c1", "passed": True, "evidence_kind": "automation"}],
+    }]
+    _run(brief, fake, windows=windows, scopes=scopes)
+    ledger = ledger_mod.read_ledger()
+    row = next(item for item in ledger["scopes"] if item["id"] == "A")
+    assert row["status"] != "done", row
+    assert row["status"] == "partial", row
+    assert any("改动证据" in str(item) for item in row.get("pending") or []), row
+
+
 def main() -> int:
     from agent import brief as brief_mod
     from agent import ledger as ledger_mod
@@ -530,6 +576,7 @@ def main() -> int:
             check_clean_run_not_vetoed()
             check_stuck_window_marks_false()
             check_external_scope_wording()
+            check_done_requires_change_evidence()
         finally:
             rw.RUNS_DIR = saved["runs"]
             rw.EVENTS_DIR = saved["events"]

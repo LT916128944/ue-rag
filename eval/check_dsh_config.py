@@ -13,6 +13,13 @@ TEMPLATE = ROOT / "dsh" / "cordis.patch.yml"
 WORKSPACE = ROOT.parents[1]
 SKILLS = WORKSPACE / "AIAgentProject" / ".agents" / "skills"
 ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,32}$")
+# UE 官方 ModelContextProtocol 的默认端口。2026-11-03 起本机后端是 Monolith(9316)，
+# 官方 MCP 停用；它一旦被接进 DSH，全部 toolset schema 会注入每个请求。
+OFFICIAL_UE_MCP = re.compile(
+    r"(?:^|//)(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\]):8000(?:/|$)",
+    re.I,
+)
+EXPECTED_MCP_SERVERS = {"uerag"}
 
 
 def fail(message: str) -> None:
@@ -101,11 +108,31 @@ def main() -> int:
                         path = cwd / path
                     if not path.exists():
                         fail(f"{entry_id}: arg not found: {path}")
-                joined = " ".join(str(item) for item in config["args"])
-                if "ue_mcp_index" in joined or "unreal" in joined.lower():
-                    fail(f"{entry_id}: refusing full UE tool index in DSH")
+            url = str(config.get("url") or "")
+            if transport == "streamable-http" and not url:
+                fail(f"{entry_id}: streamable-http missing url")
+            # 这两条对所有 transport 生效。原先只查 stdio 的 args，一条
+            # streamable-http 指向 :8000 的行会照样过检（2026-11-03 补）。
+            haystack = " ".join([
+                *(str(item) for item in config.get("args") or []),
+                str(config.get("command") or ""),
+                url,
+            ]).lower()
+            if "ue_mcp_index" in haystack or "unreal" in haystack:
+                fail(f"{entry_id}: refusing full UE tool index in DSH")
+            if url and OFFICIAL_UE_MCP.search(url):
+                fail(
+                    f"{entry_id}: refusing UE official MCP ({url}): "
+                    "本机后端是 Monolith(9316)，官方 MCP 与它互斥；"
+                    "要连官方 MCP 先改 UE_EDITOR_BACKEND=official"
+                )
     if not server_names:
         fail("no mcp-client entry found")
+    if server_names != EXPECTED_MCP_SERVERS:
+        fail(
+            "exactly one mcp-client server expected "
+            f"{sorted(EXPECTED_MCP_SERVERS)}, got {sorted(server_names)}"
+        )
 
     skill_root = Path(str(next(
         (entry.get("config") or {}).get("customSkillDirs", [""])[0]

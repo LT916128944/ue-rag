@@ -1,5 +1,5 @@
 {
-  "note": "2026-10-15 五次失败的离线拆句期望（Plan/20261015-1705 第 1 节、P1 验收）。按 20261014-195443 到 20261015-165155 的原话配 stub 理解器注入期望 intent，断言拆出的窗口动作序列；不进 run_eval.py，不编译、不写场景。expect_actions 里括号中的 create_blueprint 表示蓝图为索引 miss 且类可推导时由 L2 归地自动插的前置扇；索引已命中时该扇不出现。注意：多数原句现在会被手写规则（含磁盘兜底）强命中走 L0，测试扇由代码补（_ensure_requested_test），stub 意图此时不生效——专门验 L1→L2 的是 l1-novel-phrasing 这类规则接不住的说法。",
+  "note": "2026-10-15 五次失败的离线拆句期望（Plan/20261015-1705 第 1 节、P1 验收）。按 20261014-195443 到 20261015-165155 的原话配 stub 理解器注入期望 intent，断言拆出的窗口动作序列；不进 run_eval.py，不编译、不写场景。expect_actions 里括号中的 create_blueprint 表示蓝图为索引 miss 且类可推导时由 L2 归地自动插的前置扇；索引已命中时该扇不出现。2026-10-27 起（89f5c7c）：_ensure_requested_test 删除，测试扇不再由代码按词补，交给理解器分配（真 run 20261027-150134 的理解器自己发出 run_automation_test）；stub 意图是当时的模型输出，不含测试扇，故 expect_actions 同步去掉 probe_play。",
   "cases": [
     {
       "id": "compile-then-place",
@@ -14,7 +14,7 @@
         "constraints": {"editor": true, "pie": false, "save": false},
         "unresolved": ["实现巡逻", "发现玩家后追击", "近距离攻击玩家的逻辑"]
       },
-      "expect_actions": ["compile_project", "create_blueprint", "place_actor", "probe_play"]
+      "expect_actions": ["compile_project", "create_blueprint", "place_actor"]
     },
     {
       "id": "brief-inherit-candidates",
@@ -47,7 +47,7 @@
         "constraints": {"editor": true, "pie": false, "save": false},
         "unresolved": ["实现巡逻", "发现玩家后追击", "近距离攻击玩家的逻辑"]
       },
-      "expect_actions": ["compile_project", "create_blueprint", "place_actor", "probe_play"]
+      "expect_actions": ["compile_project", "create_blueprint", "place_actor"]
     },
     {
       "id": "blueprint-graph-demand",
@@ -62,7 +62,7 @@
         "constraints": {"editor": true, "pie": false, "save": false},
         "unresolved": ["蓝图内实现生成位置在pawn周围10米内随机出现", "发现玩家后追击", "近距离攻击玩家的逻辑"]
       },
-      "expect_actions": ["compile_project", "create_blueprint", "place_actor", "probe_play"]
+      "expect_actions": ["compile_project", "create_blueprint", "place_actor"]
     },
     {
       "id": "place-not-overlapping",
@@ -90,7 +90,7 @@
         "constraints": {"editor": false, "pie": false, "save": false},
         "unresolved": []
       },
-      "expect_actions": ["create_blueprint", "place_actor", "probe_play"]
+      "expect_actions": ["create_blueprint", "place_actor"]
     }
   ]
 }

@@ -8,6 +8,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from agent.understand import understand_once
+from config import eval_base_url
 
 FIXED_QUERY = "把 BP_Gun 放到场景，再把 Cube 移到 (1200, 400, 150)"
 RUNS = 20
@@ -69,7 +70,7 @@ def main() -> int:
         f"固定句：{FIXED_QUERY}",
         "",
         f"通过 `validate_intent`：{passed}/{RUNS}，比例 {passed / RUNS:.2f}。",
-        f"模型：{rows[0]['model'] if rows else ''}。供应商仍是 DeepSeek，`base_url` 为 `https://api.deepseek.com`。",
+        f"模型：{rows[0]['model'] if rows else ''}。`base_url` 为 `{eval_base_url()}`。",
         f"响应里带缓存字段的次数：{cache_rows}。",
         f"prompt_cache_hit_tokens 合计：{'' if hit is None else hit}。prompt_cache_miss_tokens 合计：{'' if miss is None else miss}。命中率：{cache_rate}。没有字段的合计留空，不估算。",
         "",

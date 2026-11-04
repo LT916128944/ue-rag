@@ -28,11 +28,14 @@ def fail(msg: str, fix: str) -> None:
 
 def check_write_refusals() -> None:
     """任务显式写 save/pie=false 时 save_assets / StartPIE 被拒，error 精确等于 write refused。"""
-    for tool in ("save_assets", "StartPIE"):
-        refused = exec_tool(ASSET_TOOLSET, tool, {}, task={"save": False, "pie": False, "allow_writes": []})
-        if refused.get("error") != "write refused":
-            fail(f"任务显式关掉 save/pie 时 {tool} 的 error={refused.get('error')!r}，应为 'write refused'",
-                 f"core/editor_exec.py 里 {tool} 的拒绝分支改回 error='write refused'，policy 键不动")
+    from eval._pin_backend import pinned_backend
+
+    with pinned_backend("official"):
+        for tool in ("save_assets", "StartPIE"):
+            refused = exec_tool(ASSET_TOOLSET, tool, {}, task={"save": False, "pie": False, "allow_writes": []})
+            if refused.get("error") != "write refused":
+                fail(f"任务显式关掉 save/pie 时 {tool} 的 error={refused.get('error')!r}，应为 'write refused'",
+                     f"core/editor_exec.py 里 {tool} 的拒绝分支改回 error='write refused'，policy 键不动")
 
 
 def check_default_policy() -> None:
@@ -62,15 +65,18 @@ def check_read_allowed() -> None:
 
 def check_blueprint_switch() -> None:
     """UE_ALLOW_BLUEPRINT=false 时 create_node 被拒。测完恢复环境变量。"""
+    from eval._pin_backend import pinned_backend
+
     previous = os.environ.get("UE_ALLOW_BLUEPRINT")
     try:
         os.environ["UE_ALLOW_BLUEPRINT"] = "false"
-        blocked = exec_tool(
-            BLUEPRINT_TOOLSET,
-            "create_node",
-            {},
-            task={"allow_writes": ["create_node"], "save": False, "pie": False},
-        )
+        with pinned_backend("official"):
+            blocked = exec_tool(
+                BLUEPRINT_TOOLSET,
+                "create_node",
+                {},
+                task={"allow_writes": ["create_node"], "save": False, "pie": False},
+            )
         if blocked.get("error") not in ("blueprint edit disabled", "write refused"):
             fail(f"UE_ALLOW_BLUEPRINT=false 时 create_node 的 error={blocked.get('error')!r}",
                  "core/editor_exec.py 里开关为 false 的改蓝图文案保持 'blueprint edit disabled'，decide 不再重复拒绝")
@@ -108,7 +114,9 @@ def check_circuit() -> None:
             if verdict["allow"] is not False or "circuit" not in str(verdict["reason"]):
                 fail(f"第 {fault.CIRCUIT_THRESHOLD} 次失败后 decide 是 {verdict}",
                      "core/fault.py 的 record_failure 达到 CIRCUIT_THRESHOLD 后写 circuit.json；core/risk.py 的 decide 读它并带 circuit 拒绝")
-            refused = exec_tool(ASSET_TOOLSET, tool, {}, task={"save": True, "pie": False, "allow_writes": ["save_assets"]})
+            from eval._pin_backend import pinned_backend
+            with pinned_backend("official"):
+                refused = exec_tool(ASSET_TOOLSET, tool, {}, task={"save": True, "pie": False, "allow_writes": ["save_assets"]})
             if refused.get("error") != "circuit open":
                 fail(f"熔断打开时 exec_tool 的 error={refused.get('error')!r}，应为 'circuit open'",
                      "core/editor_exec.py 的追加拒绝保持 error='circuit open'，policy 键不动")

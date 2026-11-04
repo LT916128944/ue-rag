@@ -55,6 +55,15 @@ def main() -> int:
     spec = importlib.util.spec_from_file_location("dsh_bridge", BRIDGE)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    # 写锁与 busy 语义断言在 official 执行路径上（UE_EXEC_MODE=mock 也只在 official 生效）；
+    # 本机 .env 是 monolith 时 exec 会改走 backends.monolith（真连 9316）。语义断言钉 official。
+    from eval._pin_backend import pinned_backend
+
+    with pinned_backend("official"):
+        _lock_body(module, tmp)
+
+
+def _lock_body(module, tmp) -> None:
 
     # 0) 数据目录必须落在临时目录，真实 data/locks 一概不碰
     check(module._data_dir() == tmp, f"数据目录没重定向: {module._data_dir()}")
@@ -69,6 +78,10 @@ def main() -> int:
         time.sleep(0.3)
         return {"ok": True, "summary": "mock"}
 
+    # 20261028：假 exec 全程顶住——原来只在用例 1 换假件，用例 2-4 走真执行路径，
+    # 本机编辑器开着别的关卡（如 L_NewTest3，没有 EnemySpawnPoint_1）就红，还会
+    # 真写 Actor。文档自己写着「不连编辑器」，行为却连了：语义断言钉的是锁的
+    # 获取/stale/busy 逻辑，全在 exec_editor_tool 包装层，与 exec_tool 真假无关。
     module.editor_exec.exec_tool = fake_exec
     try:
         barrier = threading.Barrier(2)
@@ -90,7 +103,6 @@ def main() -> int:
         check(len(busy) == 1 and "editor busy" in str(busy[0].get("error")), f"另一个应是 editor busy: {results}")
         check(not lock.exists(), "并发用例结束后锁文件残留")
     finally:
-        module.editor_exec.exec_tool = original_exec
         _clear_lock(lock)
 
     # 2) stale 900 秒：锁记的 pid 活着但时间戳过旧，应被当作 stale 抢过来
@@ -117,6 +129,7 @@ def main() -> int:
         read = module.exec_editor_tool(ACTOR_TOOLSET, READ_TOOL, {"actor": {"refPath": "EnemySpawnPoint_1"}})
         check(read.get("ok") is True, f"持锁期间读工具被挡: {read}")
     check(not lock.exists(), "持锁结束锁文件没删")
+    module.editor_exec.exec_tool = original_exec
 
     print("dsh-lock ok")
     return 0

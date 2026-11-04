@@ -26,6 +26,9 @@ import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from eval._pin_offline import close_now
+
+close_now()  # 离线封闭：本机 .env 的求解/放行开关不进断言（20261028 check_upgrade 漂红教训）
 
 REAL_BRIEF = Path(__file__).resolve().parent.parent / "data" / "briefs" / "20261024-192830-L_NewTest2-FPS.json"
 
@@ -389,19 +392,17 @@ def check_create_level_binding() -> None:
 def check_binding_parity() -> None:
     """T8：声明点两侧必须对齐 —— 表里给映射，窗口就得真报得出那种判词，否则条款永远过不了。
 
-    实测（20261024）：`create_widget_blueprint` 与 `bind_blueprint` 的 catalog 口径都是 editor_assert，
-    但它们都是 DIRECT_ACTIONS，sequence 侧**没有**声明判词（`_create_widget_blueprint` 与
-    `_run_action` 里的 bind_slot 段都不产出 judge_kind/test；只有 `_create_level` 产 editor_assert）。
-    补上映射的实测后果：条款 editor_assert 永远 passed=False ⇒ 范围记「条款未过」、集成记
-    「矩阵未全过」—— 把「没判过」说成「做坏了」。所以这两处**已回滚**，留给 parity 守卫在 producer
-    侧补判词后两侧一起加。这里把口径钉住：编辑控件图仍是 blueprint_compile（创建 ≠ 编辑，防照抄）；
-    认不出的动作仍不产条款、不绑定；producer 没声明判词 ⇒ 表里不许先有映射（反之亦然）。"""
+    U1（20261027 升级计划）已把当初的两处缺口补上：`_create_widget_blueprint` 保存后跑
+    blueprint_compile；`bind_blueprint` 走 `sequence._bind_evidence`（find_assets 只读核对，
+    editor_assert）。守卫继续钉两侧对齐：producer 声明了判词 ⇒ 表里必须有映射且条款绑得上扇；
+    producer 没声明 ⇒ 表里不许先有映射。编辑控件图仍是 blueprint_compile（创建 ≠ 编辑，防照抄）；
+    认不出的动作仍不产条款、不绑定。"""
     import inspect
 
     from agent import sequence
     from agent.harness import _KIND_BY_ACTION, _window_ids_for, build_criteria
 
-    # 1) 反照抄：编辑控件图是 blueprint_compile（控件图编译），不是创建时的 editor_assert
+    # 1) 反照抄：编辑控件图是 blueprint_compile（控件图编译），不是创建时的 blueprint_compile 之外混入 editor_assert
     edit_rows = build_criteria(windows=[{"id": "W1", "action": "edit_widget_blueprint", "slots": {}}])
     assert [str(item.get("evidence_kind") or "") for item in edit_rows] == ["blueprint_compile"], edit_rows
 
@@ -420,7 +421,8 @@ def check_binding_parity() -> None:
 
     producers = {
         "create_widget_blueprint": _declares_judge(sequence._create_widget_blueprint),
-        "bind_blueprint": _declares_judge(sequence._run_action),
+        # U1 起 bind_blueprint 的判词在 _bind_evidence（_run_action 只是把动作改写成 bind_slot 再递归）
+        "bind_blueprint": _declares_judge(sequence._bind_evidence),
     }
     for action, declared in producers.items():
         if declared is None:
@@ -443,6 +445,7 @@ def main() -> int:
     from agent import ledger as ledger_mod
     from agent import run_windows as rw
     from agent import snapshot as snapshot_mod
+    from eval._pin_offline import closed_env
 
     with tempfile.TemporaryDirectory() as tmp_name:
         tmp = Path(tmp_name)

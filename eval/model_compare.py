@@ -12,7 +12,6 @@ REPORTS = Path(__file__).resolve().parent / "reports"
 # 2026-10-16 开跑前从 /models 选定。当时列表是 deepseek-flash 与 deepseek-v4-pro。
 # 缺省仍是 deepseek-chat（同一 base_url，探活能返回）。第二个用 flash，不改供应商。
 SECOND_MODEL = "deepseek-flash"
-BASE_URL = "https://api.deepseek.com"
 
 
 def _configured_model() -> str:
@@ -65,13 +64,15 @@ def _only(model: str, out_path: Path) -> int:
     sys.path.insert(0, str(ROOT))
     from agent.run_task import run_task
     from agent.task_schema import load_task
-    from core.llm_call import model_name
+    from config import eval_base_url
+    from core.llm_call import model_name, set_base_url
     from eval.run_eval import TASKS, _source_dirty
 
+    set_base_url(eval_base_url())
     payload = {
         "model_requested": model,
         "model_seen": model_name(),
-        "base_url": BASE_URL,
+        "base_url": eval_base_url(),
         "rows": [],
         "error": "",
     }
@@ -118,12 +119,15 @@ def _md_cell(value) -> str:
 
 
 def _write_report(first: dict, second: dict, path: Path) -> None:
+    sys.path.insert(0, str(ROOT))
+    from config import eval_base_url
+
     lines = [
         "# 两个模型，同一三条任务",
         "",
         f"第一个模型是当前配置 `{first.get('model_requested')}`。",
         f"第二个模型在开跑前选定为 `{second.get('model_requested')}`。",
-        f"两次都只用 `UE_LLM_MODEL`，`base_url` 都是 `{BASE_URL}`。",
+        f"两次都只用 `UE_LLM_MODEL`，`base_url` 都是 `{eval_base_url()}`。",
         "任务是 `eval/run_eval.py` 的默认三条，顺序不变。失败的格子留下错误原文。",
         "",
         "| 模型 | 任务 | ok | prompt_tokens | completion_tokens | 耗时 | 错误 |",

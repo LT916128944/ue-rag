@@ -18,6 +18,7 @@ RULE_LIMITS = {
     "ue-history.mdc": 40,
     "ue-cpp-plan.mdc": 40,
     "ue-harness-session.mdc": 25,
+    "ue-doc-sync.mdc": 25,
 }
 ALL_IDS = [
     "loop-graph", "tool-contract", "hybrid-retrieval", "context-slice", "harness-contract",
@@ -56,13 +57,14 @@ def main() -> None:
         if n > limit:
             fail(f"{name} {n} 行，超过 {limit}", f".cursor/rules/{name} 压到 {limit} 行以内")
 
-    # Codex 对照：四份短文、钩子、发现脚本。短文行数与对应 .mdc 同一上限。
+    # Codex 对照：短文、钩子、发现脚本。短文行数与对应 .mdc 同一上限。
     codex_root = Path(r"E:\UEProject\AIWork\AIAgentProject\.codex")
     instr_limits = {
         "ue-rag-route.md": 40,
         "ue-history.md": 40,
         "ue-cpp-plan.md": 40,
         "ue-harness-session.md": 25,
+        "ue-doc-sync.md": 25,
     }
     for name, limit in instr_limits.items():
         path = codex_root / "instructions" / name

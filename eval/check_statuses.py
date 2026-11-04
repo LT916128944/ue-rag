@@ -71,6 +71,8 @@ _SKIP: dict[tuple[str, str], str] = {
         "action_candidate 事件的 status 参数（候选词表），与 agent/catalog.py 的 review 同一张表",
     ("agent/run_windows.py", "promoted"):
         "skill_promoted 事件的 status 参数（技能词表），与 skill_memory 的 promoted 同一张表",
+    ("agent/run_windows.py", "shadow"):
+        "distill_candidate 事件的 status 参数（技能/蒸馏词表，U6 钩子），与 skill_memory 的 shadow 同一张表",
 }
 
 
@@ -490,7 +492,11 @@ def check_static_scan() -> None:
     # （""/gap/rescued，D6 落地时引入），它不属于 run/窗口/台账/stop_reason 四张身份表，
     # 但**必须是 statuses.py 里登记过的**——所以这里加进扫描面而不是加进 `_SKIP`：
     # `_SKIP` 是「不归 D11 管的词」，而「加一个状态必须先改 statuses.py」这条规则对它同样适用。
-    known = set(statuses.all_statuses()) | set(statuses.REVIEW_COVERAGE_STATES)
+    # RUN_RECORD_INFLIGHT 里的 orphaned 只属于 run 记录，不在四表并集里，但赋值必须先登记。
+    known = (
+        set(statuses.all_statuses()) | set(statuses.REVIEW_COVERAGE_STATES)
+        | set(statuses.RUN_RECORD_INFLIGHT)
+    )
     offenders: list[str] = []
     skipped_sites: dict[tuple[str, str], list[int]] = {}
     checked = 0

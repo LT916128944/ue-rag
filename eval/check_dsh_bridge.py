@@ -36,10 +36,28 @@ def main() -> int:
     spec = importlib.util.spec_from_file_location("dsh_bridge", BRIDGE)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    # UE_EXEC_MODE=mock 只在 official 执行路径上生效；本机 .env 是 monolith 时，
+    # 不钉住就会真连 9316（与「不连编辑器」的自述矛盾）。语义断言钉 official。
+    from eval._pin_backend import pinned_backend
+
+    with pinned_backend("official"):
+        _bridge_body(module, task_path, runs_root, tmp)
+
+
+def _bridge_body(module, task_path, runs_root, tmp) -> None:
     params = set(inspect.signature(module.exec_editor_tool).parameters)
     check(params == {"toolset", "tool", "args"}, f"exec_editor_tool 参数异常: {params}")
 
     # 2) 卡片不带 schema
+    # _scan 另起子进程跑 scan_mcp_tools.py，子进程自己读 .env（本机 monolith），
+    # 进程内钉不住。scan 的语义（卡片不带 schema）用夹具钉；拒绝语义在 check_backend 覆盖。
+    module._scan = lambda *args, **kw: {"ok": True, "count": 1, "items": [{
+        "full_name": ACTOR_TOOLSET + ".get_actor_transform",
+        "toolset": ACTOR_TOOLSET,
+        "tool_name": "get_actor_transform",
+        "required": [],
+        "description": "读 Actor 位置",
+    }]}
     cards = module.scan_editor_tools("查找 actor 工具", 2)
     check(cards.get("ok") is True, f"scan 失败: {cards}")
     check("input_schema" not in json.dumps(cards, ensure_ascii=False), "卡片里出现 input_schema")

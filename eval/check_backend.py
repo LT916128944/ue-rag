@@ -267,18 +267,21 @@ def check_write_policy() -> None:
 
 
 def check_live_official_shape() -> None:
-    """未改后端时，官方拒绝文案仍是原来的 blueprint edit disabled。"""
+    """backend 钉成 official 时，官方拒绝文案仍是原来的 blueprint edit disabled。"""
     from core.editor_exec import exec_tool
+
+    from eval._pin_backend import pinned_backend
 
     previous = os.environ.get("UE_ALLOW_BLUEPRINT")
     try:
         os.environ["UE_ALLOW_BLUEPRINT"] = "false"
-        blocked = exec_tool(
-            "editor_toolset.toolsets.blueprint.BlueprintTools",
-            "create_node",
-            {},
-            task={"allow_writes": ["create_node"], "save": False, "pie": False},
-        )
+        with pinned_backend("official"):
+            blocked = exec_tool(
+                "editor_toolset.toolsets.blueprint.BlueprintTools",
+                "create_node",
+                {},
+                task={"allow_writes": ["create_node"], "save": False, "pie": False},
+            )
         if blocked.get("error") != "blueprint edit disabled":
             fail(f"official 路径的 create_node error={blocked.get('error')!r}",
                  "backend 缺省 official 时 exec_tool 先放行选择层，再走原来的蓝图开关")

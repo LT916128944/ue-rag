@@ -9,6 +9,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+from eval._pin_offline import close_now
+
+close_now()  # 离线封闭：本机 .env 的求解/放行开关不进断言（20261028 check_upgrade 漂红教训）
 
 CLAUSE = "在 L_NewTest3 内实现简易 FPS 射击玩法，内容自由发挥"
 
@@ -76,8 +79,13 @@ def check_missing_actor_name_is_not_a_path_pause() -> None:
 
 
 def check_acked_gap_is_not_rescued_by_model() -> None:
-    """人审已确认缺口不再叫模型。代码能唯一归地时收成只读 Automation，不冒出要填路径的扇。"""
+    """人审已确认缺口不再叫模型。代码能唯一归地时收成只读 Automation，不冒出要填路径的扇。
+
+    台账与源码用临时夹具：真实台账里「测试射击玩法」和「实现简易 FPS」两条范围都含
+    「射击」，按 diagnose 的唯一性设计本来就该维持缺口，不能拿易变的生产台账当夹具。
+    """
     from agent.brief import materialize_scopes
+    from eval.check_diagnose import HIT, _World, _scope
 
     called = {"n": 0}
 
@@ -101,19 +109,20 @@ def check_acked_gap_is_not_rescued_by_model() -> None:
         }],
         "gap_ack": {"acknowledged": True, "scopes": ["C"], "answer": "确认"},
     }
-    windows, scopes = materialize_scopes(brief, complete=fake)
-    actions = [item.get("action") for item in windows]
-    assert called["n"] == 0, called
-    assert "query_actor" not in actions, actions
-    assert "check_platform_hud" not in actions, actions
-    assert "implement_shooter" not in actions, actions
-    auto = [item for item in windows if item.get("action") == "run_automation_test"]
-    assert len(auto) == 1, actions
-    assert auto[0].get("automation_filter") == "AIAgent.Fps.Hit", auto
-    assert auto[0].get("realizable") is True, auto
-    scope_c = next(item for item in scopes if item.get("id") == "C")
-    assert not scope_c.get("capability_gap"), scope_c
-    assert scope_c.get("window_ids"), scope_c
+    with _World((HIT,), [_scope("A", "在 L_NewTest3 中实现简易 FPS 射击玩法")]):
+        windows, scopes = materialize_scopes(brief, complete=fake)
+        actions = [item.get("action") for item in windows]
+        assert called["n"] == 0, called
+        assert "query_actor" not in actions, actions
+        assert "check_platform_hud" not in actions, actions
+        assert "implement_shooter" not in actions, actions
+        auto = [item for item in windows if item.get("action") == "run_automation_test"]
+        assert len(auto) == 1, actions
+        assert auto[0].get("automation_filter") == HIT, auto
+        assert auto[0].get("realizable") is True, auto
+        scope_c = next(item for item in scopes if item.get("id") == "C")
+        assert not scope_c.get("capability_gap"), scope_c
+        assert scope_c.get("window_ids"), scope_c
 
 
 def check_fake_model_is_caught() -> None:

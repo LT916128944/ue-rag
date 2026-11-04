@@ -281,19 +281,22 @@ def check_catalog_and_policy() -> None:
     from agent.catalog import CATALOG, READ_ONLY_ACTIONS
     from core.editor_exec import exec_tool, is_write_tool
 
+    from eval._pin_backend import pinned_backend
+
     assert "query_actor" in CATALOG and "run_automation_test" in CATALOG
     assert "query_actor" in READ_ONLY_ACTIONS and "run_automation_test" in READ_ONLY_ACTIONS
     assert is_write_tool("query_actor") is False
     assert is_write_tool("run_automation_test") is False
-    refused = exec_tool("asset", "save_assets", {}, task={"save": False, "pie": False, "allow_writes": []})
-    assert refused.get("ok") is False and refused.get("error") == "write refused"
-    assert refused["policy"]["save"] is False and "UE_ALLOW_BLUEPRINT" in refused["policy"]
-    graph = exec_tool(
-        "editor_toolset.toolsets.blueprint.BlueprintTools",
-        "create_node",
-        {},
-        task={"allow_writes": [], "save": False, "pie": False},
-    )
+    with pinned_backend("official"):
+        refused = exec_tool("asset", "save_assets", {}, task={"save": False, "pie": False, "allow_writes": []})
+        assert refused.get("ok") is False and refused.get("error") == "write refused"
+        assert refused["policy"]["save"] is False and "UE_ALLOW_BLUEPRINT" in refused["policy"]
+        graph = exec_tool(
+            "editor_toolset.toolsets.blueprint.BlueprintTools",
+            "create_node",
+            {},
+            task={"allow_writes": [], "save": False, "pie": False},
+        )
     assert graph.get("error") == "write refused"
     assert "allow_writes" in graph["policy"]
 

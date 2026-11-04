@@ -6,6 +6,9 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from eval._pin_offline import close_now
+
+close_now()  # 离线封闭：本机 .env 的求解/放行开关不进断言（20261028 check_upgrade 漂红教训）
 
 from agent.graph import route_after_build, route_after_observe
 from agent.roles import plan_role, tool_allowed
@@ -145,27 +148,29 @@ def main() -> int:
         assert other.get("ok") is False
         assert other.get("plan") is None
         from core.editor_exec import exec_tool
-        blocked = exec_tool(
-            "editor_toolset.toolsets.blueprint.BlueprintTools",
-            "create_node",
-            {},
-            task={"allow_writes": ["create_node"]},
-        )
-        assert blocked.get("error") == "blueprint edit disabled"
-        one_graph = exec_tool(
-            "editor_toolset.toolsets.blueprint.BlueprintTools",
-            "create_node",
-            {"blueprint": {"refPath": "/Game/BP_TestEnemy.BP_TestEnemy"}},
-            task={"allow_writes": [], "allow_blueprint_ref": "/Game/BP_TestEnemy.BP_TestEnemy"},
-        )
-        assert one_graph.get("error") == "write refused"
-        other_graph = exec_tool(
-            "editor_toolset.toolsets.blueprint.BlueprintTools",
-            "create_node",
-            {"blueprint": {"refPath": "/Game/BP_Gun.BP_Gun"}},
-            task={"allow_writes": ["create_node"], "allow_blueprint_ref": "/Game/BP_TestEnemy.BP_TestEnemy"},
-        )
-        assert other_graph.get("error") == "blueprint edit disabled"
+        from eval._pin_backend import pinned_backend
+        with pinned_backend("official"):
+            blocked = exec_tool(
+                "editor_toolset.toolsets.blueprint.BlueprintTools",
+                "create_node",
+                {},
+                task={"allow_writes": ["create_node"]},
+            )
+            assert blocked.get("error") == "blueprint edit disabled"
+            one_graph = exec_tool(
+                "editor_toolset.toolsets.blueprint.BlueprintTools",
+                "create_node",
+                {"blueprint": {"refPath": "/Game/BP_TestEnemy.BP_TestEnemy"}},
+                task={"allow_writes": [], "allow_blueprint_ref": "/Game/BP_TestEnemy.BP_TestEnemy"},
+            )
+            assert one_graph.get("error") == "write refused"
+            other_graph = exec_tool(
+                "editor_toolset.toolsets.blueprint.BlueprintTools",
+                "create_node",
+                {"blueprint": {"refPath": "/Game/BP_Gun.BP_Gun"}},
+                task={"allow_writes": ["create_node"], "allow_blueprint_ref": "/Game/BP_TestEnemy.BP_TestEnemy"},
+            )
+            assert other_graph.get("error") == "blueprint edit disabled"
         os.environ["UE_ALLOW_BLUEPRINT"] = "true"
         opened = supervise("在 BP_Cube 的事件图里加一个节点")
         assert "改蓝图已关闭" not in (opened.get("error") or "")
@@ -175,12 +180,13 @@ def main() -> int:
             assert opened["verify"][0]["kind"] == "blueprint_compile"
             assert "create_node" in opened["allow_writes"]
             assert opened["max_retries"] == 3
-        refused = exec_tool(
-            "editor_toolset.toolsets.blueprint.BlueprintTools",
-            "connect_pins",
-            {},
-            task={"allow_writes": []},
-        )
+        with pinned_backend("official"):
+            refused = exec_tool(
+                "editor_toolset.toolsets.blueprint.BlueprintTools",
+                "connect_pins",
+                {},
+                task={"allow_writes": []},
+            )
         assert refused.get("error") == "write refused"
     finally:
         if plan_path is not None:
@@ -292,17 +298,19 @@ ASecond : public AActor
     )
     assert codex_allowed["hookSpecificOutput"]["permissionDecision"] == "allow"
     from core.editor_exec import exec_tool as _exec_tool
+    from eval._pin_backend import pinned_backend
     # 这条验的是「开关为 false 时写被拒」，不是本机 .env 的当前取值：
     # 本机把 UE_ALLOW_MATERIAL 打开后，直接吃环境变量会让这条必挂。
     previous_material = os.environ.get("UE_ALLOW_MATERIAL")
     try:
         os.environ["UE_ALLOW_MATERIAL"] = "false"
-        blocked_mat = _exec_tool(
-            "editor_toolset.toolsets.material.MaterialTools",
-            "add_expressions",
-            {},
-            task={"allow_writes": ["add_expressions"]},
-        )
+        with pinned_backend("official"):
+            blocked_mat = _exec_tool(
+                "editor_toolset.toolsets.material.MaterialTools",
+                "add_expressions",
+                {},
+                task={"allow_writes": ["add_expressions"]},
+            )
     finally:
         if previous_material is None:
             os.environ.pop("UE_ALLOW_MATERIAL", None)
@@ -509,6 +517,14 @@ def check_remove_batch() -> None:
         return {"ok": False, "error": f"假编辑器没实现 {tool}"}
 
     original = editor_exec.exec_tool
+    # _save_level 现在有 monolith 分支（list_dirty_packages + save_packages，U3a）：
+    # 不钉 backend 会随 .env 漂移去真连 9316，绕开这里的假编辑器。钉 official。
+    import config as _config
+    from backends import select as _select
+
+    _orig_backend = _config.editor_backend
+    _select.reset_lock()
+    _config.editor_backend = lambda: "official"
     editor_exec.exec_tool = fake_exec_tool
     try:
         done = _remove_batch({
@@ -538,6 +554,8 @@ def check_remove_batch() -> None:
         assert level == before, level
     finally:
         editor_exec.exec_tool = original
+        _config.editor_backend = _orig_backend
+        _select.reset_lock()
 
 
 def check_skill_registry() -> None:

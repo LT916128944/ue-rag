@@ -145,6 +145,68 @@ def test_model_rejects_unknown_action_and_missing_slot() -> None:
     assert "槽位" in state.data["stitch_note"]
 
 
+def test_supplement_rejected_when_unmet_does_not_overlap() -> None:
+    """solve 失败后模型补 implement_shooter，和射速交付对不上 → 不补，原因留在失败扇上。"""
+    state = _state(
+        "在关卡 L_NewTest3 把子弹射速改为原先的100倍",
+        [_window("W1", "solve"), _window("W2", "integrate_verify", ["W1"])],
+        [{"id": "c-hit", "evidence_kind": "automation", "passed": False,
+          "filter": "AIAgent.Fps.Hit", "windows": ["W1"]}],
+        scopes=[{
+            "id": "A",
+            "window_ids": ["W1"],
+            "deliverables": ["子弹射速改为原先的100倍"],
+        }],
+    )
+    state.window("W1")["state"] = "failed"
+    state.window("W1")["summary"] = "求解 no_criteria"
+    state.window("W1")["result"] = {"summary": "求解 no_criteria"}
+    state.window("W2")["state"] = "failed"
+    assert apply_stitch(
+        state, state.data["query"],
+        complete=lambda _messages: '{"action":"implement_shooter","unresolved":""}',
+    ) is True
+    assert "S1" not in state.data["windows"]
+    why = str(state.data.get("stitch_unresolved") or "")
+    assert "不补" in why, why
+    assert "不补" in str(state.window("W1")["result"]["summary"])
+    assert state.window("W1")["state"] == "failed"
+
+
+def test_supplement_inserted_when_unmet_overlaps() -> None:
+    """声明能力对得上未覆盖交付 → 补，并在记录里标来源：补扇。"""
+    from agent.run_windows import _rows, _write
+
+    state = _state(
+        "在关卡 L_NewTest3 放好射击用的 FpsPawn 和靶",
+        [_window("W1", "solve"), _window("W2", "integrate_verify", ["W1"])],
+        [{"id": "c-hit", "evidence_kind": "automation", "passed": False,
+          "filter": "AIAgent.Fps.Hit", "windows": ["W1"]}],
+        scopes=[{
+            "id": "A",
+            "window_ids": ["W1"],
+            "deliverables": ["关卡里有 FpsPawn、三个靶和地面"],
+        }],
+    )
+    state.window("W1")["state"] = "failed"
+    state.window("W1")["summary"] = "求解失败"
+    state.window("W2")["state"] = "failed"
+    assert apply_stitch(
+        state, state.data["query"],
+        complete=lambda _messages: '{"action":"implement_shooter","unresolved":""}',
+    ) is True
+    added = state.window("S1")
+    assert added["action"] == "implement_shooter", added
+    assert added.get("supplement") is True
+    row = next(item for item in _rows(state) if item["id"] == "S1")
+    assert row["supplement"] is True
+    import tempfile
+    with tempfile.TemporaryDirectory() as name:
+        path = Path(name) / "run.md"
+        _write(path, state.data["query"], "brief", [row], {"ok": False, "status": "失败", "summary": "有窗口失败"}, pie=False)
+        assert "来源：补扇" in path.read_text(encoding="utf-8")
+
+
 def main() -> int:
     test_drop_unowned_without_model()
     test_compile_sentence_inserts_one_window()
@@ -152,6 +214,8 @@ def main() -> int:
     test_connection_requeues_once()
     test_model_inserts_one_catalog_action()
     test_model_rejects_unknown_action_and_missing_slot()
+    test_supplement_rejected_when_unmet_does_not_overlap()
+    test_supplement_inserted_when_unmet_overlaps()
     print("stitch ok")
     return 0
 

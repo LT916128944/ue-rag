@@ -44,6 +44,22 @@ EXECUTOR_FUNC = "_run_action"
 SITE_MODULE_DIRS = (ROOT / "agent", ROOT / "core", ROOT)
 
 
+def _code_only_allowed() -> dict[str, tuple[str, ...]]:
+    """P1-6：代码专用扇白名单改读生成器产物 agent/actions.py（CODE_ONLY.inserted_by）。
+    读不到生成器就红，不许拿一张空表混过去。"""
+    try:
+        from agent.actions import CODE_ONLY
+    except Exception as exc:
+        raise GuardError(f"agent.actions.CODE_ONLY 读不到（生成器产物缺失）：{exc}") from exc
+    out: dict[str, tuple[str, ...]] = {}
+    for name, row in CODE_ONLY.items():
+        sites = tuple(str(site) for site in (row.get("inserted_by") or ()) if str(site).strip())
+        if not sites:
+            raise GuardError(f"actions.CODE_ONLY[{name!r}] 没写 inserted_by（等于空口无凭）")
+        out[str(name)] = sites
+    return out
+
+
 # ---------------------------------------------------------------- 白名单 / 合成裁判登记
 #
 # 代码专用扇：执行器认，但规划者不该看见（规划者写不出它的槽位，只能由代码在某个
@@ -55,53 +71,10 @@ SITE_MODULE_DIRS = (ROOT / "agent", ROOT / "core", ROOT)
 #   ① 模块文件存在；② 该文件里有同名 FunctionDef/AsyncFunctionDef（ast，不用字符串 in）；
 #   ③ 该函数体内真的出现这个动作名（防止点到存在但无关的函数上）。
 #
-# 实测（2026-10-24，当前未提交工作树，本守卫跑出来的差集）：
-#   EXECUTOR_SET(23) - PLANNER_SET(19) = 下面这 8 个 `[事实]`
-CODE_ONLY_ALLOWED = {
-    # 表外需求由分解器插入：模型点名 apply_spec，执行器写 C++ 文件。规划者的动作表里没有它。
-    "apply_spec": (
-        "decompose.windows_from_steps",
-        "sequence._run_action",
-    ),
-    # 创建蓝图的前置扇由代码插入：plan_windows 的建扇路径 + supervise 的规则/补窗路径。
-    "create_blueprint": (
-        "plan_windows._create_and_goal",       # [事实] plan_windows.py:610，:622/:634 写该动作
-        "supervise._try_blueprint_create",     # [事实] supervise.py:648，:676/:685 写该动作
-        "supervise._try_named_blueprint_place",  # [事实] supervise.py:736，:791/:813/:833
-        "supervise._plan_rules",               # [事实] supervise.py:1360，:1443
-    ),
-    # 绑定拾取者/物体：supervise 的拾取编排产出，执行器同款分支。
-    "bind_slot": (
-        "supervise._bind_slot",                # [事实] supervise.py:1254，:1270/:1282
-        "sequence._run_action",                # [事实] sequence.py:128，:227
-    ),
-    # 拾取裁决：只读，但也是代码插入（规划者不写它）。四站都要能解析。
-    "check_pickup": (
-        "supervise._append_pickup_slots",      # [事实] supervise.py:1293，:1321
-        "supervise._pickup_step",              # [事实] supervise.py:1518，:1534
-        "plan_windows._action_of",             # [事实] plan_windows.py:148，:150
-        "sequence._run_action",                # [事实] sequence.py:128，:239（与 judge_pickup 同分支）
-    ),
-    # 放蓝图进场景：只有 supervise 的两条编排路径写它。
-    "place_blueprint": (
-        "supervise._try_named_blueprint_place",  # [事实] supervise.py:736，:732/:756/:779/:800
-        "supervise._plan_rules",               # [事实] supervise.py:1360，:1456
-    ),
-    # 一对实例（拾取者 + 物体）的放置扇。
-    "place_pair": (
-        "supervise._append_pickup_slots",      # [事实] supervise.py:1293，:1313
-    ),
-    # 三个 probe：学习路径/规则路径的只读探针，规划者不写。
-    "probe_move": (
-        "supervise._plan_rules",               # [事实] supervise.py:1360，:1482
-    ),
-    "probe_look": (
-        "supervise._plan_rules",               # [事实] supervise.py:1360，:1502
-    ),
-    "probe_play": (
-        "scene_gate.ensure_scene_windows",     # [事实] scene_gate.py 只认已有的 probe_play 扇，用来决定放置插在它前面
-    ),
-}
+# P1-6（20261028）：白名单本体改读生成器产物 agent/actions.py 的 CODE_ONLY.inserted_by——
+# 单一声明源在那里，这里只负责逐站 ast 复核与反向可解析性。
+# 实测（2026-10-24，当时未提交工作树，本守卫跑出来的差集）：EXECUTOR_SET - PLANNER_SET 共 8 条。
+# CODE_ONLY_ALLOWED 在 GuardError 定义之后赋值（_code_only_allowed 会抛 GuardError）。
 #
 # 说明（刻意不做的两条断言，避免守卫变成「拦住改进的墙」）：
 #   * 不要求 CODE_ONLY_ALLOWED 的键一定还在差集里。将来把 create_blueprint 提升成
@@ -125,35 +98,19 @@ SYNTHETIC_JUDGES = {
     },
 }
 #
-# 待补裁判登记（D1 家族的真实缺陷，producer 侧还没声明判词）：
-# harness.py:29-33 的 T8 回滚记录写明「create_widget_blueprint / bind_blueprint 这两处故意不补，
-# 等 parity 守卫在 producer 侧补上判词后两侧一起动」。也就是说：映射缺失不是漏改，而是
-# producer 侧还没有证据源；先加 _KIND_BY_ACTION 会造出一条永远 passed=False 的条款
-# （把「没判过」说成「做坏了」）。
+# 待补裁判登记：现在为空。
+# U1（20261027 升级计划）把当初的两条真缺陷补掉了——producer 侧先声明判词，映射两侧同时动：
+#   bind_blueprint → sequence._bind_evidence（find_assets 只读核对唯一蓝图路径，editor_assert）
+#   create_widget_blueprint → _create_widget_blueprint 保存后跑 blueprint_compile 编译裁判
+# 两者的 _KIND_BY_ACTION 映射与判词同批合入（harness.py）。这张表继续当定时炸弹用：
+# 下次再有「能规划、能执行、没裁判」的动作，先在这里登记 producer 站点，再按四道闸补判词。
 #
-# 这张表是**定时炸弹**而不是免死金牌，每条都要过四道闸：
+# 每条都要过四道闸：
 #   ① producer 站点能解析；② producer 源码里**没有** judge_kind（缺口的证明）；
 #   ③ catalog._VERIFY 有该动作的验收口径（说明它本该有裁判）；④ why 非空。
 # 一旦有人在 producer 里补了 judge_kind，②立刻红 —— 逼着把映射搬进 _KIND_BY_ACTION，
 # 也就是「两侧必须同时动」。不写死原因/站点就无法靠改表混过去。
-PENDING_JUDGE = {
-    "bind_blueprint": {
-        # [事实] sequence.py:271-274：`if action == "bind_blueprint":` 只把动作改写成 bind_slot
-        # 再递归回 _run_action，自己**不产判词**（没有 judge_kind/test）。
-        # bind_slot 段（:227-236）也只返回 index_note/ref。
-        "producer": ("sequence._run_action",),
-        "why": "bind_blueprint 段把动作改写成 bind_slot 再递归，自己只返回 index_note/ref，"
-               "不产 judge_kind/test（_run_action 里没有任何 judge_kind）。",
-    },
-    "create_widget_blueprint": {
-        # [事实] sequence.py:259 `if action == "create_widget_blueprint":` 分派到
-        # _create_widget_blueprint（:568-645）：建资产 + 保存，不产 judge_kind/test；
-        # run_windows 的 widget_graph 合成点只认 edit_widget_blueprint（:863）。
-        "producer": ("sequence._run_action",),
-        "why": "分派到 _create_widget_blueprint 只建资产 + 保存，不产 judge_kind/test；"
-               "widget_graph 合成点只认 edit_widget_blueprint。",
-    },
-}
+PENDING_JUDGE = {}
 # PENDING_JUDGE 的 producer 站点规则（三条，逐站强制，与 CODE_ONLY_ALLOWED 同一把尺）：
 #   ① 每个站点都必须能解析到真实函数（ast 找 FunctionDef/AsyncFunctionDef，不用字符串 in）；
 #   ② 每个站点里都必须出现这个动作名（证明这条登记指的是这扇窗口，不是点到无关函数）；
@@ -168,6 +125,10 @@ NO_EVIDENCE_NEEDED = {"launch_editor"}
 
 class GuardError(Exception):
     """可读的守卫内部错误：哪个文件、哪个符号没找到。由 main 转成一条 I* 问题行。"""
+
+
+# P1-6：白名单在 GuardError 之后才赋值（_code_only_allowed 读 agent.actions，读不到就红）。
+CODE_ONLY_ALLOWED = _code_only_allowed()
 
 
 # ---------------------------------------------------------------- 静态解析
