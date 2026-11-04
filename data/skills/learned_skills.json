@@ -4,13 +4,34 @@
       "id": "mark-interactable",
       "version": 1,
       "when": "可交互",
-      "when_terms": ["可交互"],
-      "roles": ["target", "picker"],
-      "goals": ["set_pickable", "judge_pickup"],
-      "preconditions": ["动作在 catalog 内", "槽位可解析才执行"],
-      "action_sequence": ["set_pickable", "judge_pickup"],
-      "verification": ["bPickable 为真", "InteractableActor 存在", "距离不超过 100 uu"],
-      "failure_recovery": ["缺路径问一次 r", "实例不存在则该扇失败"],
+      "when_terms": [
+        "可交互"
+      ],
+      "roles": [
+        "target",
+        "picker"
+      ],
+      "goals": [
+        "set_pickable",
+        "judge_pickup"
+      ],
+      "preconditions": [
+        "动作在 catalog 内",
+        "槽位可解析才执行"
+      ],
+      "action_sequence": [
+        "set_pickable",
+        "judge_pickup"
+      ],
+      "verification": [
+        "bPickable 为真",
+        "InteractableActor 存在",
+        "距离不超过 100 uu"
+      ],
+      "failure_recovery": [
+        "缺路径问一次 r",
+        "实例不存在则该扇失败"
+      ],
       "confidence": 0.9,
       "source_runs": [],
       "conflicts": [],
@@ -20,15 +41,61 @@
       "windows": [
         {
           "action": "set_pickable",
-          "slots": {"target": "target"}
+          "slots": {
+            "target": "target"
+          }
         },
         {
           "action": "judge_pickup",
-          "slots": {"target": "target", "picker": "picker"},
-          "depends_on": ["W1"],
+          "slots": {
+            "target": "target",
+            "picker": "picker"
+          },
+          "depends_on": [
+            "W1"
+          ],
           "max_retries": 1
         }
       ]
+    },
+    {
+      "id": "solver-d00782e6",
+      "when": "上一扇交接：\n{\"window\": \"W2\", \"unmet\": [\"AIAgent.Fps.Grenade 失败数应为 0。\", \"AIAgent.Fps.H",
+      "roles": [],
+      "goals": [
+        "apply_spec+build",
+        "editor.trigger_build",
+        "editor.get_build_errors",
+        "editor.get_build_status",
+        "editor.run_automation_tests",
+        "apply_spec+build"
+      ],
+      "preconditions": [
+        "动作原语经 monolith 盘点确认存在"
+      ],
+      "action_sequence": [
+        "apply_spec+build",
+        "editor.trigger_build",
+        "editor.get_build_errors",
+        "editor.get_build_status",
+        "editor.run_automation_tests",
+        "apply_spec+build"
+      ],
+      "verification": [
+        "automation 收口：失败数 0（1 个测试） tests=AIAgent.Fps.Hit"
+      ],
+      "failure_recovery": [
+        "预算烧尽降级为能力缺口",
+        "编译错误原文进下一轮，最多 3 轮"
+      ],
+      "confidence": 0.5,
+      "source_runs": [
+        "W3"
+      ],
+      "conflicts": [],
+      "version": 1,
+      "lru": 2,
+      "status": "shadow"
     }
   ]
 }

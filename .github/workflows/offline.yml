@@ -19,6 +19,39 @@ jobs:
       # Monolith 排他后端：未配置仍是 official；非法值与选错入口都拒绝。不连编辑器。
       - name: check_backend
         run: python eval/check_backend.py
+      # U0（20261027 升级计划）：Monolith 连接层一次重试、失败指引、探活。全离线。
+      - name: check_backend_health
+        run: python eval/check_backend_health.py
+      # U1（20261027 升级计划）：bind_blueprint / create_widget_blueprint 的 producer 侧判词。全离线。
+      - name: check_producer_judges
+        run: python eval/check_producer_judges.py
+      # U4（20261027 升级计划）：set_scalar_param / place_batch 的写前快照与失败回滚。全离线。
+      - name: check_write_rollback
+        run: python eval/check_write_rollback.py
+      # U3b（20261027 升级计划）：条款绑定回归——窗口全败时条款必须保持 false，
+      # launch_editor 的 synthetic 判词翻不动宽绑定条款（20261027-180955 的假通过）。全离线。
+      - name: check_criteria_binding
+        run: python eval/check_criteria_binding.py
+      # U3a（20261027 升级计划）：动作 × 后端覆盖矩阵——sequence 的原语必须已桥或已声明
+      # 不支持，CATALOG 动作必须有后端覆盖声明（20261027-180955 的断链）。全离线。
+      - name: check_backend_coverage
+        run: python eval/check_backend_coverage.py
+      # FPS HUD 链路（20261029）：整句 HUD 需求必须零模型拆句（hud-rules），
+      # 模块入口真实可调用（防函数头被吞的 NameError），判词/C++/布局三处控件名一致。全离线。
+      - name: check_fps_hud
+        run: python eval/check_fps_hud.py
+      # FPS HUD 与 UMG 桥后续升级（Plan/20261029-1240）的四条护栏。全离线、不连编辑器：
+      # 控件事件绑定走 blueprint.add_node(ComponentBoundEvent) 而非「无 action」；
+      # NamedSlot/类级查询如实留在人工清单；AddWidget 的 childIndex 不再静默丢弃；
+      # 方案层「一次结构化重问 + 截断保护」与 LLM 429/5xx 有限退避、401 一次就停。
+      - name: check_widget_event_binding
+        run: python eval/check_widget_event_binding.py
+      - name: check_widget_slot_gaps
+        run: python eval/check_widget_slot_gaps.py
+      - name: check_solver_plan_retry
+        run: python eval/check_solver_plan_retry.py
+      - name: check_llm_backoff
+        run: python eval/check_llm_backoff.py
       - name: check_info_layer
         run: python eval/check_info_layer.py
       - name: check_architecture
@@ -43,6 +76,30 @@ jobs:
       # 集成矩阵「交付验收」四态；以及 T3 的端到端离线回归（原句 → 规划/物化 → 真跑 → 收尾状态）。
       - name: check_create_level
         run: python eval/check_create_level.py
+      # 2026-10-28 手榴弹能力接线：implement_grenade 三态断言（缺前置引导、补拾取幂等、automation 收口）。
+      - name: check_implement_grenade
+        run: python eval/check_implement_grenade.py
+      # 20261028 求解循环（Plan/20261028-1438）：编译回灌、受控求解、solve 扇开关、蒸馏闭环。
+      # 四条全离线：编译/裁判/模型/discover 全是替身，轨迹与蒸馏产物隔离到临时目录。
+      - name: check_build_error_loop
+        run: python eval/check_build_error_loop.py
+      - name: check_solver_budget
+        run: python eval/check_solver_budget.py
+      - name: check_solve_gap_fallback
+        run: python eval/check_solve_gap_fallback.py
+      - name: check_solver_distill
+        run: python eval/check_solver_distill.py
+      # 20261028-183641 卡壳修复：射速×100 进 solve 扇只会编 run_python（没放行必被拒，
+      # 还白烧一次重试）。钉三件事：盘点按写闸过滤、写闸拒绝不重试不烧预算、
+      # patch 路线（改已有源文件一处替换 → 复用 apply_spec 编译管线）。全离线。
+      - name: check_solver_patch
+        run: python eval/check_solver_patch.py
+      # 20261028-2058：stdin 单次消费与超 30 分钟无心跳 run 改判 orphaned。全离线。
+      - name: check_orphan_run
+        run: python eval/check_orphan_run.py
+      # 能力面对账自测（fixture 离线跑；真数据源要编辑器在线导出，见 pipelines/export_capability_surface.py）。
+      - name: check_capability_surface
+        run: python eval/check_capability_surface.py --selftest
       - name: check_capability_gap
         run: python eval/check_capability_gap.py
       - name: check_archive_fidelity

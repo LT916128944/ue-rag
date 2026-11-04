@@ -223,6 +223,19 @@
     ]
   },
   {
+    "name": "ue-monolith-backend-skill",
+    "description": "UE_EDITOR_BACKEND=monolith 时的编辑器入口。discover、describe、exec，不扫官方 830 个工具。",
+    "path": "E:\\UEProject\\AIWork\\AIAgentProject\\.codex\\skills\\ue-monolith-backend-skill\\SKILL.md",
+    "triggers": [
+      "monolith",
+      "9316",
+      "discover"
+    ],
+    "tools": [],
+    "version": "1.0",
+    "conflicts": []
+  },
+  {
     "name": "ue-niagara-skill",
     "description": "Niagara System：Emitter、Module、Renderer、Stack、参数、Niagara Blueprint。",
     "path": "E:\\UEProject\\AIWork\\AIAgentProject\\.codex\\skills\\ue-niagara-skill\\SKILL.md",

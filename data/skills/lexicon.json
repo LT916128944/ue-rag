@@ -89,6 +89,13 @@
       "evidence": "[事实] agent/catalog.py:88-91（只读，按过滤器跑 Automation，失败数不是 0 就不算通过，不另开 PIE）"
     },
     {
+      "verbs": ["手榴弹", "投掷物", "投掷", "掷雷"],
+      "aliases": ["爆炸", "补给"],
+      "action": "implement_grenade",
+      "evidence": "[事实] 2026-10-28 手榴弹能力落地：AFpsGrenadeProjectile / AFpsGrenadePickup 进工程（AIAgent.Fps.Grenade 收口）；agent/catalog.py implement_grenade（level 槽位，要求关卡已有 FPS 前置）",
+      "caveat": "爆炸/补给是弱线索（aliases），只参与 lookup，不当动作结论：单独一句「做个爆炸特效」不该被拽进 implement_grenade。关卡没有 FPS 前置时该动作会引导先跑 implement_shooter，不静默。"
+    },
+    {
       "verbs": ["改蓝图图", "加节点", "连线", "蓝图节点", "连引脚", "改蓝图逻辑"],
       "unplannable": true,
       "namespace": "blueprint",

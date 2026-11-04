@@ -29,8 +29,13 @@ copy .env.example .env
 | `UE_ALLOW_BLUEPRINT` 及材质 / UMG / 动画 / Niagara | `false` | `true` |
 | `UE_ALLOW_AI` | `false` | `true` |
 | `UE_ALLOW_MONOLITH_WRITE` | `false` | `true` |
+| `UE_ALLOW_PYTHON` | `false` | `true`。`editor.run_python` 的缺省放行；任务显式 `allow_python: false` 仍拒绝（DSH session_task.json 优先） |
 | `UE_DEFAULT_SAVE` / `UE_DEFAULT_PIE` | `true` | `true` |
 | `UE_EXEC_MODE` | `real` | 注释掉。`mock` 才启用注入错误 |
+| `UE_SOLVER_ENABLED` | `false` | `true`。表外需求补不出窗口时自动补一扇受控求解扇（预算闸门见 WORKFLOW） |
+| `UE_SOLVER_EDITOR_CALLS` / `UE_SOLVER_BUILD_ROUNDS` / `UE_SOLVER_MODEL_CALLS` | 8 / 3 / 6 | 注释掉 |
+| `UE_SOLVER_META_CALLS` | 12 | 注释掉。discover / describe / 列测试走这份额度；describe 命中 `capability_surface.json` 的 params 缓存时不占 |
+| `UE_SOLVER_NAMESPACES` | `editor,mesh,niagara,blueprint,material` | 注释掉。monolith 没有 `asset` namespace，别再往里放 |
 
 `UE_EDITOR_CMD`、`UE_PROJECT`、`UE_SOURCE_ROOT` 空着就用 `config.py` 的本机路径。换机器再改。
 
@@ -47,7 +52,7 @@ copy .env.example .env
 
 两边同时在听时，启动会被拒绝：`monolith` 要关掉插件 Unreal MCP（ModelContextProtocol），`official` 要关掉 Monolith，然后重启编辑器。PCG 在 Monolith 上没有命名空间，调用失败，不回退 8000。
 
-`backend=monolith` 时，`compile_blueprint`、`bind_blueprint`、`create_widget_blueprint`、`edit_widget_blueprint` 对同一张蓝图最多修 3 次。第 3 次仍失败就停，错误含「已尝试 3 次，Monolith 不具备该能力」。对应的 `UE_ALLOW_*` 不是 true 时次数是 0。
+`backend=monolith` 时，`compile_blueprint`、`bind_blueprint`、`create_widget_blueprint`、`edit_widget_blueprint` 对同一张蓝图最多修 3 次。第 3 次仍失败就停，错误含「已尝试 3 次，Monolith 不具备该能力」。对应的 `UE_ALLOW_*` 不是 true 时次数是 0。场景/资产/材质原语（find_actors、add_to_scene_from_asset、set_actor_transform、save_assets 等）由 `core/monolith_bridge.py` 翻译成对应 monolith action，映射外的原语带原因拒绝（覆盖矩阵见 `eval/check_backend_coverage.py`）。
 
 ## 入库
 

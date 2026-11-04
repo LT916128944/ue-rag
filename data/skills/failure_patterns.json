@@ -6,12 +6,219 @@
       "symptom_detail": "找不到标识符",
       "error_kind": "compile",
       "root_cause": "调用了不存在的函数",
-      "fix_tools": ["read_source", "apply_unified_diff"],
+      "fix_tools": [
+        "read_source",
+        "apply_unified_diff"
+      ],
       "validation": "退出码 0 且无 error C",
       "confidence": 0.88,
-      "source_runs": ["cpp-typo"],
+      "source_runs": [
+        "cpp-typo"
+      ],
       "successes": 2,
       "status": "promoted",
+      "conflicts": []
+    },
+    {
+      "id": "solver-fail-2020cf41",
+      "symptom": "Missing required param(s): [path]. Provi",
+      "symptom_detail": "",
+      "note": "求解 criteria_failed：上一扇交接：\n{\"window\": \"W1\", \"unmet\": [\"AIAgent.Fps.Grenade 过滤器失败数为 0，手榴弹投掷链路通过。\"], \"unmet_total\": 1, \"unmet_omitted\": 0, \"ev",
+      "fix_tools": [],
+      "source_runs": [
+        "W2"
+      ],
+      "successes": 0,
+      "status": "shadow",
+      "conflicts": []
+    },
+    {
+      "id": "solver-fail-71fc3bed",
+      "symptom": "allow_python 未写，拒绝 run_python",
+      "symptom_detail": "",
+      "note": "求解 no_criteria：L_NewTest3 简易载具：载具资产、上车下车与驾驶；资产与代码均未创建；动作表里没有载具相关动作，也没有给出唯一的载具类名，不能凭猜测指派窗口。；载具 Actor 资产（C++ 类或蓝图）创建并落在 /Game 下，可在 L_NewT",
+      "fix_tools": [],
+      "source_runs": [
+        "W1"
+      ],
+      "successes": 0,
+      "status": "shadow",
+      "conflicts": []
+    },
+    {
+      "id": "solver-fail-caf546e4",
+      "symptom": "exit 6 Unhandled 1 aggregate exceptions\n",
+      "symptom_detail": "",
+      "note": "求解 build_failed：上一扇交接：\n{\"window\": \"W2\", \"unmet\": [\"AIAgent.Fps.Hit 失败数为 0\", \"AIAgent.Fps.Grenade 失败数为 0\"], \"unmet_total\": 2, \"unmet_omit",
+      "fix_tools": [],
+      "source_runs": [
+        "W4"
+      ],
+      "successes": 0,
+      "status": "shadow",
+      "conflicts": []
+    },
+    {
+      "id": "decomposer-fake-external-172416",
+      "symptom": "等待外部 Main/M-UE",
+      "symptom_detail": "拆窗器把没跑的窗口标成等待外部，外部依赖名是编造的（Main/M-UE 不在登记表里），任务书整段假暂停",
+      "note": "20261028 载具 run 172416：同句需求换一轮跑就走出这条假路径。守卫方向：external_dep 只认登记过的外部依赖名，编造的判 invalid 重拆",
+      "fix_tools": [],
+      "source_runs": [
+        "20261028-172416"
+      ],
+      "successes": 0,
+      "status": "shadow",
+      "conflicts": []
+    },
+    {
+      "id": "editor-down-after-build-163746",
+      "symptom": "ConnectError: [WinError 10061] 由于目标计算机积极拒绝",
+      "symptom_detail": "编译裁判先关编辑器；build 失败或扇间交替时编辑器没被拉回，下一轮全部编辑器窗口 10061",
+      "note": "20261028 修两处：solver 编译后成败都回连；monolith exec 连接拒绝自愈 ensure_editor 一次再重试。编辑器没开是环境前置不是能力缺口",
+      "fix_tools": [
+        "core.editor_launch.ensure_editor"
+      ],
+      "source_runs": [
+        "20261028-163746",
+        "20261028-163819"
+      ],
+      "successes": 0,
+      "status": "shadow",
+      "conflicts": []
+    },
+    {
+      "id": "parallel-ubt-exit6-171355",
+      "symptom": "exit 6 Unhandled 1 aggregate exceptions",
+      "symptom_detail": "多扇 solve 并行各写一套同名类并互抢 Build.bat，UBT 崩溃",
+      "note": "20261028 修：一个任务书最多一扇 solve（全部未覆盖交付合并）；core/judge.py 加跨进程编译锁 data/build.lock",
+      "fix_tools": [
+        "agent/brief.py materialize_scopes",
+        "core/judge._build_lock"
+      ],
+      "source_runs": [
+        "20261028-165939",
+        "20261028-171355"
+      ],
+      "successes": 0,
+      "status": "shadow",
+      "conflicts": []
+    },
+    {
+      "id": "solver-fail-302466f1",
+      "symptom": "allow_python 未写，拒绝 run_python",
+      "symptom_detail": "",
+      "note": "求解 exec_failed：上一扇交接：\n{\"window\": \"W1\", \"unmet\": [], \"unmet_total\": 0, \"unmet_omitted\": 0, \"evidence\": [{\"kind\": \"editor_assert\", \"ok\": ",
+      "fix_tools": [],
+      "source_runs": [
+        "W2"
+      ],
+      "successes": 0,
+      "status": "shadow",
+      "conflicts": []
+    },
+    {
+      "id": "solver-fail-b4cb4442",
+      "symptom": "solver-no_criteria",
+      "symptom_detail": "",
+      "note": "求解 no_criteria：确认",
+      "fix_tools": [],
+      "source_runs": [
+        "SBW-A-SOLVE"
+      ],
+      "successes": 0,
+      "status": "shadow",
+      "conflicts": []
+    },
+    {
+      "id": "solver-fail-4f91c995",
+      "symptom": "solver-no_criteria",
+      "symptom_detail": "",
+      "note": "求解 no_criteria：确认",
+      "fix_tools": [],
+      "source_runs": [
+        "SBW-A-SOLVE"
+      ],
+      "successes": 0,
+      "status": "shadow",
+      "conflicts": []
+    },
+    {
+      "id": "solver-fail-ffa80750",
+      "symptom": "solver-no_criteria",
+      "symptom_detail": "",
+      "note": "求解 no_criteria：确认",
+      "fix_tools": [],
+      "source_runs": [
+        "SBW-A-SOLVE"
+      ],
+      "successes": 0,
+      "status": "shadow",
+      "conflicts": []
+    },
+    {
+      "id": "solver-fail-69baa69e",
+      "symptom": "solver-read_only_plan",
+      "symptom_detail": "",
+      "note": "求解 read_only_plan：上一扇交接：\n{\"window\": \"W1\", \"unmet\": [], \"unmet_total\": 0, \"unmet_omitted\": 0, \"evidence\": [{\"kind\": \"editor_assert\", \"ok\": ",
+      "fix_tools": [],
+      "source_runs": [
+        "W2"
+      ],
+      "successes": 0,
+      "status": "shadow",
+      "conflicts": []
+    },
+    {
+      "id": "solver-fail-484adff6",
+      "symptom": "solver-read_only_plan",
+      "symptom_detail": "",
+      "note": "求解 read_only_plan：在关卡L_NewTest3中调整子弹射速到原先100倍",
+      "fix_tools": [],
+      "source_runs": [
+        "SBW-A-SOLVE"
+      ],
+      "successes": 0,
+      "status": "shadow",
+      "conflicts": []
+    },
+    {
+      "id": "solver-fail-9982f478",
+      "symptom": "solver-exec_failed",
+      "symptom_detail": "",
+      "note": "求解 exec_failed：确认",
+      "fix_tools": [],
+      "source_runs": [
+        "SBW-A-SOLVE"
+      ],
+      "successes": 0,
+      "status": "shadow",
+      "conflicts": []
+    },
+    {
+      "id": "solver-fail-92279e1a",
+      "symptom": "solver-no_criteria",
+      "symptom_detail": "",
+      "note": "求解 no_criteria：确认缺口",
+      "fix_tools": [],
+      "source_runs": [
+        "SBW-A-SOLVE"
+      ],
+      "successes": 0,
+      "status": "shadow",
+      "conflicts": []
+    },
+    {
+      "id": "solver-fail-97d170e1",
+      "symptom": "方案里没有可执行的步骤",
+      "symptom_detail": "",
+      "note": "求解 plan_failed：往关卡里放一个 Actor",
+      "fix_tools": [],
+      "source_runs": [
+        "W1"
+      ],
+      "successes": 0,
+      "status": "shadow",
       "conflicts": []
     }
   ]

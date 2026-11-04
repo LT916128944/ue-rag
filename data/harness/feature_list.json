@@ -1,5 +1,5 @@
 {
-  "updated": "2026-10-21",
+  "updated": "2026-10-29",
   "note": "passed 只由裁判或离线检查改写，不由模型宣布。done->passed:true；pending/wont->passed:false。",
   "items": [
     {
@@ -91,7 +91,7 @@
       "status": "pending",
       "passed": false,
       "evidence": "Plan/20261017-1507-巡逻敌人蓝图人工步骤.md",
-      "notes": "行为树、动画、受击三个 BlueprintImplementableEvent 仍由人绑"
+      "notes": "2026-10-27 复核（U2）：AIAgent.Enemy.Patrol automation 实测 1 passed / 0 failed（monolith editor.run_automation_tests，真裁判证据，C++ 半边绿）。ATestEnemy 的行为是 C++ 状态机（TickPatrol/TickChase/TickAttack），行为树被取代，不建装饰性 BT。monolith 蓝图词表没有「覆写组件 BlueprintImplementableEvent」的节点类型（resolve_node 干跑实测），OnPatrol/OnChase/OnMeleeAttack 的表现接线仍由人绑；动画对无骨架的 Actor 不适用，受击表现待伤害链路。剩余工作已是纯人工接线，automation 无法再收窄这条 pending"
     },
     {
       "id": "editor-transaction",
@@ -235,10 +235,10 @@
     },
     {
       "id": "level-assembly-persist",
-      "status": "pending",
-      "passed": false,
-      "evidence": "data/runs/20261021/20261021-221446.md",
-      "notes": "level-assembly 记 passed 的证据是 20261020-164911「幂等跳过 6」，但 20261021-221446 跑的时候 L_NewTest 里一个 Coin_/Platform_/Door_/Progress_ 都没有——说明那次「已保存」没真正落盘，passed 是误判。本轮已重新放置并重载复验（15 实例坐标一致、bStartActive 读回正确），但还没有一次从自然语言整句跑到底的 run 作证据，故留 pending：下一次整句重跑后用它自己的 editor_assert 条款收口"
+      "status": "done",
+      "passed": true,
+      "evidence": "data/runs/20261027/20261027-191740.md",
+      "notes": "20261027-191740：整句「打开编辑器，打开关卡 L_NewTest，按五张设计图批量放置…然后保存关卡」在 monolith 后端下从理解器拆句跑到集成矩阵全过（W1 launch / W2 open / W3 金币幂等跳过 6 / W4 平台放置 5+生成时写属性 5 / W5-W7 幂等跳过），退出码 0，五条 editor_assert 条款各绑自己的放置扇并由该扇裁判翻绿（条款绑定修复见 eval/check_criteria_binding.py）。保存由 list_dirty_packages+save_packages 真落盘（L_NewTest.umap mtime 2026-10-27 19:20；形状钉子 eval/check_write_rollback.py 的 dirty_packages 断言）。前置修复：U3a 原语桥 core/monolith_bridge.py + 覆盖矩阵 eval/check_backend_coverage.py；图内裸名工具不再猜 mesh 命名空间。已知限制：带 props 的设计图在 monolith 下对已存在实例无法复读/重写属性（幂等重跑需先 remove_batch 清实例）"
     },
     {
       "id": "dsh-config",
@@ -295,6 +295,34 @@
       "passed": true,
       "evidence": "eval/check_dsh_costs.py",
       "notes": "P5：scripts/import_dsh_costs.py 只读 data/dsh/exports/*.jsonl（不直接读 zstd 会话），把 usage 抄成 caller=dsh 的 costs 行，字段名与 core/llm_call.py 一致；无 usage 的行跳过并计数，不估算、不填 0；不抄 prompt/正文/路径/密钥；elapsed 导出里没有就不写；文件名以 fixture- 开头的默认跳过（--include-fixture 才导）。DSH 投影口径：prompt_tokens=uncachedInputTokens+cacheReadTokens，cacheReadTokens→prompt_cache_hit_tokens 与 cached_tokens，uncachedInputTokens→prompt_cache_miss_tokens；cacheWriteTokens 在 DeepSeek 账里没有对应字段，不硬套成 miss。eval/report.py 只在 data/costs.jsonl 存在 caller=dsh 行时加「DSH 用量」节（按天 calls/prompt/completion/cache_hit），无 dsh 行整节省略不填 0；render_html / summarize_traces / compute_scoreboard / write_scoreboard 的签名与行为未改（改前改后对同一 trace 与 intent 事件流输出逐字相同）。2026-10-23 dsh-costs ok（8 组断言，临时目录，真实 data/costs.jsonl 哈希前后一致）。fixture 是检查输入，`.gitignore` 为它单开例外（`!data/dsh/exports/fixture-*.jsonl`），人导出的会话日志仍在 `data/dsh/exports/*` 被忽略；check_dsh_costs.py 已进 `.github/workflows/offline.yml`。"
+    },
+    {
+      "id": "solver-loop",
+      "status": "done",
+      "passed": true,
+      "evidence": "eval/check_solver_budget.py; eval/check_build_error_loop.py; eval/check_solve_gap_fallback.py; eval/check_solver_distill.py; eval/check_catalog_parity.py",
+      "notes": "20261028-1438 求解循环 P0+P2（离线检查通过后写）：agent/solver.py 受控求解扇 solve（UE_SOLVER_ENABLED 缺省 false；预算闸门 编辑器≤8/编译≤3/模型≤6，namespace 白名单 editor,mesh,niagara,asset；预算烧尽降级 capability_gap 诚实口径）；agent/build_error.py 编译回灌——apply_spec 写完强制编译，get_build_error 错误原文进 fix 上下文，编译轮次 ≤3，judge 每次真编译落 data/last_cpp_build.json；brief.materialize_scopes 零窗口补窗失败后补一扇 solve（人审已确认缺口不给）；solve 动作进 DIRECT/EDITOR_LOCK（catalog 由 agent/actions.py 单一声明推导）；轨迹落 data/distill/solver_trajectories.jsonl，成功→learned_skills 影子+lexicon 提名行（人审落表），失败→failure_patterns 影子。求解成功≠通过：收口仍要 automation {ok,kind}。五条离线检查 2026-10-28 全绿；真机整句回归（手榴弹行摘掉重跑）待编辑器在线单独验"
+    },
+    {
+      "id": "capability-surface",
+      "status": "done",
+      "passed": true,
+      "evidence": "eval/check_capability_surface.py --selftest; pipelines/export_capability_surface.py",
+      "notes": "20261028-1438 P1：pipelines/export_capability_surface.py 跑 monolith 全 namespace discover 落 data/capability_surface.json（需编辑器在线）；eval/check_capability_surface.py 两向对账——actions.SURFACE 声明的原语执行器没有→报错（防谎报），已声明 namespace 里未被覆盖的原语→自动提名进 action_candidates（source=capability_surface，接 D8 候选闭环到真数据源）；--selftest 用 fixture 离线断言两向，已进 .github/workflows/offline.yml。真数据源对账待编辑器在线跑一次 export"
+    },
+    {
+      "id": "fps-hud-umg",
+      "status": "done",
+      "passed": true,
+      "evidence": "run 20261029-123907（hud-rules，5 扇全绿、0 token）；PIE 实测 HudInstance=WBP_FpsHUD_C_0 且文本 100/12/0、载具三行随上下车切换；eval/check_fps_hud.py；eval/check_backend_coverage.py",
+      "notes": "20261029：整句「FPS 关卡加 UMG HUD（血条占位 100 / 子弹 / 手雷 / 载具名字·E 提示·时速）」零模型落地。四处系统级修复：①plan_windows 句内没点名 WBP_ 时按域给确定默认名（/Game/UI/WBP_FpsHud、泛 HUD→WBP_HUD、其余→WBP_UI），不再死在「没有唯一蓝图路径」；②monolith 桥补齐控件图 11 个原语（GetWidgets/AddWidget/RemoveWidget/RenameWidget/ToggleWidgetAsVariable/MoveWidget/CompileWidgetBlueprint 等→ui.*，set_parent/get_parent 改传包路径），create 对 UserWidget 父类改走 ui.create_widget_blueprint（原来 blueprint.create_blueprint 只能产出普通 BP）；③agent/fps_hud.py 确定性落地六控件（add_widget+锚点+占位文案+编译+复查），repair_blueprint 对 create/edit_widget_blueprint 不再 discover 猜 action；④plan_windows 新增 hud-rules 零模型拆句，run_windows 对确定性链跳过任务书人审门；另修外部依赖核实（UE_EDITOR_BACKEND 已连通时不再拦窗口）与 check_fps_hud 空槽位暂停。C++ 侧新增 UFpsHUDWidget（六 BindWidgetOptional + 0.05s Refresh）、AFpsPawn::EnsureHud（CreateWidget+AddToViewport）、ASimpleVehiclePawn 增加 VehicleDisplayName/GetSpeedUuPerSec/GetDriver 并记 LastSpeed。2026-10-29 升级计划残差批次已把两条「无 monolith 路径」改成真路径：BindToEventProperty 走 blueprint.add_node(ComponentBoundEvent)（护栏 eval/check_widget_event_binding.py），AddWidget 的 childIndex 折成 ui.set_slot_property 的 z_order；SetNamedSlotContent/GetWidgetClassInfo 明确归人工清单（MANUAL_GAPS + eval/check_widget_slot_gaps.py）。血量不再是纯占位：AFpsPawn 复用 UFpsHealthComponent（0..1），HUD 乘 MaxHealthPlaceholder 显示 0..100，拿不到玩家时回落 100，编译 exit 0。"
+    },
+    {
+      "id": "hud-residual-upgrade",
+      "status": "done",
+      "passed": true,
+      "evidence": "eval/check_widget_event_binding.py; eval/check_widget_slot_gaps.py; eval/check_solver_plan_retry.py; eval/check_llm_backoff.py; eval/check_architecture.py; eval/check_backend_coverage.py; eval/check_fps_hud.py; 编译 exit 0（AIAgentProjectEditor Win64 Development，无 error C）；全离线 43 条检查绿",
+      "notes": "20261029 升级计划（Plan/20261029-1240-FPSHUD与UMG桥后续升级.md 第二节残差 1-7）：①BindToEventProperty 从 UNSUPPORTED 移入 MAPPED→(\"blueprint\",\"add_node\")，build_params 翻 propertyName→component_name / eventName→delegate_property_name / widgetBlueprint→包路径，propertyClass 丢弃（插件从控件类自己找委托），shape_result 失败逐字透传不翻成功，缺必填本地就拒；②SetNamedSlotContent/GetWidgetClassInfo 留 UNSUPPORTED 并把「归入人工清单」写进原因 + MANUAL_GAPS 集合，检查同时钉住「不许把 ui 真 action 名换皮成 official 原语」；③childIndex 选「落 z_order」而非静默丢：build_params 不再消费，slot_order_params 产出一次 ui.set_slot_property；非 CanvasPanelSlot 不白跑失败调用但带 warning，调用失败不翻转整体 ok（控件确实在）也带 warning；④plan_steps 一次结构化重问（_MAX_PLAN_ATTEMPTS=2，预算闸门，预算不够时如实说「重问没发出」）+ 两条截断判据（finish_reason=length、括号/引号配不平，引号内不计数）+ 五类 solver-plan-* 失败影子（add_shadow，不 promote）；⑤llm_call 五种错误分类 auth/rate/server/network/other，只对 rate/server 有限退避（MAX_RETRIES=2、指数+±25% 抖动、封顶 8s、sleep 走模块级 _sleep 便于离线短路），401/403 一次就停且文案提示换 key，record 带 error_kind/attempts、trace 带 llm_error_kind/llm_attempts；⑥玩家血量真源落地（复用 UFpsHealthComponent，0..1 数据口径只在 HUD 一处乘成 0..100）；⑦check_architecture 红修掉（pipelines.export_capability_surface 的 surface_path/_backend_name 搬进 core/capability_surface.py，agent 不再 import pipelines）。另附带修 eval/check_solver_plan_parse.py 的既有联网泄漏（apply_spec_loop 的 fix=None 会真跑 run_fix 调模型，加离线替身后 32s→0.1s）。遗留：check_review_coverage 是 2026-10-28 遗留红（agent/brief.py 人审表格），与本批无关且已用 stash 复核；真实 WBP 上的 ComponentBoundEvent 绑定与 capability_surface 真数据源对账都需要编辑器在线后再跑一次。"
     }
   ]
 }
