@@ -30,3 +30,14 @@ data/dsh/exports/*
 !data/dsh/exports/fixture-*.jsonl
 data/locks/
 data/spill/
+# 单次输入与运行态残留：req.txt 被 start.bat 改名成 .consumed 就是已被某次 run 消费掉；
+# data/tmp 是 eval 检查的 stdout/stderr 暂存；build.lock 与 last_cpp_build.json 是编译裁判的运行态。
+data/req_*.txt.consumed
+data/req_*.txt
+data/run_input_*.txt
+data/tasks/
+data/tmp/
+data/build.lock
+data/last_cpp_build.json
+# lexicon.json 是人写的表；solver 只往这份候选队列提名，等同 action_candidates。
+data/skills/lexicon_candidates.json
