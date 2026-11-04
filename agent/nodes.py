@@ -5,10 +5,13 @@ import json
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from config import SKILL_CARDS_PATH
+from config import SKILL_CARDS_PATH, ENV_PATH
 from agent.skill_prompt import load_agent_skill_prompt, project_rules_suffix, skill_card_line
 from dotenv import load_dotenv
-load_dotenv()
+# 20261028：不裸调 load_dotenv()——它按 CWD 自己找 .env，会把 eval 封闭环境
+# （eval/_pin_offline.close_now 指向的空临时 .env）打穿，.env 开关重新渗回断言。
+# 统一从 config.ENV_PATH 读：入口封闭时这里自然也封闭。
+load_dotenv(str(ENV_PATH), override=True)
 
 from core.tool_router import build_agent_prompt, retrieve_tools, get_local_tools, tool_schema
 
@@ -115,8 +118,10 @@ def execute_ue_tool(tool_name: str, arguments: str, task: dict | None = None) ->
             namespace, action = tool_name.split("__", 1)
         elif toolset_name and "." not in toolset_name:
             namespace, action = toolset_name, short_name
-        elif "." not in tool_name:
-            namespace = str(args.pop("namespace", "") or "mesh")
+        elif "." not in tool_name and str(args.get("namespace") or "").strip():
+            # 模型显式给了 namespace 参数才按 monolith 直呼；没有就不再猜——
+            # 猜出来的 mesh.set_actor_transform 是 Unknown action（20261027-192135 的教训）。
+            namespace = str(args.pop("namespace"))
             action = tool_name
         if namespace and action:
             from backends.monolith import exec as monolith_exec
@@ -125,6 +130,8 @@ def execute_ue_tool(tool_name: str, arguments: str, task: dict | None = None) ->
             preview = json.dumps(result, ensure_ascii=False)[:300]
             print(f"\n  >> [Monolith] {namespace}.{action} → {preview}")
             return json.dumps(result, ensure_ascii=False)
+        # 裸名回落 official 原语名：exec_tool 在 monolith 后端会走原语桥翻译（U3a），
+        # 桥不认识的原语按「后端不支持」结构化拒绝，模型看得到原因。
 
     from core.editor_exec import exec_tool
     result = exec_tool(toolset_name, short_name, args, task=task)
@@ -218,6 +225,73 @@ def _pin_tools(tools: list[dict], names: list[str]) -> list[dict]:
     return tools
 
 
+# monolith 角色下这些原语是「namespace.action / 裸名」二选一的写法，参数名固定，
+# 不许只给 actor_name/location/asset_path 三件——那会让 AddWidget 这类调用丢参数
+# （20261029：控件树改图的参数一个都传不进去，模型只能猜）。
+_MONOLITH_PARAMS: dict[str, dict] = {
+    "ui__get_widget_tree": {"asset_path": {"type": "string"}},
+    "ui__add_widget": {
+        "asset_path": {"type": "string"},
+        "widget_class": {"type": "string"},
+        "widget_name": {"type": "string"},
+        "parent_name": {"type": "string"},
+        "position": {"type": "object"},
+        "size": {"type": "object"},
+    },
+    "ui__remove_widget": {"asset_path": {"type": "string"}, "widget_name": {"type": "string"}},
+    "ui__rename_widget": {"wbp_path": {"type": "string"}, "old_name": {"type": "string"}, "new_name": {"type": "string"}},
+    "ui__set_widget_property": {
+        "asset_path": {"type": "string"},
+        "widget_name": {"type": "string"},
+        "property_name": {"type": "string"},
+        "value": {},
+    },
+    "ui__set_text": {
+        "asset_path": {"type": "string"},
+        "widget_name": {"type": "string"},
+        "text": {"type": "string"},
+    },
+    "ui__set_slot_property": {
+        "asset_path": {"type": "string"},
+        "widget_name": {"type": "string"},
+        "anchors": {"type": "object"},
+        "offsets": {"type": "object"},
+        "position": {"type": "object"},
+        "size": {"type": "object"},
+        # 20261029 §2 残差 3：ui.add_widget 是 append-only，要精确顺序只能事后写 slot。
+        # z_order 是 set_slot_property 的合法参数（MonolithUISlotActions.cpp 约 22 行）。
+        "z_order": {"type": "integer"},
+    },
+    "ui__set_anchor_preset": {"asset_path": {"type": "string"}, "widget_name": {"type": "string"}, "preset": {"type": "string"}},
+    "ui__compile_widget": {"asset_path": {"type": "string"}},
+    "ui__create_widget_blueprint": {
+        "save_path": {"type": "string"},
+        "parent_class": {"type": "string"},
+        "root_widget": {"type": "string"},
+    },
+    # 20261029 §2 残差 1：控件事件绑定走 blueprint.add_node 的 ComponentBoundEvent。
+    # 这条 monolith 原生写法的必填就是 component_name + delegate_property_name
+    # （缺任一支编辑器报 "ComponentBoundEvent requires 'component_name' and
+    # 'delegate_property_name'"），重复绑定由它自己报错。
+    "blueprint__add_node": {
+        "asset_path": {"type": "string"},
+        "node_type": {"type": "string"},
+        "graph_name": {"type": "string"},
+        "position": {"type": "array", "items": {"type": "number"}},
+        "component_name": {"type": "string"},
+        "delegate_property_name": {"type": "string"},
+    },
+    # official 原语名下的同一能力：参数用 official 口径，桥负责翻成上面那组。
+    "BindToEventProperty": {
+        "asset_path": {"type": "string"},
+        "property_name": {"type": "string"},
+        "event_name": {"type": "string"},
+        "graph_name": {"type": "string"},
+        "position": {"type": "array", "items": {"type": "number"}},
+    },
+}
+
+
 def _monolith_pinned(names: list[str]) -> list[dict]:
     """backend=monolith 时只给任务允许的 namespace.action，不把官方工具塞进列表。"""
     tools = []
@@ -225,22 +299,43 @@ def _monolith_pinned(names: list[str]) -> list[dict]:
         text = str(name or "").strip()
         if not text or "." in text:
             continue
-        tools.append({
+        row = {
             "type": "function",
             "function": {
                 "name": text,
                 "description": "Monolith action. 不要调用官方 MCP。",
                 "parameters": {
                     "type": "object",
-                    "properties": {
-                        "actor_name": {"type": "string"},
-                        "location": {"type": "array", "items": {"type": "number"}},
-                        "asset_path": {"type": "string"},
-                    },
+                    "properties": dict(
+                        _MONOLITH_PARAMS.get(text)
+                        or _monolith_params_for(text)
+                        or {
+                            "actor_name": {"type": "string"},
+                            "location": {"type": "array", "items": {"type": "number"}},
+                            "asset_path": {"type": "string"},
+                        }
+                    ),
                 },
             },
-        })
+        }
+        tools.append(row)
     return tools
+
+
+def _monolith_params_for(tool: str) -> dict:
+    """按官方原语名反查 monolith 形状（任务里常写官方名，后端却直呼 monolith）。
+
+    只在表里有一对一时才给完整参数：多义名字（如 create）保持空，让调用方走桥，
+    不在这里猜一个可能错的形状。"""
+    pairs = {
+        "GetWidgets": "ui__get_widget_tree",
+        "AddWidget": "ui__add_widget",
+        "RemoveWidget": "ui__remove_widget",
+        "RenameWidget": "ui__rename_widget",
+        "CompileWidgetBlueprint": "ui__compile_widget",
+    }
+    target = pairs.get(tool)
+    return dict(_MONOLITH_PARAMS.get(target) or {}) if target else {}
 
 
 def retrieve_node(state: AgentState):

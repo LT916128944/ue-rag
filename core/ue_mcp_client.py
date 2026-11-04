@@ -16,6 +16,15 @@ def _log(msg: str) -> None:
     print(f"[UEMCP] {msg}", file=sys.stderr)
 
 
+def is_connection_error(e: BaseException) -> bool:
+    """连接类错误：传输层故障或 5xx 网关错误。允许连接层一次重试，不扩业务重试。"""
+    if isinstance(e, httpx.TransportError):
+        return True
+    if isinstance(e, httpx.HTTPStatusError):
+        return e.response.status_code >= 500
+    return False
+
+
 class UEOfficialMCPClient:
     def __init__(self):
         # 默认使用官方文档中的地址和端口。
@@ -163,7 +172,10 @@ class UEOfficialMCPClient:
                 return {"ok": False, "error": data}
             return {"ok": True, "data": data}
         except Exception as e:
-            return {"ok": False, "error": f"UE MCP 调用失败: {type(e).__name__}: {e}"}
+            failed = {"ok": False, "error": f"UE MCP 调用失败: {type(e).__name__}: {e}"}
+            if is_connection_error(e):
+                failed["connection_error"] = True
+            return failed
 
     def call_ue_tool(self, toolset_name: str, tool_name: str, arguments: dict, timeout: float | None = None) -> dict:
         """通过 `call_tool` 元工具转发真实 UE 工具调用。

@@ -7,6 +7,62 @@ from backends.policy import unfiltered_graph, write_block
 from backends.select import monolith_refusal
 
 _PCG = "Monolith 无此命名空间"
+_GUIDANCE = "；检查 UnrealEditor 是否在跑、Monolith 插件日志是否出现 listening on port 9316"
+
+
+def connection_guidance() -> str:
+    """连接类失败最终附带的固定指引。"""
+    return _GUIDANCE
+
+
+def _connection_failed(raw: dict) -> bool:
+    return isinstance(raw, dict) and raw.get("ok") is False and bool(raw.get("connection_error"))
+
+
+def _send_with_retry(tool_name: str, arguments: dict, send) -> dict:
+    """连接层一次重试。_call 每次新建客户端，重试等价于全新连接。
+
+    业务语义不变：铁律「遇错即停，最多重试一次」的额度只花在这里，不进 fix/plan。
+    20261028-163746 起加自愈：连接被拒（编辑器没跑/编译后被关）先 ensure_editor
+    一次再重试——编辑器没开是环境前置，不是能力缺口，不该让整扇窗口陪葬。
+    自愈只认连接类失败，业务错误照常直接返回。"""
+    raw = send(tool_name, arguments)
+    if not _connection_failed(raw):
+        return raw
+    healed = _ensure_editor_quiet()
+    retry = send(tool_name, arguments)
+    if _connection_failed(retry) and healed:
+        retry["error"] = f"{retry.get('error') or 'monolith 调用失败'}（自愈启动过编辑器仍未连通）{_GUIDANCE}"
+    elif _connection_failed(retry):
+        retry["error"] = f"{retry.get('error') or 'monolith 调用失败'}{_GUIDANCE}"
+    return retry
+
+
+def _ensure_editor_quiet() -> bool:
+    """拉起编辑器并等端口。只认真拉过（started 或已连通）才返回 True；失败不抛。"""
+    try:
+        from core.editor_launch import ensure_editor
+
+        out = ensure_editor()
+        return bool(out.get("ok"))
+    except Exception:
+        return False
+
+
+def health(timeout: float = 3.0, transport=None) -> dict:
+    """轻量探活：任何 HTTP 响应（含 404/405）都算编辑器侧在听。
+
+    不做 MCP 握手、不消耗一次编辑器调用的 8 次预算。"""
+    import httpx
+
+    from config import monolith_url
+
+    probe = transport or (lambda url: httpx.get(url, timeout=timeout))
+    try:
+        resp = probe(monolith_url())
+    except Exception as e:  # ConnectError / timeout 等都算探活失败
+        return {"ok": False, "error": f"{type(e).__name__}: {e}{_GUIDANCE}"}
+    return {"ok": True, "status": getattr(resp, "status_code", 0)}
 
 
 def discover_arguments(namespace: str = "") -> dict:
@@ -89,7 +145,7 @@ def discover(namespace: str = "", transport=None) -> dict:
     if missing:
         return {"ok": False, "error": missing}
     send = transport or _call
-    raw = send("monolith_discover", discover_arguments(namespace))
+    raw = _send_with_retry("monolith_discover", discover_arguments(namespace), send)
     if not raw.get("ok"):
         return {"ok": False, "error": raw.get("error") or "monolith_discover 失败"}
     return _discover_decision(raw.get("data"), namespace)
@@ -103,10 +159,10 @@ def describe(namespace: str, action: str, transport=None) -> dict:
     if missing:
         return {"ok": False, "error": missing}
     send = transport or _call
-    raw = send("describe_query", {
+    raw = _send_with_retry("describe_query", {
         "action": "action_schema",
         "params": {"target_namespace": namespace, "target_action": action},
-    })
+    }, send)
     if not raw.get("ok"):
         return {"ok": False, "error": raw.get("error") or "describe_query 失败"}
     data = _as_object(raw.get("data"))
@@ -153,7 +209,7 @@ def exec(namespace: str, action: str, params: dict | None = None, task: dict | N
         return {"ok": False, "error": blocked}
     tool_name, arguments = _dispatch(namespace, action, body)
     send = transport or _call
-    raw = send(tool_name, arguments)
+    raw = _send_with_retry(tool_name, arguments, send)
     if not raw.get("ok"):
         return {"ok": False, "error": raw.get("error") or f"{tool_name} 失败"}
     return {"ok": True, "data": raw.get("data")}

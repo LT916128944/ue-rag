@@ -110,27 +110,31 @@ def missing_layout(query: str) -> list[str]:
     return [name for name in _ORDER if name in _names_of(text) and name not in present]
 
 
-def _covered(windows: list) -> tuple[set[str], set[str]]:
-    """已接住的：place_batch 按设计图文件 stem 算（同一蓝图可以有多张设计图），
-    place_actor 按蓝图名算（它没有设计图）。"""
-    files: set[str] = set()
-    blueprints: set[str] = set()
+def _covered_map(windows: list) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
+    """已接住的窗口归属：place_batch 按设计图文件 stem 算（同一蓝图可以有多张设计图），
+    place_actor 按蓝图名算（它没有设计图）。返回 (设计图stem→[窗口id], 蓝图名→[窗口id])。"""
+    files: dict[str, list[str]] = {}
+    blueprints: dict[str, list[str]] = {}
     for window in windows or []:
         if not isinstance(window, dict):
             continue
         action = str(window.get("action") or "")
         if action not in _PLACE_ACTIONS:
             continue
+        wid = str(window.get("id") or "").strip()
+        if not wid:
+            continue
         slots = window.get("slots") if isinstance(window.get("slots"), dict) else {}
         layout = str(slots.get("layout") or "").strip()
         if layout:
             name = Path(layout).name
-            files.add(name[:-5] if name.lower().endswith(".json") else name)
+            stem = name[:-5] if name.lower().endswith(".json") else name
+            files.setdefault(stem, []).append(wid)
         if action == "place_actor":
             for key in ("blueprint", "class"):
                 stem = _stem(slots.get(key) or "")
                 if stem:
-                    blueprints.add(stem)
+                    blueprints.setdefault(stem, []).append(wid)
     return files, blueprints
 
 
@@ -180,6 +184,60 @@ def _criterion(item: dict, wids: list[str]) -> dict:
     return row
 
 
+# 条款文本里带这些词，才算「讲的是把东西摆进关卡」——只提实体不提摆放的说法
+# （比如「金币可拾取」）不抢绑定，避免放置扇的判词替拾取条款作证。
+_PLACE_WORDS = ("放置", "摆放", "摆", "放进", "放入", "布置", "批量")
+
+
+def _rebind_covered(rows: list[dict], wanted: list[dict],
+                    file_map: dict, blueprint_map: dict) -> set[str]:
+    """设计图已被既有 place_batch 扇接住时，把讲它的条款重新绑到那些具体扇。
+    不绑就会留在 kind 宽绑定里，launch/open 的 editor_assert 判词把内容条款
+    顺手翻绿（20261027-180955：四扇 place_batch 全败，五条条款全 true）。
+
+    每条条款先找设计图 stem 的精确匹配（理解器条款文本通常点名设计图）；
+    没有 stem 时认蓝图名/关键词 + 摆放词，绑到该蓝图全部布局的窗口并集——
+    只提实体不提摆放的说法（比如「金币可拾取」）不抢绑定，避免放置扇的判词
+    替拾取条款作证。已有显式归属的条款（闸门自己补的那条）不动。
+    返回已被条款接住的设计图 stem 集合。"""
+    matched: set[str] = set()
+    for row in rows:
+        if isinstance(row.get("windows"), list) and row["windows"]:
+            continue
+        if str(row.get("evidence_kind") or "") != "editor_assert":
+            continue
+        text = str(row.get("text") or "")
+        if not text:
+            continue
+        lowered = text.lower()
+        wids: list[str] = []
+        stems = [item["stem"] for item in wanted if item.get("stem") and item["stem"] in text]
+        if stems:
+            for stem in stems:
+                wids.extend(file_map.get(stem) or [])
+        else:
+            named = [
+                item for item in wanted
+                if (item.get("blueprint") and item["blueprint"].lower() in lowered)
+                or any(word.lower() in lowered for word in _KEYWORDS.get(item["blueprint"], ()))
+            ]
+            if not named or not any(word in text for word in _PLACE_WORDS):
+                continue
+            for stem in dict.fromkeys(item["stem"] for item in named):
+                wids.extend(file_map.get(stem) or [])
+            for item in named:
+                wids.extend(blueprint_map.get(item["blueprint"]) or [])
+            stems = [item["stem"] for item in named]
+        ordered: list[str] = []
+        for wid in wids:
+            if wid and wid not in ordered:
+                ordered.append(wid)
+        if ordered:
+            row["windows"] = ordered
+            matched.update(stems)
+    return matched
+
+
 def ensure_scene_windows(query: str, windows: list | None, criteria: list | None = None,
                          unresolved: list | None = None) -> dict:
     """缺哪张设计图就补一扇 place_batch + 一条 editor_assert 条款。
@@ -197,12 +255,29 @@ def ensure_scene_windows(query: str, windows: list | None, criteria: list | None
         return {"windows": current, "criteria": rows, "added": [], "unmet": unmet,
                 "unresolved": kept}
 
-    files, blueprints = _covered(current)
+    files, blueprints = _covered_map(current)
     todo = [
         item for item in wanted
         if item["stem"] not in files and item["blueprint"] not in blueprints
     ]
+    todo_stems = {item["stem"] for item in todo}
+    # 设计图已被既有放置扇接住的：把讲它的条款绑到那些具体扇（U3b ①），
+    # 别留在宽绑定里被 launch/open 的判词翻绿。
+    matched = _rebind_covered(rows, wanted, files, blueprints)
     kept, _dropped = prune_unresolved(unresolved, wanted)
+    # 已接住、但没有任何条款讲它的：也补一条绑到那些具体扇的条款——
+    # 不然覆盖路径下合同里没有内容条款，成功失败都没有验收依据。
+    seen = {str(item.get("id") or "") for item in rows}
+    for item in wanted:
+        stem = str(item.get("stem") or "")
+        if stem in todo_stems or stem in matched or f"c-scene-{stem}" in seen:
+            continue
+        wids = list(files.get(stem) or []) or list(blueprints.get(item["blueprint"]) or [])
+        if not wids:
+            continue
+        row = _criterion(item, wids)
+        seen.add(row["id"])
+        rows.append(row)
     if not todo:
         return {"windows": current, "criteria": rows, "added": [], "unmet": unmet,
                 "unresolved": kept}

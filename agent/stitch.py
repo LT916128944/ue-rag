@@ -120,6 +120,12 @@ def _ask_model(state, query: str, notes: list[str], complete) -> bool:
         state.data["stitch_unresolved"] = why
         notes.append("模型补不上：" + why)
         return True
+    overlaps, why = _supplement_overlaps(action, state, failed)
+    if not overlaps:
+        state.data["stitch_unresolved"] = why
+        notes.append(why)
+        _stamp_supplement_reject(failed, why)
+        return True
     existing = next((entry for entry in state.entries() if str(entry.get("action") or "") == action), None)
     if existing is not None and existing.get("state") == "failed" and not existing.get("stitch_model_requeue"):
         _requeue(existing)
@@ -134,6 +140,11 @@ def _ask_model(state, query: str, notes: list[str], complete) -> bool:
     inserted = _insert_window(state, action, slots, action)
     if not inserted:
         return True
+    host = state.window(inserted)
+    host["supplement"] = True
+    hosted = host.get("window")
+    if isinstance(hosted, dict):
+        hosted["supplement"] = True
     for entry in failed:
         if entry.get("stitch_model_requeue"):
             continue
@@ -249,6 +260,65 @@ def _slots_for(action: str, query: str, criteria: list[dict]) -> dict | None:
         else:
             return None
     return slots
+
+
+def _stamp_supplement_reject(failed: list[dict], why: str) -> None:
+    """原因写进失败扇的结果摘要最前面，集成点名时带得走。"""
+    for entry in failed:
+        entry["summary"] = why
+        result = entry.get("result")
+        if isinstance(result, dict):
+            prev = str(result.get("summary") or "")
+            result["summary"] = why if not prev else f"{why}；{prev}"
+        else:
+            entry["result"] = {"summary": why}
+
+
+def _supplement_overlaps(action: str, state, failed: list[dict]) -> tuple[bool, str]:
+    """补扇动作的声明能力必须和失败范围里还没接住的交付有字二元组重叠。
+
+    没有交付清单（老记录、窄任务）时不拦截。对不上就不补。
+    """
+    from agent.brief import _uncovered_deliverables
+
+    unmet: list[str] = []
+    windows_by_id = state.data.get("windows") or {}
+    failed_ids = {str(entry.get("id") or "") for entry in failed}
+    for scope in state.data.get("scopes") or []:
+        if not isinstance(scope, dict):
+            continue
+        ids = [str(item) for item in (scope.get("window_ids") or []) if str(item).strip()]
+        if ids and failed_ids and not (failed_ids & set(ids)):
+            continue
+        others = []
+        for wid in ids:
+            if wid in failed_ids:
+                continue
+            entry = windows_by_id.get(wid)
+            if not isinstance(entry, dict) or str(entry.get("state") or "") == "failed":
+                continue
+            hosted = entry.get("window") if isinstance(entry.get("window"), dict) else {}
+            others.append({
+                "title": str(entry.get("title") or hosted.get("title") or ""),
+                "action": str(entry.get("action") or hosted.get("action") or ""),
+                "goal": hosted.get("goal"),
+                "scope_text": hosted.get("scope_text"),
+                "slots": hosted.get("slots") if isinstance(hosted.get("slots"), dict) else {},
+            })
+        if others:
+            uncovered = _uncovered_deliverables(scope, others)
+        else:
+            uncovered = [str(item) for item in (scope.get("deliverables") or []) if str(item).strip()]
+        unmet.extend(uncovered)
+    if not unmet:
+        return True, ""
+    still = _uncovered_deliverables(
+        {"deliverables": unmet},
+        [{"action": action, "title": action}],
+    )
+    if len(still) >= len(unmet):
+        return False, f"补扇 {action} 与未覆盖交付对不上，不补"
+    return True, ""
 
 
 def _insert_window(state, action: str, slots: dict, title: str) -> str:

@@ -8,6 +8,11 @@ from core.editor_exec import exec_tool
 
 _CONTRACT = Path(__file__).resolve().parent.parent / "contract" / "tools.json"
 _LAST_BUILD = PROJECT_ROOT / "data" / "last_cpp_build.json"
+
+
+def last_build_path() -> Path:
+    """最近一次编译裁判的落盘位置。执行面与网关读同一份。"""
+    return _LAST_BUILD
 _TASK = {"allow_writes": [], "save": False, "pie": False}
 _ASSET = "editor_toolset.toolsets.asset.AssetTools"
 _BP = "editor_toolset.toolsets.blueprint.BlueprintTools"
@@ -164,14 +169,30 @@ def _from_judge(result: dict) -> dict:
 
 def _write_last(result: dict) -> None:
     _LAST_BUILD.parent.mkdir(parents=True, exist_ok=True)
-    _LAST_BUILD.write_text(json.dumps(result, ensure_ascii=False), encoding="utf-8")
+    _write_payload(_LAST_BUILD, result)
+
+
+def _write_payload(path: Path, result: dict) -> None:
+    path.write_text(json.dumps(result, ensure_ascii=False), encoding="utf-8")
+
+
+def record(result: dict) -> dict:
+    """把一次编译裁判结果落进 last_cpp_build.json。执行面（judge / apply_spec 回灌）
+    与网关（build_project）都走这里，get_build_error 才读得到执行面的编译。"""
+    row = {
+        "ok": bool(result.get("ok")),
+        "summary": str(result.get("summary") or ""),
+        "errors": [item for item in (result.get("errors") or []) if isinstance(item, dict)],
+    }
+    _write_last(row)
+    return row
 
 
 def build_project() -> dict:
     from core.judge import judge
 
     result = judge({"kind": "cpp_build"})
-    _write_last(result)
+    record(result)
     return _from_judge(result)
 
 

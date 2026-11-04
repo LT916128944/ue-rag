@@ -201,6 +201,29 @@ def remember_shadow(route: dict) -> str | None:
     return _upsert(skill, promote=False)
 
 
+def remember_solver_skill(skill: dict) -> str | None:
+    """求解轨迹收成技能影子（20261028 P2-7）。只进影子，永不由代码提升：
+    动作表的写入权在人——同族动词要等 lexicon 提名行被人审通过、绑上真动作后，
+    才由人把它变成可规划的路由。"""
+    if not isinstance(skill, dict):
+        return None
+    row = dict(skill)
+    row.setdefault("version", 1)
+    row.setdefault("when", "")
+    row.setdefault("roles", [])
+    row.setdefault("goals", [])
+    row.setdefault("preconditions", [])
+    row.setdefault("action_sequence", [])
+    row.setdefault("verification", [])
+    row.setdefault("failure_recovery", [])
+    row.setdefault("confidence", 0.4)
+    row.setdefault("source_runs", [])
+    row.setdefault("conflicts", [])
+    row.setdefault("lru", 1)
+    row["status"] = "shadow"  # 代码只写影子；promoted 只由人审路径写
+    return _upsert(row, promote=False)
+
+
 def _actions_of(run: dict) -> list[str]:
     windows = run.get("windows")
     if isinstance(windows, dict):

@@ -244,6 +244,8 @@ def _default_title(action: str, slots: dict) -> str:
         return f"打开关卡 {slots.get('level') or ''}".strip() or "打开关卡"
     if action == "implement_shooter":
         return f"实现射击玩法 {slots.get('level') or ''}".strip()
+    if action == "implement_grenade":
+        return f"实现手榴弹补给 {slots.get('level') or ''}".strip()
     if action == "set_scalar_param":
         return f"覆写 {slots.get('target') or '材质实例'} 的 {slots.get('param') or '参数'}"
     if action == "query_material":
@@ -448,6 +450,79 @@ def resolve_level(value) -> dict:
     }
 
 
+def _disk_levels() -> list[tuple[str, str]]:
+    """Content 下现有关卡 (名字, /Game 包路径)。只看磁盘，不连编辑器。"""
+    from config import UE_PROJECT_DIR
+
+    content = UE_PROJECT_DIR / "Content"
+    if not content.is_dir():
+        return []
+    out: list[tuple[str, str]] = []
+    for path in content.rglob("*.umap"):
+        if not path.is_file():
+            continue
+        rel = path.relative_to(content).with_suffix("").as_posix()
+        out.append((rel.rsplit("/", 1)[-1], "/Game/" + rel))
+    return out
+
+
+def _level_on_disk(package: str) -> bool:
+    from config import UE_PROJECT_DIR
+
+    rel = str(package or "").replace("\\", "/")
+    if not rel.startswith("/Game/"):
+        return False
+    return (UE_PROJECT_DIR / "Content" / (rel[len("/Game/"):] + ".umap")).is_file()
+
+
+def resolve_existing_level(value) -> dict:
+    """要求「关卡已存在」的动作（open_level / implement_shooter / implement_grenade）用的解析。
+
+    先走 resolve_level 的唯一性口径；解析出的包在磁盘上不存在、且原词是裸名昵称
+    （无 /Game 路径、不以 L_ 开头，比如「level3」）时，按尾号数字对现有关卡做唯一匹配
+    （level3 → L_NewTest3）。零个候选取原解析（执行层会在 load_level 处诚实失败），
+    多个候选暂停问全名，单个候选接受并带 alias_note。create_level 不走这里——
+    新建关卡本来就允许是不存在的名字。"""
+    text = str(value or "").strip()
+    found = resolve_level(text)
+    if not found.get("ok"):
+        return found
+    package = str(found.get("level_path") or "")
+    name = str(found.get("level_name") or "")
+    if _level_on_disk(package):
+        return found
+    if not text or "/Game" in text or text.startswith("L_") or not _LEVEL_TOKEN_RE.match(text):
+        return found
+    digits = re.search(r"(\d+)$", name)
+    if not digits:
+        return found
+    tail = digits.group(1)
+    candidates = [
+        (level_name, level_package)
+        for level_name, level_package in _disk_levels()
+        if re.search(re.escape(tail) + r"$", level_name) and level_package != package
+    ]
+    if not candidates:
+        return found
+    if len(candidates) > 1:
+        shown = "、".join(sorted(level_name for level_name, _ in candidates))
+        return {
+            "ok": False,
+            "error": f"{text} 按尾号 {tail} 能对上多个现有关卡（{shown}）。只给一次：r /Game/Maps/全名。",
+        }
+    alias_name, alias_package = candidates[0]
+    out = dict(found)
+    out.update(
+        level_name=alias_name,
+        level_path=alias_package,
+        package_path=alias_package,
+        asset_name=alias_name,
+        ref_path=f"{alias_package}.{alias_name}",
+    )
+    out["alias_note"] = f"「{text}」不是现有关卡，按尾号 {tail} 解析为 {alias_name}"
+    return out
+
+
 def _normalize_slots(action: str, slots: dict) -> dict:
     out = {str(key): value for key, value in slots.items()}
     if action in ("create_level", "open_level"):
@@ -529,7 +604,8 @@ def _merge(fields: dict, found: dict) -> None:
         fields.setdefault(key, value)
 
 
-def resolve_slots(action: str, slots: dict) -> dict:
+def resolve_slots(action: str, slots: dict, text: str = "") -> dict:
+    """槽位归地。`text` 是可选的句子原文：UMG 没点名资产名时用它给出确定默认名。"""
     if action == "launch_editor":
         # 只启动编辑器：没有槽位，也不解析资产/路径。
         return {"ok": True}
@@ -537,20 +613,41 @@ def resolve_slots(action: str, slots: dict) -> dict:
         return {"ok": True}
     if action == "check_platform_hud":
         return {"ok": True}
+    if action == "check_fps_hud":
+        # 只读复核扇：没有必填槽位。路径不在槽位里，由 sequence._fps_hud_ref 从
+        # 句子/窗口里取，取不到就按 /Game/UI/WBP_FpsHUD 合同路径核对。
+        # 20261029-014143 的 W6 就是走了通用解析，空关键词被判「槽位是空的」而暂停。
+        found = {"ok": True}
+        for key in ("widget", "ref_path", "asset_name"):
+            if str((slots or {}).get(key) or "").strip():
+                found[key] = str(slots[key]).strip()
+        return found
     if action == "integrate_verify":
         return {"ok": True}
     if action == "query_actor":
         return {"ok": True, "actor_name": str(slots.get("name") or "")}
-    if action in ("create_level", "open_level"):
+    if action == "create_level":
         # 关卡名 → 唯一一条 /Game 路径；裸名落 /Game/Maps，已给路径原样。不唯一就暂停。
+        # 新建关卡允许是不存在的名字，不走别名解析。
         return resolve_level(
             slots.get("level") or slots.get("level_path") or slots.get("level_name") or ""
         )
-    if action == "implement_shooter":
-        found = resolve_level(slots.get("level") or slots.get("level_path") or slots.get("level_name") or "")
+    if action in ("implement_shooter", "implement_grenade"):
+        # 关卡必须已存在（implement_* 只往现有关卡里放东西）：走别名解析，
+        # 「level3」这类裸名昵称按尾号对到现有关卡（20261028-151850 的 W3 就卡在这）。
+        found = resolve_existing_level(
+            slots.get("level") or slots.get("level_path") or slots.get("level_name") or ""
+        )
         if not found.get("ok"):
             return found
-        found["automation_filter"] = "AIAgent.Fps.Hit"
+        found["automation_filter"] = (
+            "AIAgent.Fps.Hit" if action == "implement_shooter" else "AIAgent.Fps.Grenade"
+        )
+        return found
+    if action == "open_level":
+        found = resolve_existing_level(
+            slots.get("level") or slots.get("level_path") or slots.get("level_name") or ""
+        )
         return found
     if action == "run_automation_test":
         return {"ok": True, "automation_filter": str(slots.get("filter") or "")}
@@ -625,7 +722,21 @@ def resolve_slots(action: str, slots: dict) -> dict:
                 "external_dep": "UE_ALLOW_UMG",
                 "error": f"UE_ALLOW_UMG 不是 true，{verb}。",
             }
-        return _widget_slot_fields(slots)
+        found = _widget_slot_fields(slots)
+        if found.get("asset_name") or found.get("ref_path"):
+            return found
+        # 句子里没点名任何 WBP_：不许把窗口留在「没有唯一的蓝图路径」上判死。
+        # 给一个代码决定的确定名字（/Game/UI/WBP_HUD 或 WBP_UI），执行层照它建/改。
+        asset = default_widget_name(text)
+        folder = _widget_folder(str(slots.get("folder") or slots.get("folder_path") or "")) or "/Game/UI"
+        found.update({
+            "ok": True,
+            "folder_path": folder,
+            "asset_name": asset,
+            "ref_path": f"{folder}/{asset}.{asset}",
+            "name_source": "default",
+        })
+        return found
 
     if action == "edit_cpp":
         found = resolve_name(str(slots.get("class") or ""))
@@ -684,6 +795,37 @@ def _widget_parent(raw: str) -> str:
     return text
 
 
+_DEFAULT_HUD_NAME = "WBP_HUD"
+_FPS_HUD_TOKENS = ("血条", "子弹", "弹药", "手雷", "载具", "FPS", "射击", "准星")
+
+
+def is_hud_sentence(text: str) -> bool:
+    """句子在说「屏幕上要显示什么」。词典只管这一层，不猜具体控件。"""
+    blob = str(text or "")
+    return any(token in blob for token in ("HUD", "视口", "血条", "弹药", "子弹", "手雷", "载具"))
+
+
+def default_widget_name(text: str) -> str:
+    """句子没点名 WBP_ 时给一个确定名字，不让窗口在「没有唯一蓝图路径」上判死。
+
+    20261029-002746 的 W3 就是死在这里：原句只说了「添加一个 UMG 到视口」，
+    规划者造出的窗口 slots 为空，执行层 `没有唯一的蓝图路径`，整句 6 扇只剩 2 扇。
+    命名口径是纯代码决定的、可复验的，不是猜：
+    - 句子里已有唯一 WBP_ 名 → 用句子的（调用方先走原有解析）
+    - 句子里有 FPS 玩法表现词（血条/子弹/手雷/载具…）→ WBP_FpsHUD
+      （不复用 /Game/UI/WBP_HUD：那份已经是平台跳跃 HUD，改它等于串戏）
+    - 句子是泛 HUD/视口 → WBP_HUD
+    - 其余 → WBP_UI
+    目录固定 /Game/UI，与仓库现有 WBP_HUD 同目录。
+    """
+    blob = str(text or "")
+    if any(token in blob for token in _FPS_HUD_TOKENS):
+        return "WBP_FpsHUD"
+    if is_hud_sentence(blob):
+        return _DEFAULT_HUD_NAME
+    return "WBP_UI"
+
+
 def _widget_slot_fields(slots: dict) -> dict:
     """句子里有唯一 WBP_ 或 /Game 路径就填上。没有也 ok，交给执行层的 3 次。"""
     raw_name = str(slots.get("name") or slots.get("asset_name") or slots.get("blueprint") or "").strip()
@@ -715,7 +857,9 @@ def _widget_slot_fields(slots: dict) -> dict:
     return {"ok": True, "parent": parent}
 
 
-def materialize(action: str, slots: dict, *, title: str, wid: str, depends: list, retries: int) -> dict:
+def materialize(action: str, slots: dict, *, title: str, wid: str, depends: list, retries: int,
+                text: str = "") -> dict:
+    """`text`：句子原文，可选。UMG 没点名资产名时用它决定默认 WBP_ 名（见 resolve_slots）。"""
     window = {
         "id": wid,
         "title": title or _default_title(action, slots),
@@ -780,7 +924,7 @@ def materialize(action: str, slots: dict, *, title: str, wid: str, depends: list
     if missing:
         window["error"] = missing
         return window
-    resolved = resolve_slots(action, slots)
+    resolved = resolve_slots(action, slots, text)
     if resolved.get("ok") is False:
         window["error"] = resolved.get("error") or "槽位解析失败，不猜。"
         if resolved.get("waiting_external"):
@@ -873,7 +1017,7 @@ def _create_and_goal(action: str, slots: dict, linked: dict, wid: str, title: st
 
 
 def materialize_goal(action: str, slots: dict, *, title: str, wid: str, depends: list, retries: int,
-                     paths: list | None = None) -> list[dict]:
+                     paths: list | None = None, text: str = "") -> list[dict]:
     """单扇归地入口（P2）：asset 槽位动作统一走 link_asset——索引唯一命中直连；
     miss 且父类可推（或句中给了 /Game 路径）自动插「创建蓝图」前置扇；推不出照旧暂停等 r。
     paths 是句中的 /Game 路径（最多一条当目录提示）。其余动作原路 materialize。
@@ -886,7 +1030,7 @@ def materialize_goal(action: str, slots: dict, *, title: str, wid: str, depends:
         if linked.get("plan") == "create_planned":
             return _create_and_goal(action, slots, linked, wid, title, depends)
         if linked.get("plan") == "pause_r":
-            window = materialize(action, slots, title=title, wid=wid, depends=depends, retries=retries)
+            window = materialize(action, slots, title=title, wid=wid, depends=depends, retries=retries, text=text)
             window["goal"] = True
             if action in ("bind_blueprint", "compile_blueprint") and not window.get("waiting_external"):
                 # 没有唯一路径不再暂停问人，执行层最多试 3 次。
@@ -902,7 +1046,7 @@ def materialize_goal(action: str, slots: dict, *, title: str, wid: str, depends:
                 window["error"] = str(linked.get("error") or window.get("error") or "推不出唯一的蓝图，不猜。")
                 window["needs"] = str(linked.get("needs") or "path")
             return [window]
-    window = materialize(action, slots, title=title, wid=wid, depends=depends, retries=retries)
+    window = materialize(action, slots, title=title, wid=wid, depends=depends, retries=retries, text=text)
     window["goal"] = True
     return [window]
 
@@ -934,6 +1078,7 @@ def _materialize_goals(intent: dict, query: str = "") -> list[dict]:
             depends=[],
             retries=retries,
             paths=paths,
+            text=query,
         )
         if goal.get("args") and isinstance(goal.get("args"), dict):
             made[0]["args"] = {str(k): str(v)[:120] for k, v in goal["args"].items()}
@@ -1616,14 +1761,17 @@ def _ensure_requested(query: str, windows: list[dict]) -> list[dict]:
 
 
 def _scope_text(scope: dict) -> str:
-    """范围自己的话：标题 + 待办说明 + 交付清单。不带原句，避免把别的范围的需求混进来。"""
+    """范围自己的话：标题 + 待办说明 + 交付清单。不带原句，避免把别的范围的需求混进来。
+    各字段用「；」拼接而不是空格：字段是各自独立的话，空格缝会把上一条尾巴上的动词
+    （如「…的创建」）和下一条开头的名词（如「关卡内…」）拼成假相邻，被 _LEVEL_CREATE_RE
+    读成「创建关卡」（20261028-124154：范围 C 因此补出一扇缺槽位的 create_level）。"""
     parts = [str(scope.get("title") or ""), str(scope.get("pending_note") or "")]
     deliverables = scope.get("deliverables")
     if isinstance(deliverables, (list, tuple)):
         parts.extend(str(item) for item in deliverables)
     elif deliverables:
         parts.append(str(deliverables))
-    return " ".join(part for part in parts if str(part).strip())
+    return "；".join(part for part in parts if str(part).strip())
 
 
 def _scope_prefix(scope: dict) -> str:
@@ -1772,16 +1920,24 @@ def _gate_scene(query: str, windows: list[dict], criteria: list | None,
 
 
 def _try_understand(query: str, complete) -> dict | None:
-    """L1 理解器，含一次重试上限。说不出合法意图（表外动作、解析失败、没 key）返回 None。"""
-    from agent.understand import understand
+    """L1 理解器，含一次重试上限。说不出合法意图（表外动作、解析失败、没 key）返回 None。
+    失败原因要可见：静默回退规划者会让人查不到为什么（20261027-191303 三连败的教训）。"""
+    from agent.understand import last_error, understand
 
     try:
         intent = understand(query, complete=complete)
         if intent is None:
+            reason = last_error()
+            print(f"理解器第一次没过：{reason}", flush=True)
             intent = understand(query, complete=complete)
         if intent is not None and intent.get("ok"):
             return intent
-    except Exception:
+        if intent is None:
+            print(f"理解器重试也没过：{last_error()}", flush=True)
+        else:
+            print("理解器意图没通过验收，回退规划者。", flush=True)
+    except Exception as exc:
+        print(f"理解器异常：{type(exc).__name__}: {exc}", flush=True)
         return None
     return None
 
@@ -1827,6 +1983,16 @@ def widget_edit_task(query: str, wid: str = "W2") -> dict:
     elif len(names) == 1:
         probe["name"] = names[0]
     fields = _widget_slot_fields(probe)
+    if not (fields.get("asset_name") or fields.get("ref_path")):
+        # 与 resolve_slots 同一口径：执行扇也必须落在确定的 WBP_ 上，
+        # 否则「改控件图」这一扇会在没有名字的资产上打转（20261029-002746 的 W4 就排在 W3 后面死）。
+        asset_default = default_widget_name(text)
+        fields.update({
+            "folder_path": "/Game/UI",
+            "asset_name": asset_default,
+            "ref_path": f"/Game/UI/{asset_default}.{asset_default}",
+            "name_source": "default",
+        })
     ref = str(fields.get("ref_path") or "")
     asset = str(fields.get("asset_name") or "")
     folder = str(fields.get("folder_path") or "")
@@ -1881,6 +2047,23 @@ def _plan_windows_body(query: str, complete=None) -> dict:
             "wrote_route": False,
         }
     learned_meta: dict = {}
+    # FPS HUD 整句：规则固定、可复验，不叫模型。放在 L1 之前，避免「理解器返回纯文本 →
+    # 整句掉进求解扇失败」这条单点（20261029-115122 / 115302 两次实测）。
+    from agent.fps_hud import hud_windows
+
+    deterministic = hud_windows(query)
+    if deterministic:
+        windows = _ensure_requested(query, _gate_scene(query, deterministic, None)["windows"])
+        mark_dangling(windows)
+        return {
+            "source": "hud-rules",
+            "planner_called": False,
+            "understand_called": False,
+            "route_hit": True,
+            "messages": None,
+            "windows": windows,
+            "wrote_route": False,
+        }
     learned = match_learned(query, meta=learned_meta)
     if learned is not None:
         # 已学模板同样不许静默丢需求半句：句里有需求说法而模板没有改码扇 → 弱命中走 L1
@@ -1985,6 +2168,7 @@ def _plan_windows_body(query: str, complete=None) -> dict:
             wid=item["id"],
             depends=item["depends_on"],
             retries=item["max_retries"],
+            text=query,
         ))
     windows = _gate_scene(query, windows, None)["windows"]
     windows = _ensure_requested(query, _without_unasked_project_compile(query, windows))

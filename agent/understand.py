@@ -157,15 +157,26 @@ def understand_once(query: str) -> dict:
     return out
 
 
+_LAST_ERROR: str = ""
+
+
+def last_error() -> str:
+    """最近一次理解失败的原因。给 _try_understand 打印用——run 里理解器失败
+    不能静默回退，人要看得到为什么（20261027-191303 三连败查不到原因的教训）。"""
+    return _LAST_ERROR
+
+
 def understand(query: str, complete=None) -> dict | None:
     """一次理解器调用 → validate_intent 验收。ok 的意图返回 dict（带 usage 时附 tokens），
     说不出合法意图（表外动作、解析失败、没 key）返回 None，由调用方回退现有行为。"""
+    global _LAST_ERROR
     query = (query or "").strip()
     if not query:
         return None
     if complete is None:
         detail = understand_once(query)
         if not detail.get("ok"):
+            _LAST_ERROR = str(detail.get("error") or "understand_once 未通过")
             return None
         intent = detail.get("intent") or {}
         tokens = {key: detail[key] for key in _TOKEN_KEYS if key in detail}
@@ -176,9 +187,11 @@ def understand(query: str, complete=None) -> dict | None:
         return intent
     try:
         text = complete(_messages(query))
-    except Exception:
+    except Exception as exc:
+        _LAST_ERROR = f"{type(exc).__name__}: {exc}"
         return None
     intent, error = _parse_intent(text, query)
     if error or not intent or not intent.get("ok"):
+        _LAST_ERROR = str(error or "validate_intent 未通过")
         return None
     return intent

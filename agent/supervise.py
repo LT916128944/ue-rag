@@ -8,7 +8,11 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-load_dotenv()
+# 20261028：不裸调 load_dotenv()——它按 CWD 自己找 .env，会把 eval 封闭环境
+# （eval/_pin_offline.close_now 指向的空临时 .env）打穿，.env 开关重新渗回断言。
+# 统一从 config.ENV_PATH 读：入口封闭时这里自然也封闭。
+from config import ENV_PATH as _UE_RAG_ENV_PATH
+load_dotenv(str(_UE_RAG_ENV_PATH), override=True)
 
 from config import UE_PROJECT_DIR, UE_SOURCE_ROOT, allow_blueprint, task_flag, task_policy
 from core.retrieve_funnel import _corpus

@@ -23,7 +23,10 @@ def _classify(row: dict) -> str:
     node = str(row.get("node") or "")
     if node == "precheck" or "请打开关卡" in error:
         return "level_precheck"
-    if any(token in error for token in ("WinError 10061", "10061", "拒绝连接", "Connection refused")):
+    if any(token in error for token in (
+        "WinError 10061", "10061", "拒绝连接", "Connection refused",
+        "Bad Gateway", "ConnectError", "ConnectTimeout", "ReadTimeout",
+    )):
         return "mcp_down"
     if any(token in error for token in ("write refused", "role refused", "blueprint edit disabled")):
         return "tool_refused"

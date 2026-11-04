@@ -287,11 +287,29 @@ def repair_blueprint(step: dict, *, attempts: int = 3) -> dict:
     """同一张蓝图、同一个目标最多 attempts 次。开关关着则 0 次。
 
     路径解析失败不算 Monolith 尝试：那种错误不进 discover，重试结果不变。
+    FPS HUD 的控件图有确定性落地（agent/fps_hud.py），一次就够，不走下面的 discover 猜。
     """
     action = str((step or {}).get("action") or "")
     refused = blueprint_switch_refusal(action)
     if refused:
         return refused
+    if action == "edit_widget_blueprint":
+        from agent.fps_hud import build_fps_hud
+
+        built = build_fps_hud(step)
+        if built is not None:
+            built.setdefault("exec_count", 1)
+            return built
+    if action == "create_widget_blueprint":
+        # 控件图创建也不再走 discover 猜 action：`ui` 命名空间里 create_* 一大片，
+        # 针名判不出唯一（20261029-020749 的 W3）。_create_widget_blueprint 本来就
+        # 幂等（存在就不重建）、带 set_parent/save/compile 裁判，直接复用它。
+        out = _create_widget_blueprint(
+            {**step, "folder_path": step.get("folder_path") or _widget_default_folder(step)}
+        )
+        out.setdefault("attempts", 1)
+        out.setdefault("exec_count", 1)
+        return out
     from backends.select import current_backend
 
     if current_backend() != "monolith":
@@ -461,10 +479,18 @@ def _run_action(step: dict) -> dict:
         return _run_automation(step)
     if action == "implement_shooter":
         return _implement_shooter(step)
+    if action == "implement_grenade":
+        return _implement_grenade(step)
     if action == "apply_spec":
         return _apply_spec(step)
+    if action == "solve":
+        from agent.solver import solve
+
+        return solve(step)
     if action == "check_platform_hud":
         return _check_platform_hud(step)
+    if action == "check_fps_hud":
+        return _check_fps_hud(step)
     if action == "set_scalar_param":
         return _set_scalar_param(step)
     if action == "query_material":
@@ -488,8 +514,39 @@ def _run_action(step: dict) -> dict:
     if action == "bind_blueprint":
         step = dict(step)
         step["action"] = "bind_slot"
-        return _run_action(step)
+        out = _run_action(step)
+        return _bind_evidence(step, out)
     return {"ok": False, "error": f"未知动作 {action}"}
+
+
+def _bind_evidence(step: dict, out: dict) -> dict:
+    """bind_blueprint 的验收（U1）：唯一蓝图路径真的存在，编辑器只读断言。
+
+    bind_slot 本来只做解析，返回 ref 就算成功——「能规划、能执行、没裁判」的假成功口子。
+    现在用一次 find_assets 只读核对；核对失败按失败处理，不编造成功。"""
+    if not isinstance(out, dict) or not out.get("ok"):
+        return out
+    ref = str(out.get("ref") or "")
+    if not ref:
+        return out
+    asset_path = ref.split(".", 1)[0]
+    folder = asset_path.rsplit("/", 1)[0] if "/" in asset_path else "/Game"
+    asset = asset_path.rsplit("/", 1)[-1]
+    present = _blueprint_present(folder, asset, asset_path)
+    if not present.get("ok"):
+        out["ok"] = False
+        out["error"] = f"唯一蓝图路径核对失败：{present.get('error') or '查蓝图失败'}"
+        return out
+    if not present.get("present"):
+        out["ok"] = False
+        out["error"] = f"唯一蓝图路径 {ref} 在编辑器里找不到，不猜。"
+        return out
+    out["test"] = {
+        "ok": True, "kind": "editor_assert",
+        "summary": f"唯一蓝图路径 {ref} 已确认存在", "errors": [],
+    }
+    out["judge_kind"] = "editor_assert"
+    return out
 
 
 def _launch_editor(step: dict) -> dict:
@@ -514,7 +571,11 @@ def _launch_editor(step: dict) -> dict:
         return {"ok": False, "error": text, "summary": text, "index_note": text}
     note = "编辑器已在运行" if was_open else "已启动编辑器"
     note += "，MCP 已连通。未编译、未改场景、未保存、未进 PIE。"
-    judge = {"ok": True, "kind": "editor_assert", "summary": note, "errors": []}
+    # synthetic（U3b，20261027-180955）：这条判词只证明「端口通了」，不证明任何关卡内容。
+    # apply_judge 对 synthetic 判词只放行「条款的证明窗口恰好只有本扇」的条款，
+    # 防止 kind 宽绑定把「金币已放置」这类内容条款被启动扇顺手翻绿。
+    judge = {"ok": True, "kind": "editor_assert", "summary": note, "errors": [],
+             "synthetic": True}
     return {
         "ok": True,
         "id": "launch_editor",
@@ -558,12 +619,52 @@ def _read_task() -> dict:
     return {"allow_writes": [], "save": False, "pie": False}
 
 
+def _monolith_active() -> bool:
+    from backends.select import current_backend
+
+    return current_backend() == "monolith"
+
+
 def _save_level(step: dict) -> dict:
-    """写场景之后按任务策略落盘当前关卡。save 关掉时直接返回 ok，附一句未保存。"""
+    """写场景之后按任务策略落盘当前关卡。save 关掉时直接返回 ok，附一句未保存。
+
+    monolith：没有 get_current_level，用 list_dirty_packages 找出脏的地图包再
+    save_packages——放置过的关卡一定脏，列不出来就是没有要落盘的改动。"""
     from core.editor_exec import exec_tool
 
     if not task_flag(step, "save"):
         return {"ok": True, "saved": False, "note": "未保存"}
+    from backends.select import current_backend
+
+    if current_backend() == "monolith":
+        from backends.monolith import exec as monolith_exec
+
+        listed = monolith_exec("editor", "list_dirty_packages",
+                               {"include_maps": True, "include_content": False},
+                               task=_read_task(), transport=_monolith_transport)
+        if not listed.get("ok"):
+            return {"ok": False, "saved": False,
+                    "error": f"读未保存的关卡包失败：{listed.get('error') or '没有返回'}"}
+        data = listed.get("data") if isinstance(listed.get("data"), dict) else {}
+        # monolith list_dirty_packages 的行在 dirty_packages 键下（源码 HandleListDirtyPackages）；
+        # 读错键会变成「没有未保存的关卡改动」静默跳过保存——20261021-221446 的教训换入口重现，
+        # U3 重跑（20261027-191740）第一版就栽在这里，关卡落盘时间停在昨天。
+        if "dirty_packages" not in data:
+            return {"ok": False, "saved": False,
+                    "error": "list_dirty_packages 返回里没有 dirty_packages 键，形状变了，不猜"}
+        packages = data.get("dirty_packages") if isinstance(data.get("dirty_packages"), list) else []
+        maps = [str(row.get("package") or "") for row in packages
+                if isinstance(row, dict) and row.get("is_map") and row.get("package")]
+        if not maps:
+            # 键在、列表空：关卡真的没有未落盘的改动（全幂等重跑就是这种），不算失败
+            return {"ok": True, "saved": False, "note": "没有未保存的关卡改动"}
+        saved = monolith_exec("editor", "save_packages", {"packages": maps},
+                              task={"allow_writes": [], **task_policy(save=True, pie=False)},
+                              transport=_monolith_transport)
+        if not saved.get("ok"):
+            return {"ok": False, "saved": False,
+                    "error": f"关卡保存失败：{saved.get('error') or '未存上'}"}
+        return {"ok": True, "saved": True, "note": f"已保存关卡 {'、'.join(maps)}"}
     level = exec_tool(_SCENE, "get_current_level", {}, task=_read_task())
     data = level.get("data") if isinstance(level, dict) else None
     if isinstance(data, str):
@@ -794,6 +895,15 @@ def _widget_parent_ref(raw: str) -> str:
     return script_object_path(text)
 
 
+def _widget_default_folder(step: dict) -> str:
+    """create 步没给目录时按同一个默认口径补 /Game/UI（与 plan_windows 的命名口径一致）。"""
+    from agent.fps_hud import widget_ref_from
+
+    ref = widget_ref_from(step or {})
+    package = str(ref).rsplit(".", 1)[0]
+    return package.rsplit("/", 1)[0] if "/" in package else "/Game/UI"
+
+
 def _create_widget_blueprint(step: dict) -> dict:
     """按步骤里的目录和名字新建 Widget Blueprint。不改控件图。资产本身保存这一份。"""
     from config import allow_umg
@@ -872,7 +982,17 @@ def _create_widget_blueprint(step: dict) -> dict:
             "id": name,
             "error": f"{name} 已在编辑器里，保存这份资产失败：{saved.get('error') or '未存上'}。",
         }
-    return {"ok": True, "id": name, "ref": ref, "index_note": f"{note}；已保存这份资产"}
+    # U1：验收不只「资产存在」，还要这张 Widget Blueprint 编得过。编译是只读裁判，不保存。
+    from core.judge import judge
+
+    test = judge({"kind": "blueprint_compile", "refPath": ref}, {"allow_writes": [], **task_policy()})
+    out = {"ok": True, "id": name, "ref": ref, "index_note": f"{note}；已保存这份资产"}
+    out["test"] = test
+    out["judge_kind"] = "blueprint_compile"
+    if not test.get("ok"):
+        out["ok"] = False
+        out["error"] = str(test.get("summary") or f"{ref} 编译失败")
+    return out
 
 
 def _level_template_path() -> str:
@@ -1860,24 +1980,170 @@ _FPS_SOURCES = (
     "Public/FpsHealthComponent.h",
 )
 
+# FPS HUD 的合同（20261029-002746 的收口口子：HUD 只有「控件图能编过」，没有一条
+# 能证明「血条/子弹/手雷/载具那几块真在图上、并且有个 C++ 类会把它挂进视口」）。
+# 名字是 FpsHUDWidget 的 BindWidgetOptional 字段名，改 C++ 时两处一起改。
+FPS_HUD_REF = "/Game/UI/WBP_FpsHUD.WBP_FpsHUD"
+FPS_HUD_PARENT = "FpsHUDWidget"
+FPS_HUD_WIDGETS = (
+    "txt_Health", "txt_Ammo", "txt_Grenade",
+    "txt_VehicleName", "txt_EnterPrompt", "txt_VehicleSpeed",
+)
+
+
+def _fps_hud_ref(text: str) -> str:
+    """句子里的 WBP_ 名或 /Game 路径优先；没有就用 FPS HUD 的固定合同路径。"""
+    import re as _re
+
+    blob = str(text or "")
+    paths = [
+        item for item in dict.fromkeys(_re.findall(r"/Game(?:/[A-Za-z0-9_]+)+", blob))
+        if item.rsplit("/", 1)[-1].startswith("WBP_")
+    ]
+    if len(paths) == 1:
+        package = paths[0].split(".", 1)[0]
+        name = package.rsplit("/", 1)[-1]
+        return f"{package}.{name}"
+    names = list(dict.fromkeys(_re.findall(r"(?<![A-Za-z0-9_])(WBP_[A-Za-z0-9_]+)", blob)))
+    if len(names) == 1:
+        return f"/Game/UI/{names[0]}.{names[0]}"
+    return FPS_HUD_REF
+
+
+def _fps_hud_widget_names(data) -> list[str]:
+    """GetWidgets 的返回（官方扁平行 / monolith 扁平行都认）里取出控件名。"""
+    names: list[str] = []
+    rows = data
+    if isinstance(data, dict):
+        for key in ("widgets", "Widgets", "data", "rows"):
+            if isinstance(data.get(key), list):
+                rows = data[key]
+                break
+        else:
+            rows = []
+    if isinstance(rows, (list, tuple)):
+        for row in rows:
+            if isinstance(row, dict):
+                name = str(
+                    row.get("widgetName") or row.get("name") or row.get("widget_name") or ""
+                ).strip()
+            else:
+                name = str(row or "").strip()
+            if name:
+                names.append(name)
+    return names
+
+
+def _fps_hud_mount_entry() -> tuple[bool, str]:
+    """C++ 侧有没有把 HUD 挂进视口的入口。只看源码，不连编辑器。
+
+    判据：FpsPawn 里有 CreateWidget + AddToViewport（TestPawn::EnsureHud 那套写法）。
+    没有就说明「控件图做对了但永远不会显示」，这一条必须算不合格。"""
+    from config import UE_SOURCE_ROOT
+
+    pawn_cpp = UE_SOURCE_ROOT / "Private" / "FpsPawn.cpp"
+    try:
+        text = pawn_cpp.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        return False, f"读不到 {pawn_cpp.name}（{exc}）"
+    has_create = "CreateWidget" in text
+    has_mount = "AddToViewport" in text
+    if has_create and has_mount:
+        return True, "AFpsPawn 有 CreateWidget + AddToViewport 入口"
+    missing = []
+    if not has_create:
+        missing.append("CreateWidget")
+    if not has_mount:
+        missing.append("AddToViewport")
+    return False, f"AFpsPawn 没有 {'/'.join(missing)}，HUD 不会被挂进视口"
+
+
+def _check_fps_hud(step: dict) -> dict:
+    """只读核对 FPS HUD：六个合同控件名、父类、C++ 挂载入口。缺一条就不合格。
+
+    这一扇不改控件图、不进 PIE、不保存；它只回答「用户要的那几块信息是不是真的在
+    HUD 上，而且有东西会把它显示出来」。控件图能编过不等于 HUD 会动。"""
+    from core.editor_exec import exec_tool
+
+    text = str((step or {}).get("widget") or (step or {}).get("query") or "")
+    ref = _fps_hud_ref(text)
+    read = {"allow_writes": [], "save": False, "pie": False}
+    problems: list[str] = []
+
+    called = exec_tool(
+        "UMGToolSet.UMGToolSet", "GetWidgets",
+        {"widgetBlueprint": {"refPath": ref}}, task=read,
+    )
+    found: list[str] = []
+    if not called.get("ok"):
+        problems.append("GetWidgets 失败：" + str(called.get("error") or "没有返回"))
+    else:
+        found = _fps_hud_widget_names(called.get("data"))
+        missing = [name for name in FPS_HUD_WIDGETS if name not in found]
+        for name in missing:
+            problems.append(f"缺控件 {name}")
+
+    parent_ok = False
+    parent_name = ""
+    parent = exec_tool(
+        "editor_toolset.toolsets.blueprint.BlueprintTools", "get_parent",
+        {"blueprint": {"refPath": ref}}, task=read,
+    )
+    data = parent.get("data")
+    parent_ref = ""
+    if isinstance(data, dict) and isinstance(data.get("returnValue"), dict):
+        parent_ref = str(data["returnValue"].get("refPath") or "")
+    if parent_ref:
+        parent_name = parent_ref.rsplit(".", 1)[-1].rsplit("/", 1)[-1]
+        parent_ok = parent_name == FPS_HUD_PARENT
+    if parent.get("ok") and parent_ref and not parent_ok:
+        problems.append(f"父类是 {parent_name}，不是 {FPS_HUD_PARENT}")
+    elif not parent_ref and parent.get("ok"):
+        problems.append(f"读不到 {ref} 的父类")
+
+    mounted, mount_note = _fps_hud_mount_entry()
+    if not mounted:
+        problems.append(mount_note)
+
+    if problems:
+        summary = f"{ref} 不合格：" + "；".join(problems) + "。控件图能编过，不等于 HUD 会动。"
+    else:
+        summary = (
+            f"{ref} 六个合同控件都在，父类是 {FPS_HUD_PARENT}，{mount_note}；"
+            "血条占位 100、子弹/手雷数量、载具名字/上下车提示 E/时速都由该控件显示。"
+        )
+    judge = {"ok": not problems, "kind": "editor_assert", "summary": summary, "errors": []}
+    out = {
+        "ok": not problems,
+        "id": ref,
+        "summary": summary,
+        "index_note": summary,
+        "test": judge,
+        "judge_kind": "editor_assert",
+        "ref": ref,
+        "in_level": False,
+        "pie": False,
+        "save": False,
+        "widgets_found": found,
+    }
+    if problems:
+        out["error"] = summary
+    return out
+
 
 def _apply_spec(step: dict) -> dict:
-    """拆分结果里的新 C++ 文件。路径已经由 decompose.safe_files 收过，这里再收一次再写。"""
-    from config import UE_SOURCE_ROOT
+    """拆分结果里的新 C++ 文件。路径已经由 decompose.safe_files 收过，这里再收一次再写。
+
+    写完强制编译（P0-3 编译回灌）：失败时把 get_build_error 的错误原文当 fix 上下文
+    进下一轮，编译轮次 ≤3；烧尽还没过就带着原文失败，不假成功。"""
+    from agent.build_error import apply_spec_loop
     from agent.decompose import safe_files
 
     spec = step.get("spec") if isinstance(step.get("spec"), dict) else {}
     files, error = safe_files(spec.get("files"))
     if error:
         return {"ok": False, "error": error, "summary": error, "index_note": error}
-    written = []
-    for item in files:
-        path = UE_SOURCE_ROOT / item["path"]
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(item["content"], encoding="utf-8")
-        written.append(item["path"])
-    note = "已写入 " + "、".join(written)
-    return {"ok": True, "summary": note, "index_note": note, "id": written[0]}
+    return apply_spec_loop(files, wid=str(step.get("id") or ""))
 
 
 _FPS_PAWN_CLASS = "/Script/AIAgentProject.FpsPawn"
@@ -2005,7 +2271,7 @@ def _fps_spawn_notes(payload: dict) -> str:
 def _implement_shooter(step: dict) -> dict:
     """把简易射击放进唯一关卡。AIAgent.Fps.Hit 在临时世界里测命中，不能单独当成关卡已做好。"""
     from config import UE_SOURCE_ROOT
-    from agent.plan_windows import resolve_level
+    from agent.plan_windows import resolve_existing_level
     from backends.monolith import exec as monolith_exec
     from backends.select import current_backend
 
@@ -2018,7 +2284,7 @@ def _implement_shooter(step: dict) -> dict:
         step.get("level_path") or step.get("level_name")
         or slots.get("level") or step.get("level") or ""
     )
-    found = resolve_level(raw)
+    found = resolve_existing_level(raw)
     if not found.get("ok"):
         text = str(found.get("error") or "缺少关卡名，不猜。")
         return {"ok": False, "error": text, "summary": text, "index_note": text}
@@ -2126,6 +2392,136 @@ def _implement_shooter(step: dict) -> dict:
     result["id"] = level
     result["level_path"] = package
     result["in_level"] = True
+    # 关卡内容核对单独落一条 editor_assert 判词：L1 合同常把「关卡里有 Pawn/靶/地面」
+    # 写成 editor_assert 条款绑到本扇，automation 判词勾不动它（20261028-151850 的教训）。
+    result["build"] = {
+        "ok": True, "kind": "editor_assert",
+        "summary": f"{level} 关卡内容核对：{_fps_count_text(counts)}，GameMode=FpsGameMode",
+        "errors": [],
+    }
+    if not result.get("ok"):
+        result["error"] = note
+    return result
+
+
+_FPS_GRENADE_FILTER = "AIAgent.Fps.Grenade"
+_FPS_GRENADE_CLASS = "/Script/AIAgentProject.FpsGrenadePickup"
+# 拾取物点位：地面顶在 z=0（地面立方体 scale 40 在 z=-50），球体缩 0.3 半径 15，坐地上
+_FPS_GRENADE_POINTS = ([300, 100, 20], [-200, 150, 20])
+_FPS_GRENADE_WANT = 2
+
+
+def _implement_grenade(step: dict) -> dict:
+    """把手榴弹拾取物放进唯一关卡并收口 AIAgent.Fps.Grenade。
+    前置是这一关已经有 FPS 玩法（FpsPawn/靶/地面/灯）：缺了引导先跑 implement_shooter，不算过。"""
+    from config import UE_SOURCE_ROOT
+    from agent.plan_windows import resolve_existing_level
+    from backends.monolith import exec as monolith_exec
+    from backends.select import current_backend
+
+    sources = _FPS_SOURCES + ("Public/FpsGrenadeProjectile.h", "Public/FpsGrenadePickup.h")
+    missing = [rel for rel in sources if not (UE_SOURCE_ROOT / rel).is_file()]
+    if missing:
+        text = "手榴弹源文件不在：" + "、".join(missing)
+        return {"ok": False, "error": text, "summary": text, "index_note": text}
+    slots = step.get("slots") if isinstance(step.get("slots"), dict) else {}
+    raw = (
+        step.get("level_path") or step.get("level_name")
+        or slots.get("level") or step.get("level") or ""
+    )
+    found = resolve_existing_level(raw)
+    if not found.get("ok"):
+        text = str(found.get("error") or "缺少关卡名，不猜。")
+        return {"ok": False, "error": text, "summary": text, "index_note": text}
+    level = str(found.get("level_name") or "")
+    package = str(found.get("level_path") or "")
+    if current_backend() != "monolith":
+        return _fps_fail(level, "当前后端不是 monolith，不能核对关卡里有没有手榴弹前置。不把临时世界测试当成完成。")
+    if not task_flag(step, "save"):
+        return _fps_fail(level, "save 未放行，不能加载关卡核对场景。不把临时世界测试当成完成。")
+
+    write = {"allow_writes": [], **task_policy(save=True, pie=False)}
+
+    def call(namespace: str, action: str, params: dict) -> dict:
+        return monolith_exec(namespace, action, params, task=write, transport=_monolith_transport)
+
+    loaded = call("editor", "load_level", {"path": package, "dirty_policy": "refuse"})
+    if not loaded.get("ok"):
+        return _fps_fail(level, f"关卡 {package} 加载失败：{_error_text(loaded) or '没有返回'}")
+    loaded_data = _monolith_payload(loaded)
+    if _as_bool(loaded_data.get("loaded")) is not True:
+        return _fps_fail(
+            level,
+            f"关卡 {package} 加载失败：{loaded_data.get('message') or _error_text(loaded) or '没有返回'}",
+        )
+    world = str(loaded_data.get("current_world") or loaded_data.get("path") or "")
+    if world and not _level_matches(world, package, level):
+        return _fps_fail(level, f"加载后当前关卡是 {world}，不是 {package}。")
+
+    counted = call("mesh", "get_scene_statistics", {})
+    if not counted.get("ok"):
+        return _fps_fail(level, f"读 {level} 的场景统计失败：{_error_text(counted) or '没有返回'}")
+    counts = _fps_stats(counted)
+    if not counts:
+        return _fps_fail(level, f"读 {level} 的场景统计失败：没有按类给出的 actor 计数。")
+
+    if not _fps_ready(counts):
+        return _fps_fail(
+            level,
+            f"{level} 里没有 FPS 前置（{_fps_count_text(counts)}）。"
+            "手榴弹挂在射击玩法上，先跑 implement_shooter 把这一关布置好，再来加手榴弹。",
+        )
+
+    notes = ""
+    have = _fps_count(counts, "FpsGrenadePickup", "AFpsGrenadePickup")
+    if have < _FPS_GRENADE_WANT:
+        actors = [{
+            "class": _FPS_GRENADE_CLASS,
+            "location": list(point),
+            "rotation": [0, 0, 0],
+            "folder": "FPS",
+        } for point in _FPS_GRENADE_POINTS[have:_FPS_GRENADE_WANT]]
+        authored = call("editor", "author_map_settings", {"actors": actors})
+        if not authored.get("ok"):
+            return _fps_fail(level, f"往 {level} 放手榴弹拾取物失败：{_error_text(authored) or '没有返回'}")
+        notes = _fps_spawn_notes(_monolith_payload(authored))
+        saved = call("editor", "save_packages", {"packages": [package]})
+        if not saved.get("ok"):
+            return _fps_fail(level, f"关卡 {package} 保存失败：{_error_text(saved) or '没有返回'}")
+        saved_data = _monolith_payload(saved)
+        if _as_bool(saved_data.get("ok")) is not True:
+            return _fps_fail(level, f"关卡 {package} 保存失败：{saved_data.get('message') or '没有写上'}")
+        counted = call("mesh", "get_scene_statistics", {})
+        if not counted.get("ok"):
+            return _fps_fail(level, f"放完后读 {level} 的场景统计失败：{_error_text(counted) or '没有返回'}")
+        counts = _fps_stats(counted)
+
+    have = _fps_count(counts, "FpsGrenadePickup", "AFpsGrenadePickup")
+    if have < _FPS_GRENADE_WANT or notes:
+        shown = f"{_fps_count_text(counts)}，FpsGrenadePickup={have}"
+        detail = f"{shown}；{notes}" if notes else shown
+        return _fps_fail(
+            level,
+            f"{level} 放完后拾取物仍不足（{detail}）。"
+            "AIAgent.Fps.Grenade 只在临时世界里测爆炸链路，不能当成关卡已做好。",
+        )
+
+    result = _run_automation({
+        "slots": {"filter": _FPS_GRENADE_FILTER},
+        "automation_filter": _FPS_GRENADE_FILTER,
+    })
+    note = f"{level} 关卡内 {_fps_count_text(counts)}，FpsGrenadePickup={have}；{result.get('summary') or _FPS_GRENADE_FILTER}"
+    result["summary"] = note
+    result["index_note"] = note
+    result["id"] = level
+    result["level_path"] = package
+    result["in_level"] = True
+    # 关卡内容核对单独落一条 editor_assert 判词（与 _implement_shooter 同口径）。
+    result["build"] = {
+        "ok": True, "kind": "editor_assert",
+        "summary": f"{level} 关卡内容核对：{_fps_count_text(counts)}，FpsGrenadePickup={have}",
+        "errors": [],
+    }
     if not result.get("ok"):
         result["error"] = note
     return result
@@ -2292,6 +2688,21 @@ def _set_scalar_param(step: dict) -> dict:
     if not instance_ref:
         return {"ok": False, "id": target, "error": f"{target} 没有唯一的材质实例路径，不猜。"}
     instance = {"refPath": instance_ref}
+    # U4：覆写前把旧值记进 props.json，这一扇失败且没有 keep_source 时写回。
+    # 参数读不出旧值（从未设置过）就不记——没有可信的「之前」，不编造。
+    if step.get("run_id"):
+        old = exec_tool(
+            _MATERIAL_INSTANCE,
+            "get_scalar_parameter",
+            {"instance": instance, "name": param},
+            task=_read_task(),
+        )
+        old_value = _scalar_value(old.get("data")) if old.get("ok") else None
+        if old_value is not None:
+            from agent.prop_snapshot import capture_props
+
+            capture_props(str(step.get("run_id")), instance_ref,
+                          {"parameter": param, "value": old_value}, kind="scalar")
     write = {"allow_writes": ["set_scalar_parameter"], **task_policy()}
     wrote = exec_tool(
         _MATERIAL_INSTANCE,
@@ -2508,6 +2919,19 @@ def _place_batch(step: dict) -> dict:
     write = {"allow_writes": ["add_to_scene_from_asset", "set_properties", "set_actor_transform"],
              **task_policy(save=task_flag(step, "save"), pie=False)}
     placed = skipped = corrected = 0
+    created: list[str] = []
+    props_at_spawn: dict[str, bool] = {}
+
+    def _mark_created_for_rollback() -> None:
+        """U4：这扇已经放进场景的实例，失败时登记进 props.json（kind=created），
+        由失败还原路径逐个删掉，场景回到放置前。没跑过 run_id（离线/评测）就不记。"""
+        if not created or not step.get("run_id"):
+            return
+        from agent.prop_snapshot import capture_props
+
+        for name in created:
+            capture_props(str(step.get("run_id")), name, {}, kind="created")
+
     for index, entry in enumerate(entries):
         name = entry["name"] or f"{base_name}_{index + 1}"
         found = exec_tool(
@@ -2520,6 +2944,7 @@ def _place_batch(step: dict) -> dict:
             # 已存在：按设计图校正坐标（设计图改了就该生效），一致则记跳过
             sync = _sync_entry_location(existing[0], entry, write)
             if not sync.get("ok"):
+                _mark_created_for_rollback()
                 return {"ok": False, "id": blueprint,
                         "error": f"{name} 坐标校正失败：{sync.get('error')}"}
             if sync.get("moved"):
@@ -2527,6 +2952,12 @@ def _place_batch(step: dict) -> dict:
             else:
                 skipped += 1
             continue
+        spawn_extra: dict = {}
+        props = entry.get("props") or {}
+        if props and _monolith_active():
+            # U3a：monolith 没有实例属性写入口，属性只能在生成时一起写（spawn_blueprint_actor
+            # 的 properties）。official 路径不传这个键，避免官方 schema 拒绝未知参数。
+            spawn_extra = {"properties": props}
         placed_actor = exec_tool(
             _SCENE, "add_to_scene_from_asset",
             {
@@ -2534,15 +2965,27 @@ def _place_batch(step: dict) -> dict:
                 "name": name,
                 "xform": {"location": {"x": entry["x"], "y": entry["y"], "z": entry["z"]}},
                 "snap_to_ground": False,
+                **spawn_extra,
             },
             task=write,
         )
         if placed_actor.get("ok"):
+            if spawn_extra:
+                skipped = (placed_actor.get("data") if isinstance(placed_actor.get("data"), dict) else {}).get("properties_skipped")
+                if isinstance(skipped, list) and skipped:
+                    _mark_created_for_rollback()
+                    names = "、".join(str(one) for one in skipped[:6])
+                    return {"ok": False, "id": blueprint,
+                            "error": f"{name} 生成时属性没全写上（{names}），不算放好"}
+                props_at_spawn[name] = True
             placed += 1
+            created.append(name)
         else:
             err = str(placed_actor.get("error") or "放置失败")
             if _conn_error(err):
+                _mark_created_for_rollback()
                 return {"ok": False, "id": blueprint, "error": f"编辑器 MCP 连不上：{err}"}
+            _mark_created_for_rollback()
             return {"ok": False, "id": blueprint, "error": f"{name} 放置失败：{err}"}
     # 复查：每个条目在关卡里唯一存在；带 props 的条目顺手写属性并复读
     written = 0
@@ -2555,13 +2998,24 @@ def _place_batch(step: dict) -> dict:
         )
         refs = _actor_refs(found.get("data")) if found.get("ok") else []
         if len(refs) != 1:
+            _mark_created_for_rollback()
             return {"ok": False, "id": blueprint,
                     "error": f"复查未通过：{name} 命中 {len(refs)} 个（要 1 个）"}
         props = entry.get("props") or {}
         if not props:
             continue
+        if _monolith_active():
+            # U3a：monolith 属性只在生成时写。已有实例带 props 的幂等复读写不上，
+            # 诚实失败——不把「跳过属性」记成写好。
+            if not props_at_spawn.get(name):
+                return {"ok": False, "id": blueprint,
+                        "error": (f"{name} 带属性但已是场景里的旧实例：monolith 只能在生成时写属性，"
+                                  "这条复读不了，不猜。")}
+            written += 1
+            continue
         wrote = _write_entry_props(refs[0], props, write)
         if not wrote.get("ok"):
+            _mark_created_for_rollback()
             return {"ok": False, "id": blueprint,
                     "error": f"{name} 属性没写上：{wrote.get('error')}"}
         written += 1
@@ -2572,9 +3026,10 @@ def _place_batch(step: dict) -> dict:
         note += f"，写实例属性 {written} 条"
     saved = _save_level(step)
     if not saved.get("ok"):
+        _mark_created_for_rollback()
         return {"ok": False, "id": blueprint, "saved": False,
                 "error": f"{saved.get('error')}（放置与复查已完成：{note}）"}
-    save_note = "" if not saved.get("saved") else f"；{saved.get('note')}"
+    save_note = f"；{saved.get('note')}" if saved.get("note") else ""
     summary = note + save_note
     return {
         "ok": True,
@@ -2774,7 +3229,7 @@ def _remove_batch(step: dict) -> dict:
     if not saved.get("ok"):
         return {"ok": False, "id": "remove_batch", "saved": False,
                 "error": f"{saved.get('error')}（删除与复查已完成：{note}）"}
-    save_note = "" if not saved.get("saved") else f"；{saved.get('note')}"
+    save_note = f"；{saved.get('note')}" if saved.get("note") else ""
     summary = note + save_note
     return {
         "ok": True,

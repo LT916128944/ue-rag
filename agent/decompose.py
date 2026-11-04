@@ -10,7 +10,9 @@ import re
 
 _PATH_RE = re.compile(r"^(Public|Private)/[A-Za-z0-9_]+\.(h|cpp)$")
 _MAX_FILES = 4
-_MAX_CONTENT = 4000
+# 20261028 载具实测：4000 字装不下一个真实的 Pawn .cpp（约 5–8K 字），
+# solve 扇的方案永远过不了验收。放宽到 12000：仍是有界护栏，不是放开自由写。
+_MAX_CONTENT = 12000
 _MAX_STEPS = 6
 _MAX_PACKET = 3500
 

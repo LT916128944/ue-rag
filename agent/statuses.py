@@ -74,10 +74,12 @@ RUN_STATUS_LABELS = {
 }
 RUN_STATUSES = frozenset(RUN_STATUS_LABELS)
 
-# run 记录的 status 字段在收尾**之前**还有两个英文在途标记：`[事实]` `_RunState.__init__` 写
+# run 记录的 status 字段在收尾**之前**还有英文在途标记：`[事实]` `_RunState.__init__` 写
 # "running"、Ctrl-C 分支写 "interrupted"。它们与 WINDOW_STATES 的成员同值，所以不重复登记进
 # all_statuses()（并集里本来就有）；这里单独点名，是为了让「run 记录的 status 能取哪些值」有出处。
-RUN_RECORD_INFLIGHT = frozenset({"running", "interrupted"})
+# "orphaned" 只出现在 run 记录上（超 30 分钟无心跳，agent/run_guard.py），不是窗口状态，
+# 也不进五个中文结论。扫描面要额外并上这张表，否则赋值会被当成未登记状态。
+RUN_RECORD_INFLIGHT = frozenset({"running", "interrupted", "orphaned"})
 
 # ---------------------------------------------------------------------------
 # 2) 窗口状态：data/runs/<run_id>.json 的 windows[*].state，以及 window_state 事件的 state。

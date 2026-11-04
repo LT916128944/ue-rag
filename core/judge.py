@@ -1,10 +1,12 @@
 # core/judge.py
 """真裁判。返回 {ok, kind, summary, errors:[{file, line, message}]}。"""
+import contextlib
 import json
 import re
 
 from config import UE_ENGINE_ROOT, UE_EXEC_MODE, UE_MCP_TIMEOUT, UE_PROJECT
-from core.editor_exec import MOCK_ACTORS, exec_tool
+from core import editor_exec
+from core.editor_exec import MOCK_ACTORS
 
 _ERROR_C = re.compile(r"error C\d+")
 _FATAL = re.compile(r"fatal error", re.I)
@@ -106,7 +108,7 @@ def _box_mismatches(loc: dict, box: dict, tolerance: float = 1.0) -> list[str]:
 
 
 def _find_unique_actor(name: str, task: dict) -> tuple[str, dict | None]:
-    found = exec_tool(
+    found = editor_exec.exec_tool(
         _SCENE_TOOLSET,
         "find_actors",
         {"name": name, "tag": "", "collision_channels": []},
@@ -136,7 +138,7 @@ def _read_actor_location(spec: dict, ref: str, task: dict) -> tuple[dict | None,
     toolset = spec.get("toolset") or _ACTOR_TOOLSET
     args = dict(spec.get("args") or {})
     args["actor"] = {"refPath": ref}
-    called = exec_tool(toolset, tool, args, task=task)
+    called = editor_exec.exec_tool(toolset, tool, args, task=task)
     if not called.get("ok"):
         return None, _result(False, "editor_assert", "读工具失败", [{"file": "", "line": 0, "message": str(called.get("error"))}])
     loc = _location(called.get("data"))
@@ -259,7 +261,7 @@ def _editor_assert(spec: dict, task: dict) -> dict:
             return error
         args["actor"] = {"refPath": ref}
 
-    called = exec_tool(toolset, tool, args, task=task)
+    called = editor_exec.exec_tool(toolset, tool, args, task=task)
     if not called.get("ok"):
         return _result(False, "editor_assert", "读工具失败", [{"file": "", "line": 0, "message": str(called.get("error"))}])
     return _compare_location(spec, _location(called.get("data")), "editor")
@@ -296,7 +298,7 @@ def _widget_compiled(ref: str, data) -> dict:
         message = json.dumps(data, ensure_ascii=False) if data not in (None, "") else "CompileWidgetBlueprint 返回失败"
         return _result(False, "blueprint_compile", "控件图编译失败", [{"file": ref, "line": 0, "message": message}])
     package = str(ref).split(".", 1)[0]
-    saved = exec_tool(
+    saved = editor_exec.exec_tool(
         _ASSET_TOOLSET,
         "save_assets",
         {"asset_paths": [package]},
@@ -320,7 +322,7 @@ def _blueprint_compile(spec: dict, task: dict) -> dict:
     tool = str(spec.get("tool") or "compile_blueprint")
     toolset = str(spec.get("toolset") or _BP_TOOLSET)
     arg = "widgetBlueprint" if tool == _WIDGET_COMPILE else "blueprint"
-    called = exec_tool(
+    called = editor_exec.exec_tool(
         toolset,
         tool,
         {arg: {"refPath": ref}},
@@ -391,21 +393,78 @@ def cpp_build_verdict(outcome: dict) -> dict:
 def _cpp_build() -> dict:
     if UE_EXEC_MODE == "mock":
         return _result(True, "cpp_build", "mock")
-    from core.editor_launch import close_editor
-    closed = close_editor()
-    if not closed.get("ok"):
-        message = str(closed.get("note") or "编辑器未能关闭")
-        return _result(False, "cpp_build", message, [{"file": "", "line": 0, "message": message}])
+    # 全局编译锁：UBT 并行必崩（20261028-171355：两扇 solve 并行编译 → exit 6
+    # Unhandled aggregate exceptions）。同一时刻只许一个编译进程，等锁有上限。
+    with _build_lock():
+        from core.editor_launch import close_editor
+        closed = close_editor()
+        if not closed.get("ok"):
+            message = str(closed.get("note") or "编辑器未能关闭")
+            return _result(False, "cpp_build", message, [{"file": "", "line": 0, "message": message}])
+        try:
+            argv = cpp_build_argv()
+        except RuntimeError as exc:
+            return _result(False, "cpp_build", str(exc), [{"file": "", "line": 0, "message": str(exc)}])
+        from core.build_job import run_command
+        try:
+            outcome = run_command(argv, UE_MCP_TIMEOUT)
+        except OSError as exc:
+            verdict = _result(False, "cpp_build", str(exc), [{"file": "", "line": 0, "message": str(exc)}])
+            _record_build(verdict)
+            return verdict
+        verdict = cpp_build_verdict(outcome)
+        _record_build(verdict)
+        return verdict
+
+
+@contextlib.contextmanager
+def _build_lock(timeout_seconds: float = 1800.0):
+    """跨进程互斥的编译锁。拿不到就等（编译一跑几分钟，等待是正常态），超时抛 RuntimeError。"""
+    import time
+
+    from config import DATA_DIR
+
+    path = DATA_DIR / "build.lock"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    handle = path.open("a+")
+    locked = False
+    deadline = time.time() + timeout_seconds
     try:
-        argv = cpp_build_argv()
-    except RuntimeError as exc:
-        return _result(False, "cpp_build", str(exc), [{"file": "", "line": 0, "message": str(exc)}])
-    from core.build_job import run_command
+        while True:
+            try:
+                import msvcrt
+
+                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+                locked = True
+                break
+            except OSError:
+                if time.time() >= deadline:
+                    raise RuntimeError("编译锁等待超时（1800s）：另一场编译还没结束")
+                time.sleep(5.0)
+        yield
+    finally:
+        if locked:
+            try:
+                import msvcrt
+
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+            except OSError:
+                pass
+        handle.close()
+
+
+def _record_build(verdict: dict) -> None:
+    """执行面每次真编译都落 last_cpp_build.json：get_build_error 才读得到（20261028 P0-3）。
+    mock 模式不落，别把「mock」当成真实编译记录。"""
+    if UE_EXEC_MODE == "mock":
+        return
     try:
-        outcome = run_command(argv, UE_MCP_TIMEOUT)
-    except OSError as exc:
-        return _result(False, "cpp_build", str(exc), [{"file": "", "line": 0, "message": str(exc)}])
-    return cpp_build_verdict(outcome)
+        from core.contract_tools import record
+
+        record(verdict)
+    except Exception:
+        pass
 
 
 def _fail_count(data) -> int | None:
@@ -620,7 +679,7 @@ def _automation(spec: dict, task: dict) -> dict:
     if _using_monolith():
         return _monolith_automation(spec, task)
     if not _discovered:
-        discovered = exec_tool(_AUTO_TOOLSET, "DiscoverTests", {}, task=task, timeout=UE_MCP_TIMEOUT)
+        discovered = editor_exec.exec_tool(_AUTO_TOOLSET, "DiscoverTests", {}, task=task, timeout=UE_MCP_TIMEOUT)
         if not discovered.get("ok"):
             message = str(discovered.get("error") or "")
             summary = "DiscoverTests 失败" + (f"：{message}" if message else "")
@@ -629,7 +688,7 @@ def _automation(spec: dict, task: dict) -> dict:
     filt = spec.get("filter") or spec.get("filterExpression") or ""
     if not filt:
         return _result(False, "automation", "缺少 filter", [{"file": "", "line": 0, "message": "automation 没有 filter"}])
-    ran = exec_tool(
+    ran = editor_exec.exec_tool(
         _AUTO_TOOLSET,
         "RunTestsByFilter",
         {"filterExpression": filt},
@@ -639,7 +698,7 @@ def _automation(spec: dict, task: dict) -> dict:
     if not ran.get("ok"):
         message = str(ran.get("error"))
         return _result(False, "automation", "RunTestsByFilter 失败", [{"file": "", "line": 0, "message": message}])
-    results = exec_tool(_AUTO_TOOLSET, "GetTestResults", {}, task=task, timeout=UE_MCP_TIMEOUT)
+    results = editor_exec.exec_tool(_AUTO_TOOLSET, "GetTestResults", {}, task=task, timeout=UE_MCP_TIMEOUT)
     if not results.get("ok"):
         message = str(results.get("error"))
         return _result(False, "automation", "GetTestResults 失败", [{"file": "", "line": 0, "message": message}])
@@ -685,3 +744,4 @@ def judge(spec: dict, task: dict | None = None) -> dict:
     if kind == "automation":
         return _automation(spec, task)
     return _result(False, kind or "unknown", "未知裁判", [{"file": "", "line": 0, "message": f"unknown kind {kind}"}])
+

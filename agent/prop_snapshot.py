@@ -46,9 +46,27 @@ def capture_props(run_id: str, ref: str, fields: dict, *, kind: str = "props") -
 def _write_back(ref: str, item: dict) -> None:
     from core.editor_exec import exec_tool
 
-    task = {"allow_writes": ["set_properties", "set_actor_transform"], "save": False, "pie": False}
+    task = {"allow_writes": ["set_properties", "set_actor_transform", "set_scalar_parameter", "remove_from_scene"],
+            "save": False, "pie": False}
     fields = item.get("fields") if isinstance(item.get("fields"), dict) else {}
-    if item.get("kind") == "location" or isinstance(fields.get("location"), dict):
+    kind = str(item.get("kind") or "")
+    if kind == "scalar":
+        # U4：材质实例标量参数写回旧值。parameter/value 都在才写，缺了不动。
+        name = fields.get("parameter")
+        value = fields.get("value")
+        if isinstance(name, str) and name.strip() and isinstance(value, (int, float)):
+            exec_tool(
+                "editor_toolset.toolsets.material_instance.MaterialInstanceTools",
+                "set_scalar_parameter",
+                {"instance": {"refPath": ref}, "name": name, "value": float(value)},
+                task=task,
+            )
+        return
+    if kind == "created":
+        # U4：这扇新建出来的 Actor，失败时删掉（还原到放置前的场景）。
+        _remove_created(ref, task)
+        return
+    if kind == "location" or isinstance(fields.get("location"), dict):
         loc = fields.get("location") if isinstance(fields.get("location"), dict) else fields
         exec_tool(
             _ACTOR,
@@ -72,20 +90,57 @@ def _write_back(ref: str, item: dict) -> None:
     )
 
 
+def _remove_created(name: str, task: dict) -> None:
+    """按名字找这次放置出来的实例，恰好一个才删。找不到/多个都不动（宁可留待人工）。"""
+    from agent.sequence import _actor_refs
+    from core.editor_exec import exec_tool
+
+    found = exec_tool(
+        "editor_toolset.toolsets.scene.SceneTools",
+        "find_actors",
+        {"name": name, "tag": "", "collision_channels": []},
+        task={"allow_writes": [], "save": False, "pie": False},
+    )
+    if not found.get("ok"):
+        return
+    refs = _actor_refs(found.get("data"))
+    if len(refs) != 1:
+        return
+    exec_tool(
+        "editor_toolset.toolsets.scene.SceneTools",
+        "remove_from_scene",
+        {"actor": {"refPath": refs[0]}},
+        task=task,
+    )
+
+
 def restore_props(run_id: str, *, writer=None) -> list[str]:
-    """同一 ref 出现多次就不写回。写回后按任务策略保存关卡（缺省保存）。"""
+    """写回快照里的字段；kind=created 的条目是这扇新建的 Actor，删除是安全的，重复出现也删。
+
+    字段写回维持旧规则：同一 ref 出现多次就不写回（怕用旧值盖新值）。写回后按任务策略保存关卡。"""
     rows = _load(run_id)
     seen: dict[str, dict] = {}
     ambiguous: set[str] = set()
+    created: list[str] = []
     for item in rows:
         ref = str(item.get("ref") or "")
         if not ref:
+            continue
+        if str(item.get("kind") or "") == "created":
+            if ref not in created:
+                created.append(ref)
             continue
         if ref in seen:
             ambiguous.add(ref)
             continue
         seen[ref] = item
     restored = []
+    for ref in created:
+        if writer is not None:
+            writer(ref, {"kind": "created", "fields": {}})
+        else:
+            _write_back(ref, {"kind": "created", "fields": {}})
+        restored.append(ref)
     for ref, item in seen.items():
         if ref in ambiguous:
             continue

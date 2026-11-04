@@ -6,13 +6,40 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent
 
 
+# 进程里显式钉住的 mock 不得被 .env 覆盖。
+# UE_EXEC_MODE 是「这次进程要不要真连编辑器」的开关：离线检查在 import config 之前
+# 就把它设成 mock。override=True 会把它盖回 .env 里的 real，于是自称 mock 的检查
+# 一路走到真编辑器（20261103 实证：check_dsh_bridge 打到 127.0.0.1:8000，报
+# "EnemySpawnPoint_1 is not a valid object path"）。子进程（_cli 起的 dsh_cli.py）
+# 继承 os.environ，本来就带着 mock，同样需要这层保护才不会被自己的 .env 翻回 real。
+#
+# 只保护 mock 这一个方向，不是「进程环境变量一律优先」：反方向（进程是 real、.env 是
+# mock）仍以 .env 为准。否则 shell 里残留一个 UE_EXEC_MODE=mock 就会让真任务静默
+# 跑在假执行器上产生假成功——那是比「检查误连编辑器」更坏的失败。
+_MOCK_ONLY_PINNED = ("UE_EXEC_MODE",)
+
+
+def _pinned_mock() -> dict:
+    """取出进程里被显式钉成 mock 的键，留给 _load_env 在读完 .env 后放回去。"""
+    return {
+        key: os.environ[key]
+        for key in _MOCK_ONLY_PINNED
+        if str(os.environ.get(key) or "").strip().lower() == "mock"
+    }
+
+
 def _load_env(path: Path) -> None:
     """读 ue-rag/.env。编辑器内嵌 Python 没有 dotenv 时用最小解析。"""
     if not path.is_file():
         return
+    pinned = _pinned_mock()
     try:
         from dotenv import load_dotenv
-        load_dotenv(path)
+        # 20261028：override=True。系统/User 级环境变量里的旧 DEEPSEEK_API_KEY 会把
+        # .env 的新 key 盖掉（load_dotenv 默认不覆盖），理解器因此一直 401。以 .env 为准。
+        load_dotenv(path, override=True)
+        # 除 _MOCK_ONLY_PINNED 以外都以上面的 .env 为准，这里只把显式钉成 mock 的键放回去。
+        os.environ.update(pinned)
         return
     except ImportError:
         pass
@@ -24,7 +51,44 @@ def _load_env(path: Path) -> None:
         key = key.strip()
         value = value.strip().strip('"').strip("'")
         if key and value:
-            os.environ.setdefault(key, value)
+            os.environ[key] = value
+    os.environ.update(pinned)
+
+
+ENV_PATH = PROJECT_ROOT / ".env"
+
+
+def env_value(env_path: Path, key: str) -> str | None:
+    """每次读 .env 里的原文。键不在文件里返回 None；在但为空返回空字符串。
+
+    标准库实现，config 不得引用 core（架构边界）；core 反过来从这里取。"""
+    if not env_path.is_file():
+        return None
+    try:
+        lines = env_path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return None
+    found: str | None = None
+    seen = False
+    for line in lines:
+        text = line.strip()
+        if not text or text.startswith("#") or "=" not in text:
+            continue
+        name, value = text.split("=", 1)
+        if name.strip() != key:
+            continue
+        seen = True
+        found = value.strip().strip('"').strip("'")
+    if not seen:
+        return None
+    return found
+
+
+def normalize_backend(raw: str | None) -> str:
+    """空字符串等于没写。非法拼写保留小写，交给选择层拒绝。"""
+    if raw is None or not str(raw).strip():
+        return "official"
+    return str(raw).strip().strip('"').strip("'").lower()
 
 
 def _env_str(name: str, default: str) -> str:
@@ -82,6 +146,14 @@ def allow_monolith_write() -> bool:
     """Monolith 其余命名空间的非只读 action。缺省 false。official 时不放行任何官方工具。"""
     return _env_bool("UE_ALLOW_MONOLITH_WRITE", False)
 
+
+def allow_python() -> bool:
+    """editor.run_python 的缺省放行（UE_ALLOW_PYTHON，缺省 false）。
+
+    任务上显式写 allow_python: false 的仍然拒绝——DSH 的写策略以 session_task.json
+    为唯一来源，.env 只是给多窗口/求解扇这类「任务上没写这个键」的路径一个缺省。"""
+    return _env_bool("UE_ALLOW_PYTHON", False)
+
 def default_save() -> bool:
     """任务级 save 缺省。全闭环默认允许保存；UE_DEFAULT_SAVE=false 退回只改内存。"""
     return _env_bool("UE_DEFAULT_SAVE", True)
@@ -110,22 +182,33 @@ _load_env(PROJECT_ROOT / ".env")
 
 def editor_backend() -> str:
     """每次读 .env。键不在文件里才看进程环境变量。空字符串等于没写，缺省 official。"""
-    from core.graph_write_policy import _ENV, env_value, normalize_backend
-
-    raw = env_value(_ENV, "UE_EDITOR_BACKEND")
+    raw = env_value(ENV_PATH, "UE_EDITOR_BACKEND")
     if raw is None:
         raw = os.getenv("UE_EDITOR_BACKEND")
     return normalize_backend(raw)
 
 
 def _file_or_env(name: str, default: str) -> str:
-    from core.graph_write_policy import _ENV, env_value
-
-    raw = env_value(_ENV, name)
+    raw = env_value(ENV_PATH, name)
     if raw is None or not str(raw).strip():
         raw = os.getenv(name)
     if raw is None or not str(raw).strip():
         return default
+    return str(raw).strip().strip('"').strip("'")
+
+
+def llm_base_url() -> str:
+    """每次读 .env。模型 API 地址（OpenAI 兼容）。缺省 DeepSeek 官方。"""
+    return _file_or_env("UE_LLM_BASE_URL", "https://api.deepseek.com")
+
+
+def eval_base_url() -> str:
+    """评测专用 API 地址。没写跟随 UE_LLM_BASE_URL，再缺省 DeepSeek 官方。"""
+    raw = env_value(ENV_PATH, "UE_EVAL_BASE_URL")
+    if raw is None or not str(raw).strip():
+        raw = os.getenv("UE_EVAL_BASE_URL")
+    if raw is None or not str(raw).strip():
+        return llm_base_url()
     return str(raw).strip().strip('"').strip("'")
 
 

@@ -10,44 +10,36 @@ import re
 from datetime import date
 from pathlib import Path
 
+
+def _actions_judge_by_action() -> dict:
+    """P1-6：动作→裁判口径由 agent/actions.py 单一声明推导。"""
+    from agent.actions import JUDGE_BY_ACTION
+
+    return dict(JUDGE_BY_ACTION)
+
+
 EVIDENCE_KINDS = ("cpp_build", "blueprint_compile", "editor_assert", "automation", "widget_graph", "manual")
 STOP_REASONS = ("ok", "paused", "retry_exceeded", "read_stall", "judge_failed", "unresolved",
                 "no_evidence")
 _CLIP = 240
 _CRITERIA_LIMIT = 12
 
+# 复合动作扇：执行时自带关卡内容核对（editor_assert 副判词）与 automation 收口，
+# 它们能当 editor_assert 条款的证据窗口（见 _window_ids_for）。
+_COMPOUND_EVIDENCE_ACTIONS = frozenset({"implement_shooter", "implement_grenade", "solve"})
+
 # 只记「动作类型 → 裁判口径」的对应关系，不含任何具体玩法。
-_KIND_BY_ACTION = {
-    "compile_project": "cpp_build",
-    "edit_cpp": "cpp_build",
-    "compile_blueprint": "blueprint_compile",
-    "edit_widget_blueprint": "blueprint_compile",
-    # create_level 的口径与 catalog._VERIFY 一致：「/Game 下关卡资产存在、该关卡已成为当前关卡」，
-    # 是编辑器只读断言（窗口自带 test.judge_kind="editor_assert"）。漏了这行 ⇒ build_criteria 产不出条款、
-    # _window_ids_for 也绑不上，一个真建成关卡的 run 条款数会是 0，集成矩阵 checked 为空 ⇒ 假失败。
-    "create_level": "editor_assert",
-    "open_level": "editor_assert",
-    # T8 回滚记录（20261024）：create_widget_blueprint / bind_blueprint 这两处**故意不补**。
-    # 它们是 DIRECT_ACTIONS，但 sequence 侧还没声明判词（_create_widget_blueprint 与 bind_slot 段
-    # 都不产出 judge_kind/test；只有 _create_level 产 editor_assert）。先加映射会造出一条永远
-    # passed=False 的条款：范围被记「条款未过」、集成记「矩阵未全过」，把「没判过」说成「做坏了」。
-    # 等 parity 守卫在 producer 侧补上判词后，这里再一起加（两侧必须同时动）。
-    "move_actor": "editor_assert",
-    "launch_editor": "editor_assert",
-    "judge_pickup": "editor_assert",
-    "check_pickup": "editor_assert",
-    "set_pickable": "editor_assert",
-    "place_actor": "editor_assert",
-    "place_blueprint": "editor_assert",
-    "query_actor": "editor_assert",
-    "run_automation_test": "automation",
-    "implement_shooter": "automation",
-    "check_platform_hud": "editor_assert",
-    "set_scalar_param": "blueprint_compile",
-    "query_material": "editor_assert",
-    "place_batch": "editor_assert",
-    "remove_batch": "editor_assert",
-}
+# P1-6 起由 agent/actions.py 单一声明推导；create_level 的口径与 catalog._VERIFY 一致：
+# 「/Game 下关卡资产存在、该关卡已成为当前关卡」，是编辑器只读断言（窗口自带
+# test.judge_kind="editor_assert"）。漏了这行 ⇒ build_criteria 产不出条款、
+# _window_ids_for 也绑不上，一个真建成关卡的 run 条款数会是 0，集成矩阵 checked 为空 ⇒ 假失败。
+# T8 的两个缺口已在 U1（20261027 升级计划）补上：producer 侧先声明判词，映射两侧同时动——
+# bind_blueprint 在 sequence._bind_evidence 用一次 find_assets 只读核对唯一蓝图路径（editor_assert）；
+# create_widget_blueprint 在 _create_widget_blueprint 保存后跑 blueprint_compile 编译裁判。
+# PENDING_JUDGE 的两条登记已按同一批移除（check_catalog_parity.py）。
+# solve 扇只由代码补窗给出（brief.materialize_scopes），收口判据固定走 automation；
+# 求解产不出过滤器时诚实失败，不编编辑器断言。apply_spec 自 P0-3 起写完强制编译，收口 cpp_build。
+_KIND_BY_ACTION = dict(_actions_judge_by_action())
 
 _KIND_TEXT = {
     "cpp_build": "C++ 编译通过，退出码 0 且没有 error C",
@@ -122,7 +114,11 @@ def _window_ids_for(kind: str, windows: list, filt: str = "") -> list[str]:
     """哪些窗口能证明这条 kind。空列表=本 run 没有任何窗口能证明它（20261021-195220：
     W5 的「失败数 0」勾到了讲关卡内容的条款，因为条款不记归属）。
     控件图条款的证据窗口是改控件图那些扇——它们按动作表归在 blueprint_compile 下，
-    这里单独认一遍，否则 widget_graph 永远绑不上、只能靠 kind 全量覆盖。"""
+    这里单独认一遍，否则 widget_graph 永远绑不上、只能靠 kind 全量覆盖。
+    editor_assert 条款另认复合动作扇（implement_shooter / implement_grenade / solve）：
+    它们跑的过程中真的做关卡内容核对并落 editor_assert 副判词
+    （20261028-151850：L1 把「关卡里有 FpsGrenadePickup…」写成 editor_assert 条款，
+    只绑到 launch_editor 扇，复合扇收口后条款永远 false）。"""
     out: list[str] = []
     for window in windows or []:
         if not isinstance(window, dict):
@@ -134,6 +130,8 @@ def _window_ids_for(kind: str, windows: list, filt: str = "") -> list[str]:
         if kind == "widget_graph":
             if action != "edit_widget_blueprint":
                 continue
+        elif kind == "editor_assert" and action in _COMPOUND_EVIDENCE_ACTIONS:
+            pass
         elif _KIND_BY_ACTION.get(action) != kind:
             continue
         if kind == "automation" and filt:
@@ -177,6 +175,35 @@ def build_criteria(criteria: list | None = None, windows: list | None = None) ->
         if row is not None:
             rows.append(row)
     if rows:
+        # 复合动作扇（implement_* / solve）自带 automation_filter：L1 合同没给对应
+        # automation 条款时补一行，否则复合扇的收口裁判没有条款可勾，
+        # 整句会被误判「部分完成」（20261028-151850 的 W3 就会这样收场）。
+        for window in windows:
+            action = str(window.get("action") or "")
+            if action not in _COMPOUND_EVIDENCE_ACTIONS:
+                continue
+            filt = str(window.get("automation_filter") or "").strip()
+            wid = str(window.get("id") or "").strip()
+            if not filt or not wid:
+                continue
+            covered = any(
+                isinstance(item, dict)
+                and str(item.get("evidence_kind") or "") == "automation"
+                and (
+                    wid in [str(one) for one in (item.get("windows") or [])]
+                    or str(item.get("filter") or "") == filt
+                )
+                for item in rows
+            )
+            if covered:
+                continue
+            row = _criterion_row(
+                {"evidence_kind": "automation", "filter": filt, "text": f"{filt} 失败数为 0"},
+                windows,
+                seen_ids,
+            )
+            if row is not None:
+                rows.append(row)
         return _bind_windows(rows, windows)
     # 没有 L1 合同（规则 / 已学 / 老规划者路径）时，才按窗口动作类型兜底
     seen_kinds: set[str] = set()
@@ -195,6 +222,8 @@ def build_criteria(criteria: list | None = None, windows: list | None = None) ->
 def apply_judge(criteria: list | None, judge: dict | None) -> list[dict]:
     """只有 judge.ok 且 kind 等于 evidence_kind 才改成通过。manual 保持 false。
     judge 带了 window 时，只有条款的 windows 列了它才算证明得动；没列的条款不动。
+    synthetic 判词（launch_editor：只证明「端口通了」）只放行证明窗口恰好只有它自己的条款——
+    宽绑定的条款混着别的证据窗口，端口连通证明不了内容（20261027-180955 的假通过）。
     automation 还要求真正跑到了测试：跑了 0 个测试的「失败数 0」不证明任何条款。"""
     out = [dict(item) for item in (criteria or []) if isinstance(item, dict)]
     if not isinstance(judge, dict) or judge.get("ok") is not True:
@@ -203,6 +232,7 @@ def apply_judge(criteria: list | None, judge: dict | None) -> list[dict]:
     if kind not in EVIDENCE_KINDS:
         return out
     wid = str(judge.get("window") or "").strip()
+    synthetic = judge.get("synthetic") is True
     tests = judge.get("tests")
     for item in out:
         if str(item.get("evidence_kind") or "") == "manual":
@@ -212,6 +242,10 @@ def apply_judge(criteria: list | None, judge: dict | None) -> list[dict]:
         owners = item.get("windows")
         if wid and isinstance(owners, list) and wid not in [str(one) for one in owners]:
             continue
+        if synthetic:
+            # 只证明自己那一扇：条款的证明窗口必须恰好只有它，宽绑定一律不动
+            if not wid or [str(one) for one in owners or []] != [wid]:
+                continue
         if kind == "automation" and isinstance(tests, list):
             if not tests:
                 continue

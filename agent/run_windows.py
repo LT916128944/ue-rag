@@ -264,6 +264,7 @@ class _RunState:
         self.data = {
             "run_id": run_id, "query": query, "source": source,
             "started_at": _now(), "updated_at": _now(), "status": "running",
+            "pid": os.getpid(), "heartbeat_at": _now(),
             "review": review or {}, "brief": brief, "scopes": scopes or [],
             "windows": {}, "artifacts": {}, "integration": {},
         }
@@ -305,6 +306,8 @@ class _RunState:
         fresh = dict(data)
         fresh["status"] = "running"
         fresh["started_at"] = fresh.get("started_at") or _now()
+        fresh["pid"] = os.getpid()
+        fresh["heartbeat_at"] = _now()
         windows = fresh.get("windows") or {}
         for entry in windows.values():
             if not isinstance(entry, dict):
@@ -339,6 +342,8 @@ class _RunState:
 
     def save(self) -> None:
         self.data["updated_at"] = _now()
+        self.data["pid"] = os.getpid()
+        self.data["heartbeat_at"] = self.data["updated_at"]
         self.path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self.path.with_suffix(self.path.suffix + ".tmp")
         tmp.write_text(json.dumps(self.data, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -738,7 +743,7 @@ def _run_window(entry: dict, state: _RunState, query: str, artifacts: dict, even
         restored = _restore_source(state.run_id, entry["id"], snapshot)
         if restored:
             summary["restored"] = restored
-    if not summary.get("ok") and not keep and action in ("set_pickable", "move_actor"):
+    if not summary.get("ok") and not keep and action in ("set_pickable", "move_actor", "place_batch", "set_scalar_param"):
         try:
             from agent.prop_snapshot import restore_props
 
@@ -1204,6 +1209,19 @@ def _delivery_acceptance_item(state: _RunState) -> dict:
         shown = "、".join(str(scope.get("id") or "") for scope in gaps[:4])
         return {"item": "交付验收", "ok": None,
                 "note": f"有范围没交付，交付验收不适用（见缺口）：{shown}"}
+    # 20261028-155214 假成功守卫：范围有窗但部分交付项没被任何窗口接住——
+    # 这是「声称了却没交付」，判 False，不许静默丢给全绿矩阵。
+    partial = [
+        scope for scope in (state.data.get("scopes") or [])
+        if isinstance(scope.get("partial_gap"), dict) and scope.get("partial_gap", {}).get("deliverables")
+    ]
+    if partial:
+        bits = []
+        for scope in partial[:4]:
+            items = [str(one) for one in (scope["partial_gap"].get("deliverables") or [])][:2]
+            bits.append(f"{scope.get('id')}（{'；'.join(items)}）")
+        return {"item": "交付验收", "ok": False,
+                "note": "有交付项没被任何窗口接住：" + "；".join(bits)}
     if not rows:
         return {"item": "交付验收", "ok": None, "note": "本次没有产出任何条款，交付验收不适用"}
     failed = [str(item.get("id") or "") for item in rows if not item.get("passed")]
@@ -1663,6 +1681,8 @@ def _write(path, query: str, source: str, rows: list[dict], integrated: dict, *,
     for row in rows:
         lines.append(f"## {row['id']}. {row['title']}")
         lines.append(f"- 动作：{row.get('action') or '无'}")
+        if row.get("supplement"):
+            lines.append("- 来源：补扇")
         deps = row.get("depends_on") or []
         lines.append("- 依赖：" + ("、".join(deps) if deps else "无"))
         lines.append(
@@ -1702,6 +1722,9 @@ def _rows(state: _RunState) -> list[dict]:
             "pie": bool((entry.get("window") or {}).get("pie", default_pie())),
             "status": _MD_STATUS.get(entry.get("state"), str(entry.get("state"))),
             "result": result,
+            "supplement": bool(
+                entry.get("supplement") or (entry.get("window") or {}).get("supplement")
+            ),
         })
     return rows
 
@@ -1855,6 +1878,45 @@ def excused_dispose_parents(entries) -> set[str]:
         dep for dep, kids in children.items()
         if kids and all(item.get("state") == "done" and item.get("ok") for item in kids)
     }
+
+
+_EVIDENCE_SKIP_ACTIONS = frozenset({
+    "launch_editor", "query_actor", "query_material", "run_automation_test",
+    "run_automation_tests", "judge_pickup", "check_pickup", "integrate_verify",
+    "dispose_residual", "compile_project", "open_level",
+})
+_WRITE_EDITOR_KINDS = frozenset({"editor_assert", "blueprint_compile", "widget_graph"})
+
+
+def _window_change_evidence(entry: dict) -> bool:
+    """这一扇有没有留下改动证据。
+
+    spec_files 非空且编译裁判 ok，或写类编辑器裁判 {ok, kind} 对上。
+    solve 扇只认前者：automation 通过不算改过东西。
+    只读/观察类动作的判词也不算。
+    """
+    detail = entry.get("detail") if isinstance(entry.get("detail"), dict) else {}
+    action = str(entry.get("action") or "")
+    spec_files = [item for item in (detail.get("spec_files") or []) if isinstance(item, dict)]
+    build = detail.get("build") if isinstance(detail.get("build"), dict) else {}
+    if spec_files and build.get("ok") is True and str(build.get("kind") or "cpp_build") == "cpp_build":
+        return True
+    if action == "solve" or action in _EVIDENCE_SKIP_ACTIONS:
+        return False
+    for judge in (build, detail.get("test")):
+        if not isinstance(judge, dict):
+            continue
+        if judge.get("ok") is True and str(judge.get("kind") or "") in _WRITE_EDITOR_KINDS:
+            return True
+    return False
+
+
+def _scope_has_change_evidence(state: _RunState, scope: dict) -> bool:
+    for wid in scope.get("window_ids") or []:
+        entry = state.data["windows"].get(str(wid))
+        if isinstance(entry, dict) and _window_change_evidence(entry):
+            return True
+    return False
 
 
 def execute_windows(query: str, complete=None, echo=print, emit=None, planned=None, windows=None,
@@ -2204,6 +2266,9 @@ def execute_windows(query: str, complete=None, echo=print, emit=None, planned=No
         named.append("有窗口暂停：" + "、".join(
             f"{item.get('id')}（{_entry_note(item)}）" for item in paused_now[:6]
         ))
+    stitch_why = str(state.data.get("stitch_unresolved") or "")
+    if "不补" in stitch_why:
+        named.append(stitch_why)
     if named:
         # 只要有没交付/没完成/失败/暂停，就一律点名（不再被 status == "成功" 挡住）：
         # 缺口范围无论先前 status 是什么都要把 note 补上，暂停扇也不许一个字不提。
@@ -2252,9 +2317,19 @@ def execute_windows(query: str, complete=None, echo=print, emit=None, planned=No
                         (str(scope.get("pending_note") or "") + " " if scope.get("pending_note") else "")
                         + str(verdict.get("reason"))
                     )
+            evidence_gap = ""
+            if ledger_status == "done" and not _scope_has_change_evidence(state, scope):
+                ledger_status = "partial"
+                if mark == "完成":
+                    mark = "部分完成"
+                evidence_gap = "没有改动证据（源码未落盘编译，也没有写类编辑器裁判）"
             bits.append(f"{scope.get('id')} {mark}")
             pending = [] if ledger_status == "done" else [str(item) for item in scope.get("deliverables") or []]
+            if evidence_gap:
+                pending.append(evidence_gap)
             note_scope = str(scope.get("pending_note") or "")
+            if evidence_gap:
+                note_scope = (note_scope + " " if note_scope else "") + evidence_gap
             if scope.get("external_dep"):
                 note_scope = (note_scope + " " if note_scope else "") + f"等待外部 {scope.get('external_dep')}"
             ledger_rows.append({
@@ -2401,6 +2476,20 @@ def execute_windows(query: str, complete=None, echo=print, emit=None, planned=No
     except Exception:
         stop = "ok" if ok else "judge_failed"
     events.emit("run_end", status=status, ok=ok, stop_reason=stop)
+    if ok:
+        # U6：每次成功 run 收尾做一次零模型蒸馏计数（dry_run 只统计、不落盘、不调教师），
+        # distill_candidate 事件让统计页看得到候选池在随真实 run 增长。失败不追尾。
+        try:
+            from agent.distill import run_distill
+
+            report = run_distill(dry_run=True)
+            events.emit(
+                "distill_candidate", status="shadow", dry_run=True,
+                events=report.get("events"), runs=report.get("runs"),
+                counts=json.dumps(report.get("counts") or {}, ensure_ascii=False)[:200],
+            )
+        except Exception:
+            pass
     state.data["integration"] = integrated
     state.data["status"] = "interrupted" if interrupted else status
     state.save()
@@ -2727,6 +2816,32 @@ def _decompose_complete(messages):
     return response.choices[0].message.content or ""
 
 
+def _needs_brief(planned: dict, query: str) -> bool:
+    """要不要出任务书。确定性拆句（hud-rules 这类纯规则链）跳过人审门。
+
+    人审门的存在意义是审「模型决策的范围」。规则链的窗口是代码写死的固定因果链
+    （上面 launch_editor → open_level → create → edit → check），既没有模型裁量，
+    也没有未着落的半句可审；再叫一次生成器只是白烧 token，还会在生成器返回非 JSON 时
+    多一条「写不出任务书」的噪声（20261029-123341/123344 两次实测）。
+    只对已知的确定性来源生效，其余来源一字不动。
+    """
+    source = str((planned or {}).get("source") or "")
+    if source in _DETERMINISTIC_PLAN_SOURCES:
+        windows = (planned or {}).get("windows") or []
+        # 只有每扇都真实可跑才跳过；有暂停/不可实现的扇仍走人审门。
+        if windows and all(w.get("realizable") and not w.get("waiting_external") for w in windows):
+            print("确定性拆句（" + source + "）：窗口是固定因果链，跳过任务书人审门。", flush=True)
+            return False
+    from agent.brief import needs_brief
+
+    return needs_brief(query, (planned or {}).get("windows") or [], (planned or {}).get("intent_full"))
+
+
+# 只列「窗口由代码写死的固定因果链」这一种来源。手写规则（rules）仍按原口径走人审门：
+# 它们可能拼出跨域的多扇组合，保留人审不动。
+_DETERMINISTIC_PLAN_SOURCES = frozenset({"hud-rules"})
+
+
 def _run_query(query: str, board, echo, emit) -> tuple[int, Path | None]:
     """一句话入口：先看要不要任务书；窄任务直接进多窗口执行。
     面板在拆窗口之前就打开。检索模型的权重条不再占着最后一行，阶段写在主代理上。"""
@@ -2739,7 +2854,7 @@ def _run_query(query: str, board, echo, emit) -> tuple[int, Path | None]:
     try:
         planned = plan_windows(query)
         windows = planned.get("windows") or []
-        if needs_brief(query, windows, planned.get("intent_full")):
+        if _needs_brief(planned, query):
             if board is not None:
                 board.set_phase("正在写任务书")
                 board.set_review("审阅 1：任务书生成中")
@@ -2814,10 +2929,60 @@ def _run_query(query: str, board, echo, emit) -> tuple[int, Path | None]:
             board.set_phase("执行")
             if not board.running():
                 board.start()
+        windows = planned.get("windows") or []
+        if _only_paused_planner(windows):
+            # 20261028-185100 实测：理解器推不出 goal（「动作表里没有改射速的动作」——
+            # 这句话本身是对的）、规划者返回空清单，plan_windows 只留一扇暂停窗，
+            # 句子在快路径上撞死胡同（续接也是同一条路）。求解开着就把它交给受控
+            # 求解扇，与任务书物化路径（brief.materialize_scopes 的 zero_needs）同一条
+            # 兜底；求解关着保持原样。
+            fan = _fast_path_solve_windows(query)
+            if fan:
+                if board is not None and board.running():
+                    board.stop()
+                print("快路径没有窗口：交给受控求解扇（UE_SOLVER_ENABLED）。", flush=True)
+                planned = dict(planned)
+                planned["windows"] = fan
+                planned["source"] = "solver-fallback"
         return execute_windows(query, planned=planned, echo=echo, emit=emit, decide=_decide_window)
     finally:
         if board is not None and board.running():
             board.stop()
+
+
+def _only_paused_planner(windows: list) -> bool:
+    """规划者空清单时 plan_windows 只塞一扇 _paused 合成窗（action 空、blocked）。
+    这扇不是交付，是死胡同的牌子。"""
+    if not windows:
+        return True
+    return all(
+        isinstance(win, dict) and not str(win.get("action") or "").strip()
+        for win in windows
+    )
+
+
+def _fast_path_solve_windows(query: str) -> list[dict]:
+    """快路径零窗口的 solve 兜底（20261028-185100）。理解器与规划者都给不出窗口时，
+    求解开着就不许把句子停在「暂停」死胡同——交给受控求解扇，预算与写闸照旧。"""
+    try:
+        from agent.solver import solve_window, solver_enabled
+    except Exception:
+        return []
+    if not solver_enabled():
+        return []
+    scope = {
+        "id": "A",
+        "title": str(query or "").strip()[:80],
+        "deliverables": [],
+        "pending_note": "",
+        "depends_on": [],
+        "external_dep": "",
+        "windows": [],
+    }
+    try:
+        return [item for item in (solve_window(scope, query) or []) if isinstance(item, dict)]
+    except Exception:
+        return []
 
 
 def _record_declined_gaps(query: str, md, brief: dict, scopes, gaps: list[dict], emit) -> None:
@@ -2854,6 +3019,11 @@ def _record_declined_gaps(query: str, md, brief: dict, scopes, gaps: list[dict],
 
 def main(argv=None) -> None:
     sys.stdout.reconfigure(encoding="utf-8")
+    from agent.run_guard import attach_claimed_stdin, sweep_orphan_runs
+
+    if attach_claimed_stdin() == "busy":
+        print("输入已被另一个进程占用")
+        raise SystemExit(1)
     args = _parse_args(argv)
     print("多窗口。规划者只在快路径拆不开时开口。每扇单独跑，最后集成。")
     print("记录在 data/runs（含 .cli.jsonl 子窗口日志），事件在 data/events。"
@@ -2909,6 +3079,10 @@ def main(argv=None) -> None:
             print("没有可续接的 run。")
         else:
             _do_resume(data, board, echo, emit)
+
+    orphans = sweep_orphan_runs(RUNS_DIR)
+    if orphans:
+        print("无主 run 已留名：" + "、".join(orphans))
 
     last_run = None
     last_code = 0

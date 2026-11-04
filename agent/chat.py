@@ -7,7 +7,9 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 
 from dotenv import load_dotenv
 
-load_dotenv()
+# 20261028：不裸调 load_dotenv()——统一从 config.ENV_PATH 读（见 agent/nodes.py 同注）。
+from config import ENV_PATH as _UE_RAG_ENV_PATH
+load_dotenv(str(_UE_RAG_ENV_PATH), override=True)
 
 from core.llm_call import complete
 from core.rag_core import retrieve

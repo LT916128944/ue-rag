@@ -132,12 +132,74 @@ def _refused(task: dict, error: str) -> dict:
     return {"ok": False, "error": error, "policy": policy_snapshot(task)}
 
 
+def _is_user_widget_parent(args: dict) -> bool:
+    """这次 `create` 要建的是不是 Widget Blueprint。
+
+    official 的 BlueprintTools.create 用一个 `asset_type.refPath` 表达父类；父类落在
+    UMG 的 UserWidget 家族（含 UUserWidget 子类）时，monolith 的正确入口是
+    `ui.create_widget_blueprint`——`blueprint.create_blueprint` 写死 UBlueprint，
+    只会产出没有控件树的普通蓝图（20261029 实测：17KB 的普通 BP）。"""
+    raw = (args or {}).get("asset_type")
+    ref = ""
+    if isinstance(raw, dict):
+        ref = str(raw.get("refPath") or raw.get("path") or "")
+    elif raw is not None:
+        ref = str(raw)
+    text = ref.strip()
+    if not text:
+        return False
+    low = text.lower()
+    return "userwidget" in low or low.startswith("/script/umg.")
+
+
+def _monolith_widget_create(tool: str, args: dict, task: dict | None) -> dict | None:
+    """`create` 的控件图分支。不是 Widget 就返回 None，交回原路径。"""
+    if tool != "create" or not _is_user_widget_parent(args or {}):
+        return None
+    from backends.monolith import exec as monolith_exec
+
+    folder = str((args or {}).get("folder_path") or "/Game").rstrip("/")
+    name = str((args or {}).get("asset_name") or "").strip()
+    if not name:
+        return {"ok": False, "error": "没有资产名，不猜。"}
+    parent_raw = (args.get("asset_type") or {}).get("refPath")
+    parent = str(parent_raw or "").strip()
+    params = {"save_path": f"{folder}/{name}"}
+    if parent:
+        # monolith 的 parent_class 认短类名或 /Script/Mod.Class；/Script/UMG.UserWidget 原样可用。
+        params["parent_class"] = parent.rsplit(".", 1)[-1] if not parent.startswith("/Script/") else parent
+    result = monolith_exec("ui", "create_widget_blueprint", params, task=task or {})
+    if not result.get("ok"):
+        return {"ok": False, "error": str(result.get("error") or "创建 Widget Blueprint 失败")}
+    data = result.get("data") if isinstance(result.get("data"), dict) else {}
+    return {
+        "ok": True,
+        "data": {
+            "asset_path": str(data.get("asset_path") or f"{folder}/{name}"),
+            "success": True,
+            "widget": True,
+            "parent_class": str(data.get("parent_class") or parent),
+        },
+    }
+
+
 def exec_tool(toolset: str, tool: str, args: dict | None, *, task: dict | None = None, timeout: float | None = None) -> dict:
     """执行一个编辑器工具。返回完整 {ok, data|error}，不在这里截断。"""
-    from backends.select import official_refusal
+    from backends.select import current_backend, official_refusal
 
     blocked = official_refusal()
     if blocked:
+        # U3a：monolith 后端不笼统拒绝——已映射的原语走桥翻译，桥不认识才按原样拒绝。
+        # mock 模式不走桥（离线检查钉 official，但双保险）。
+        if current_backend() == "monolith" and UE_EXEC_MODE != "mock":
+            from core import monolith_bridge
+
+            widget_create = _monolith_widget_create(tool, args or {}, task)
+            if widget_create is not None:
+                return widget_create
+            handled, result = monolith_bridge.exec_bridge(tool, args or {}, task or {}, timeout)
+            if handled:
+                return result
         return {"ok": False, "error": blocked}
     task = task or {}
     args = args or {}

@@ -8,6 +8,7 @@ from config import (
     allow_material,
     allow_monolith_write,
     allow_niagara,
+    allow_python,
     allow_umg,
     task_flag,
 )
@@ -55,6 +56,10 @@ def write_block(namespace: str, action: str, task: dict | None = None) -> str:
         return "Monolith 无此命名空间"
     if name == "run_python":
         if task.get("allow_python") is True:
+            return ""
+        if task.get("allow_python") is None and allow_python():
+            # 任务上没写这个键时才看 .env 缺省；显式 false（DSH session_task.json
+            # 每次都写）永远优先，人关掉的口子环境变量打不开。
             return ""
         return "allow_python 未写，拒绝 run_python"
     if name in _PIE:

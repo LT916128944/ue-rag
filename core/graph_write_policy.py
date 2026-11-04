@@ -8,6 +8,9 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from config import ENV_PATH as _ENV
+from config import env_value, normalize_backend
+
 BP_WRITES = {
     "write_graph_dsl",
     "create_node",
@@ -17,7 +20,6 @@ BP_WRITES = {
     "set_pin_value",
 }
 _READ_PREFIXES = ("get", "list", "find", "read", "search", "discover")
-_ENV = Path(__file__).resolve().parent.parent / ".env"
 _DENY_BP = "蓝图改图已关闭。把连线步骤写入 Plan/，不要调用写图工具。"
 _DOMAIN_KEYS = (
     ("material", "material", "UE_ALLOW_MATERIAL"),
@@ -27,37 +29,6 @@ _DOMAIN_KEYS = (
     ("animation", "anim", "UE_ALLOW_ANIM"),
     ("controlrig", "anim", "UE_ALLOW_ANIM"),
 )
-
-
-def env_value(env_path: Path, key: str) -> str | None:
-    """每次读 .env 里的原文。键不在文件里返回 None；在但为空返回空字符串。"""
-    if not env_path.is_file():
-        return None
-    try:
-        lines = env_path.read_text(encoding="utf-8").splitlines()
-    except OSError:
-        return None
-    found: str | None = None
-    seen = False
-    for line in lines:
-        text = line.strip()
-        if not text or text.startswith("#") or "=" not in text:
-            continue
-        name, value = text.split("=", 1)
-        if name.strip() != key:
-            continue
-        seen = True
-        found = value.strip().strip('"').strip("'")
-    if not seen:
-        return None
-    return found
-
-
-def normalize_backend(raw: str | None) -> str:
-    """空字符串等于没写。非法拼写保留小写，交给选择层拒绝。"""
-    if raw is None or not str(raw).strip():
-        return "official"
-    return str(raw).strip().strip('"').strip("'").lower()
 
 
 def editor_backend(env_path: Path | None = None) -> str:

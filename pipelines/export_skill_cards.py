@@ -191,6 +191,12 @@ REGISTRY = {
         "version": VERSION,
         "conflicts": [],
     },
+    "ue-monolith-backend-skill": {
+        "triggers": ["monolith", "9316", "discover"],
+        "tools": [],
+        "version": VERSION,
+        "conflicts": [],
+    },
 }
 
 
