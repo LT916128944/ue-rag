@@ -1,0 +1,11 @@
+# 证据是按**字节**算哈希的，任何行尾转换都会让印章失效：
+# - `data/proofs/**` 的 sha1 由 `agent/manual_attest.file_sha1` 直接对文件字节算，
+#   人签时重算一遍、对不上就拒绝（`agent/attest_sign.py`）。检出时被改成 CRLF 就等于全签废。
+# - `data/archive/**` 的 `record_sha256` 不哈希文件字节（`record_digest` 重新序列化），
+#   但整份记录原样存取仍然更利于人肉核对。
+# - `data/bench/**` 的 `batch.json` 里 `sampled` 由 `seed` 决定，原样存取便于复核。
+# 所以这四个目录一律按二进制原样存取，不做任何行尾转换。
+data/proofs/** -text
+data/archive/** -text
+data/bench/** -text
+data/attestations/** -text

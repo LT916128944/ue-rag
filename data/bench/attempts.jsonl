@@ -1,0 +1,5 @@
+{"ts": "2026-11-12T12:24:21", "sentence_id": "compile", "round": 1, "run_id": "", "exit": 0, "status": "dry_run", "refused_reason": "", "seconds": 0.0, "dry_run": true}
+{"ts": "2026-11-12T12:25:02", "sentence_id": "compile", "round": 1, "run_id": "20261112-122440", "exit": 0, "status": "ok", "refused_reason": "", "seconds": 22.7}
+{"ts": "2026-11-12T12:41:40", "sentence_id": "patrol-presentation", "round": 1, "run_id": "20261112-123756", "exit": 1, "status": "no_record", "refused_reason": "", "seconds": 865.9}
+{"ts": "2026-11-12T13:33:39", "sentence_id": "open-level", "round": 1, "run_id": "20261112-133334", "exit": 0, "status": "ok", "refused_reason": "", "seconds": 5.4}
+{"ts": "2026-11-12T13:34:15", "sentence_id": "fps-hud", "round": 1, "run_id": "20261112-133354", "exit": 0, "status": "ok", "refused_reason": "", "seconds": 21.6}

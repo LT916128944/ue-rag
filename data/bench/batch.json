@@ -1,0 +1,44 @@
+{
+  "batch_id": "20261112-133439-1r",
+  "started_at": "2026-11-12T13:34:39",
+  "finished_at": "2026-11-12T13:34:39",
+  "rounds": 1,
+  "seed": "f5a566a18ed53ac268fff72d795afe0a",
+  "produced_by": "agent/bench_runner.py",
+  "note": "小批次：只为端到端验证机制（bench_runner→batch→sampled→抽查闸门→check_bench_audit），不是 30 条基准",
+  "sentences": [
+    {
+      "id": "compile",
+      "round": 1,
+      "run_id": "20261112-122440",
+      "status": "ok",
+      "attempts": 0,
+      "seconds": 0.0,
+      "resumed": true
+    },
+    {
+      "id": "fps-hud",
+      "round": 1,
+      "run_id": "20261112-133354",
+      "status": "ok",
+      "attempts": 0,
+      "seconds": 0.0,
+      "resumed": true
+    },
+    {
+      "id": "open-level",
+      "round": 1,
+      "run_id": "20261112-133334",
+      "status": "ok",
+      "attempts": 0,
+      "seconds": 0.0,
+      "resumed": true
+    }
+  ],
+  "missing": [],
+  "sampled": [
+    "20261112-133354",
+    "20261112-133334",
+    "20261112-122440"
+  ]
+}

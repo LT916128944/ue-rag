@@ -16,7 +16,9 @@
 5) run 级状态：`contract_status` 的所有常量返回分支都登记在 `RUN_STATUSES`（「未完成」就在其中），
    并用真调用复核它只吐这五个词；
 6) 静态扫描 `agent/*.py`：一切被比较/赋值给 `status` / `state` / `ledger_status` 的状态形字符串常量
-   都必须在四表并集内；无法归类的逐条进 `_SKIP` 并写明原因，**不用异常吞**；
+   都必须在四表并集内；无法归类的逐条进 `_SKIP` 并写明原因，**不用异常吞**。
+   半句覆盖率词表（covered / uncovered / constraint，`plan_windows._clause_rows` 的第二套表）
+   就按这条约定进 `_SKIP`，再由 `check_half_clause_vocabulary` 把它的成员钉死成恰好三值；
 7) 反例守卫：未知字符串经 `*_label()` 原样回落（渲染层依赖这个宽松行为），判定函数对未知/空/非字符串
    一律 False 且不抛；
 8) 真链路：台账经真 `ledger` 回写 + 真 `brief` 渲染仍然宽松；真 run 记录（`data/runs/**/*.json`，
@@ -73,6 +75,34 @@ _SKIP: dict[tuple[str, str], str] = {
         "skill_promoted 事件的 status 参数（技能词表），与 skill_memory 的 promoted 同一张表",
     ("agent/run_windows.py", "shadow"):
         "distill_candidate 事件的 status 参数（技能/蒸馏词表，U6 钩子），与 skill_memory 的 shadow 同一张表",
+    # ---- 半句对账行状态：`_clause_rows()` 的第二套词表（半句覆盖率）----
+    # 声明点：`agent/plan_windows.py` 的 `_clause_rows()` 逐个半句
+    # `rows.append({"clause": …, "status": "covered" | "uncovered" | "constraint"})`，
+    # 再由 `_clauses_accounted()` 判「每一半句都被规则动作接住了吗」。它记的是**半句覆盖率**
+    # （一整个需求被拆成逗号分隔的半句后，每一半句有没有被规则动作接住），与 run / 窗口 /
+    # 台账 / stop_reason 四张身份表无关，所以按 statuses.py 文件头「不在本文件范围的其它词表，
+    # 静态扫描逐条显式跳过并写明原因」的约定进这张清单——**不塞进 `agent/statuses.py`**
+    # （那份文件头写着维护者是人，模型可以提议但不能改）。
+    # 跳过清单只认 (文件, 值)、不认上下文，所以旁边配了 `check_half_clause_vocabulary()`：
+    # 用 ast 把 `_clause_rows` 的这套词表钉成**恰好三个值**（加第四个半句状态就先红），
+    # 并禁止这三个词混进 statuses.py 的四表并集。跳过是具名的，不是宽泛吞掉。
+    ("agent/plan_windows.py", "covered"):
+        "半句覆盖率词表：这一半句已被某个规则动作接住（_clause_rows 的 covered），不是 run/窗口状态",
+    ("agent/plan_windows.py", "uncovered"):
+        "半句覆盖率词表：这半句没被任何动作接住（交理解器/记缺口），与 covered 同一张表",
+    ("agent/plan_windows.py", "constraint"):
+        "半句覆盖率词表：「别/不要…」这类约束句，本来就不需要动作，与 covered 同一张表",
+    # ---- 机器基准执行者的尝试结局（20261112-1220 §4.1 的第五张表）----
+    # 声明点：`agent/bench_runner.py` 把每次尝试写进 `data/bench/attempts.jsonl`，
+    # 每行的 `status` 记的是**这一次尝试的结局**（跑成功记 archive 里的 ok/partial/failed，
+    # 没跑成就记 no_record / refused / timeout / dry_run）。它不写 run 记录、不写窗口 state、
+    # 不写台账，也不进 stop_reason——是 `data/bench` 自己的词表，与 D11 的四张身份表无关。
+    # 与「半句覆盖率」同理：这里逐条具名跳过，不塞进 `agent/statuses.py` 的四表并集
+    # （那份文件头写着维护者是人，模型可以提议但不能改）。
+    ("agent/bench_runner.py", "no_record"):
+        "机器基准尝试结局：--no-record 这一轮只产证据不记账（attempts.jsonl 的词表，不是 run 状态）",
+    ("agent/bench_runner.py", "refused"):
+        "机器基准尝试结局：bench_record.record_round 拒绝了这次记录（attempts.jsonl 的词表，不是 run 状态）",
 }
 
 
@@ -549,6 +579,76 @@ def check_static_scan() -> None:
         print(f"  提示（缺省值，未登记，请人工判断归属）：{line}")
 
 
+# 半句覆盖率词表的声明点与内容：`agent/plan_windows.py` 的 `_clause_rows()`。
+# `_SKIP` 里那三条「半句对账行状态」跳过就是按这份词表逐条写的，两边必须同时改。
+_HALF_CLAUSE_OWNER = "agent/plan_windows.py"
+_HALF_CLAUSE_FUNC = "_clause_rows"
+_HALF_CLAUSE_STATUSES = frozenset({"covered", "uncovered", "constraint"})
+
+
+def check_half_clause_vocabulary() -> None:
+    """`_clause_rows()` 的半句覆盖率词表恰好是 covered / uncovered / constraint。
+
+    `[事实]` 静态扫描按 (文件, 值) 精确跳过（见 `_SKIP` 的「半句对账行状态」段），跳过本身
+    只认值、不认上下文：把这三个值放过去之后，`_clause_rows()` 里若出现第四种半句状态，
+    静态扫描仍会红（未登记），但若有人**改名**（例如 `uncovered` → `missing`），那三条跳过
+    就退化成只打印提示的死条目，而 `missing` 会红得让人以为该去改 statuses.py。所以这里把
+    声明点也钉住：`_clause_rows()` 里每个 `{"clause": …, "status": …}` 的 status 常量集合
+    必须**恰好**等于这三个值。词表真的变了，这条先红，逼人同一次改 `_SKIP` 与这个集合。
+
+    顺带把「不许塞进 statuses.py」这句纪律变成机器证据：半句覆盖率词表一旦混进
+    `agent.statuses.all_statuses()` 的四表并集，这里立刻红。
+    """
+    import agent.statuses as statuses
+
+    path = ROOT / _HALF_CLAUSE_OWNER
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    funcs = [
+        node for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef) and node.name == _HALF_CLAUSE_FUNC
+    ]
+    assert len(funcs) == 1, (
+        f"{_HALF_CLAUSE_OWNER} 里 {_HALF_CLAUSE_FUNC} 应当唯一（半句覆盖率词表的声明点）",
+        len(funcs),
+    )
+    declared: set[str] = set()
+    for node in ast.walk(funcs[0]):
+        if not isinstance(node, ast.Dict):
+            continue
+        pairs = {
+            key.value: value for key, value in zip(node.keys, node.values)
+            if isinstance(key, ast.Constant) and isinstance(key.value, str)
+        }
+        status_node = pairs.get("status")
+        if status_node is None:
+            continue
+        assert isinstance(status_node, ast.Constant) and isinstance(status_node.value, str), (
+            "半句对账行的 status 应当是字符串常量（否则 _SKIP 按值跳过就失效了）",
+            ast.dump(status_node)[:80],
+        )
+        declared.add(status_node.value)
+    assert declared, (
+        f"{_HALF_CLAUSE_OWNER}:{_HALF_CLAUSE_FUNC} 里一个半句对账状态都没抽到："
+        "声明点被搬走了，_SKIP 里那三条跳过失去依据"
+    )
+    assert declared == set(_HALF_CLAUSE_STATUSES), (
+        "半句覆盖率词表变了（_SKIP 里那三条跳过与这里要同一次改）",
+        sorted(declared - set(_HALF_CLAUSE_STATUSES)),   # 新增的半句状态：先在这里登记
+        sorted(set(_HALF_CLAUSE_STATUSES) - declared),   # 消失的半句状态：_SKIP 里那条该删
+    )
+    for value in sorted(declared):
+        assert (_HALF_CLAUSE_OWNER, value) in _SKIP, (
+            f"半句覆盖率状态 {value!r} 没在 _SKIP 里逐条登记（静态扫描会把它当漏登记打红）"
+        )
+    leaked = sorted(set(_HALF_CLAUSE_STATUSES) & set(statuses.all_statuses()))
+    assert not leaked, (
+        "半句覆盖率状态混进了 statuses.py 的四表并集（它是另一套词表，不许登记成 run/窗口状态）",
+        leaked,
+    )
+    print(f"  半句覆盖率词表：{_HALF_CLAUSE_OWNER}:{_HALF_CLAUSE_FUNC} 恰好 "
+          f"{sorted(declared)}（_SKIP 已逐条登记）")
+
+
 # ---------------------------------------------------------------------------
 # 4) 反例守卫 + 真渲染层往返
 # ---------------------------------------------------------------------------
@@ -714,6 +814,7 @@ def main() -> int:
     check_ledger_statuses()
     check_run_statuses()
     check_static_scan()
+    check_half_clause_vocabulary()
     check_label_fallbacks()
     check_ledger_round_trip()
     check_run_records()

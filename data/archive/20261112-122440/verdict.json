@@ -1,0 +1,16 @@
+{
+  "sentence_id": "compile",
+  "status": "ok",
+  "evidence_kind": "machine",
+  "evidence_sha1": "a1207884eef9a9c7406f748afd6eea0bd0de0b93",
+  "entry": "rule",
+  "backend": "monolith",
+  "false_pass": false,
+  "window_failed": false,
+  "criteria_passed": true,
+  "manual_unsigned": false,
+  "existing_instance_property_as_ok": false,
+  "run_id": "20261112-122440",
+  "round": 1,
+  "record_sha256": "3ee657f7e2de062556debcc853893e825c08dc8dfc666a21a67e24a6a9ba3be7"
+}
