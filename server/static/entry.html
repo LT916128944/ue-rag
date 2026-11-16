@@ -1,0 +1,1604 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>UE-RAG 入口 · 目录侧边栏 + 拖拽附件 + 装配预览 + 运行面板</title>
+<!--
+  正式页，由 server/entry.py 在 http://127.0.0.1:8011/ 提供。
+  对应 Plan/20261116-1530-HTML入口层与观测UI三期计划.md 的 §4–§6（第 2 期：只读投影）。
+
+  四条硬约束：
+  1. 只读投影。页面只发 GET（/api/health /api/runs /api/run /api/stream /api/tree）与
+     纯函数 POST /api/preview；**不写任何文件**。驱动（起 run、答人审门）是三期。
+  2. 装配只有一份实现。预览来自 server/prompt_builder.py（A1–A6 在那里被断言），
+     本页不再重写 classify/tokenOf/build。
+  3. 不猜。字段没落地就不显示；窗口状态表是 agent/statuses.py 的镜像（标记
+     BOARD_STATUS_TABLE），由 eval/check_observer_labels.py 钉住。
+  4. 进度全来自落盘文件：/api/run 读 data/runs/*.json，/api/stream tail data/events/*.jsonl。
+-->
+<style>
+  :root {
+    --bg: #0e1116;
+    --bg-soft: #141922;
+    --bg-panel: #171d27;
+    --bg-card: #1c2430;
+    --line: #27303e;
+    --line-soft: #1f2833;
+    --text: #dde5f0;
+    --text-dim: #8b98ab;
+    --text-mute: #5c6778;
+    --accent: #4c9aff;
+    --ok: #3fb950;
+    --warn: #d29922;
+    --bad: #f85149;
+    --retry: #db8b20;
+    --revise: #a371f7;
+    --wait: #58a6ff;
+    --lock: #f0883e;
+    --mono: ui-monospace, SFMono-Regular, "Cascadia Mono", Consolas, "Courier New", monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    background: var(--bg); color: var(--text);
+    font: 13px/1.55 -apple-system, "Segoe UI", "Microsoft YaHei UI", "Noto Sans SC", sans-serif;
+    display: flex; flex-direction: column; overflow: hidden;
+  }
+  button { font: inherit; color: inherit; background: transparent; border: 1px solid var(--line); border-radius: 6px; padding: 3px 9px; cursor: pointer; }
+  button:hover:not(:disabled) { border-color: var(--accent); color: #fff; }
+  button:disabled { opacity: .42; cursor: not-allowed; }
+  button.primary { background: #1d4f8c; border-color: #2b6cb0; }
+  button.primary:hover:not(:disabled) { background: #2760a6; }
+  .mono { font-family: var(--mono); }
+
+  /* ---------------- 顶栏 ---------------- */
+  header {
+    flex: 0 0 auto; display: flex; align-items: center; gap: 14px;
+    padding: 9px 14px; background: var(--bg-soft); border-bottom: 1px solid var(--line);
+  }
+  .brand { display: flex; align-items: baseline; gap: 8px; flex: 0 0 auto; }
+  .brand .tag { font-size: 10px; color: var(--text-dim); border: 1px solid var(--line); border-radius: 4px; padding: 0 5px; }
+  .brand h1 { margin: 0; font-size: 14px; font-weight: 600; letter-spacing: .2px; }
+  .brand .sub { color: var(--text-mute); font-size: 11px; font-family: var(--mono); }
+  .runpick { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--text-dim); flex: 0 0 auto; }
+  .runpick select {
+    background: var(--bg-panel); color: var(--text); border: 1px solid var(--line);
+    border-radius: 6px; padding: 2px 6px; font-family: var(--mono); font-size: 11px;
+  }
+  .gauge { flex: 1 1 auto; min-width: 0; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; justify-content: flex-end; }
+  .chip {
+    font-size: 11px; font-family: var(--mono); padding: 2px 8px; border-radius: 999px;
+    border: 1px solid var(--line); background: #10151d; color: var(--text-dim); white-space: nowrap;
+    max-width: 200px; overflow: hidden; text-overflow: ellipsis;
+  }
+  .chip b { color: var(--text); font-weight: 600; }
+  .chip.lock-on { border-color: var(--lock); color: var(--lock); }
+  .chip.lock-on b { color: var(--lock); }
+  .chip.bad { border-color: var(--bad); color: var(--bad); }
+  .chip.ok { border-color: #2c5c35; color: var(--ok); }
+
+  /* ---------------- 三栏 ---------------- */
+  main { flex: 1 1 auto; display: flex; min-height: 0; }
+
+  /* 侧边栏 */
+  aside.sidebar {
+    flex: 0 0 262px; min-width: 0; overflow: hidden; display: flex; flex-direction: column;
+    background: var(--bg-soft); border-right: 1px solid var(--line); min-height: 0;
+  }
+  .side-head { padding: 9px 10px 7px; border-bottom: 1px solid var(--line-soft); }
+  .side-head .title { font-size: 11px; color: var(--text-dim); letter-spacing: .4px; display: flex; justify-content: space-between; }
+  .side-head .title span:last-child { font-family: var(--mono); color: var(--text-mute); }
+  .side-head input[type="search"] {
+    width: 100%; margin-top: 6px; background: #0f141b; color: var(--text);
+    border: 1px solid var(--line); border-radius: 6px; padding: 4px 7px; font: inherit; font-size: 12px;
+  }
+  .side-head input[type="search"]:focus { outline: none; border-color: var(--accent); }
+  .tree { flex: 1 1 auto; overflow: auto; padding: 5px 4px 14px; font-size: 12px; }
+  .node {
+    display: flex; align-items: center; gap: 5px; padding: 2px 6px; border-radius: 5px;
+    cursor: grab; white-space: nowrap; overflow: hidden; color: var(--text-dim);
+  }
+  .node:hover { background: #1d2632; color: var(--text); }
+  .node.dir { color: var(--text); font-weight: 500; }
+  .node .ico { flex: 0 0 auto; width: 13px; text-align: center; opacity: .8; }
+  .node .nm { overflow: hidden; text-overflow: ellipsis; }
+  .node .tk { color: var(--text-mute); font-family: var(--mono); font-size: 10px; overflow: hidden; text-overflow: ellipsis; }
+  .node.dragging { opacity: .45; }
+  .children { margin-left: 11px; border-left: 1px solid var(--line-soft); padding-left: 3px; }
+  .children.collapsed { display: none; }
+  .side-foot { padding: 6px 10px; border-top: 1px solid var(--line-soft); font-size: 10px; color: var(--text-mute); line-height: 1.5; }
+
+  /* 中间：对话 */
+  section.chat { flex: 1 1 44%; display: flex; flex-direction: column; min-width: 340px; min-height: 0; }
+  .thread { flex: 1 1 auto; overflow: auto; padding: 14px 16px 4px; display: flex; flex-direction: column; gap: 10px; }
+  .msg { max-width: 88%; border: 1px solid var(--line); border-radius: 9px; padding: 8px 11px; background: var(--bg-panel); }
+  .msg.me { align-self: flex-end; background: #172231; border-color: #22354d; }
+  .msg .who { font-size: 10px; color: var(--text-mute); margin-bottom: 3px; letter-spacing: .4px; }
+  .msg .body { white-space: pre-wrap; word-break: break-word; }
+  .msg .atts { margin-top: 6px; display: flex; flex-wrap: wrap; gap: 5px; }
+  .msg .att {
+    font-family: var(--mono); font-size: 10px; border: 1px solid var(--line); border-radius: 999px;
+    padding: 1px 7px; color: var(--text-dim); background: #0f141b;
+  }
+  .msg .att.lvl { border-color: #3d5a7a; color: #8cbdf0; }
+  .msg .att.src { border-color: #3a5a45; color: #86d09a; }
+  .msg .att.warn { border-color: #6b5220; color: var(--warn); }
+
+  .sysmsg { align-self: center; font-size: 11px; color: var(--text-mute); font-family: var(--mono); }
+  .sysmsg.paused { color: var(--warn); }
+  .sysmsg.err { color: var(--bad); }
+
+  /* 任务书卡 */
+  .brief { border: 1px solid #3a4b63; border-radius: 9px; background: #141d29; padding: 9px 12px; }
+  .brief h3 { margin: 0 0 5px; font-size: 12px; color: #9dc4ea; font-weight: 600; }
+  .brief .rows { font-size: 12px; color: var(--text-dim); }
+  .brief .rows div { display: flex; gap: 8px; }
+  .brief .rows .k { color: var(--text-mute); min-width: 62px; }
+  .brief .ask { margin-top: 7px; font-size: 11px; color: var(--text-mute); }
+  .brief .acts { margin-top: 7px; display: flex; flex-wrap: wrap; gap: 6px; }
+  .brief .echo { margin-top: 5px; font-size: 10px; color: var(--text-mute); font-family: var(--mono); }
+  .brief .acts button.chosen { border-color: var(--ok); color: var(--ok); }
+
+  /* 输入区 */
+  .composer { flex: 0 0 auto; border-top: 1px solid var(--line); background: var(--bg-soft); padding: 9px 14px 11px; }
+  .dropzone {
+    border: 1px dashed #2f3d4f; border-radius: 9px; background: #10151d; padding: 8px 10px;
+    transition: border-color .12s, background .12s;
+  }
+  .dropzone.over { border-color: var(--accent); background: #131c28; }
+  .dropzone.bad { border-color: var(--bad); }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; min-height: 0; }
+  .chips:not(:empty) { margin-bottom: 7px; }
+  .chipx {
+    display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--line);
+    border-radius: 999px; padding: 1px 5px 1px 8px; background: #0d1219; font-size: 11px;
+  }
+  .chipx .r {
+    background: #17212e; color: var(--text-dim); border: 1px solid var(--line);
+    border-radius: 5px; font-size: 10px; padding: 0 3px; font-family: inherit;
+  }
+  .chipx .t { font-family: var(--mono); color: var(--text-dim); max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .chipx.external { border-color: #6b5220; }
+  .chipx.external .t { color: var(--warn); }
+  .chipx .x { border: none; padding: 0 3px; color: var(--text-mute); font-size: 13px; line-height: 1; }
+  .chipx .x:hover { color: var(--bad); }
+
+  textarea#q {
+    width: 100%; min-height: 54px; max-height: 168px; resize: vertical;
+    background: transparent; color: var(--text); border: none; outline: none;
+    font: inherit; font-size: 13px; line-height: 1.6;
+  }
+  textarea#q::placeholder { color: var(--text-mute); }
+
+  .preview-wrap { margin-top: 8px; border: 1px solid var(--line-soft); border-radius: 8px; overflow: hidden; background: #0b0f15; }
+  .preview-head {
+    display: flex; align-items: center; gap: 8px; padding: 4px 9px; font-size: 10px;
+    color: var(--text-mute); border-bottom: 1px solid var(--line-soft); background: #101820;
+  }
+  .preview-head .grow { flex: 1 1 auto; }
+  .preview-head button { font-size: 10px; padding: 1px 6px; }
+  pre#preview {
+    margin: 0; padding: 8px 10px; font-family: var(--mono); font-size: 11.5px; line-height: 1.62;
+    color: #b9c8dc; white-space: pre-wrap; word-break: break-all; max-height: 160px; overflow: auto;
+  }
+  pre#preview .s-att { color: #7fb0e8; }
+  pre#preview .s-sep { color: #4a5768; }
+
+  .notes { margin-top: 6px; display: flex; flex-direction: column; gap: 3px; }
+  .note { font-size: 11px; display: flex; gap: 6px; align-items: flex-start; line-height: 1.5; }
+  .note .lv { flex: 0 0 auto; font-family: var(--mono); font-size: 10px; border-radius: 3px; padding: 0 4px; margin-top: 1px; }
+  .note.red .lv { background: #3d1a1a; color: var(--bad); border: 1px solid #6d2a2a; }
+  .note.yellow .lv { background: #33290f; color: var(--warn); border: 1px solid #6b5220; }
+  .note.info .lv { background: #1a2330; color: var(--text-dim); border: 1px solid var(--line); }
+  .note.red .tx { color: #f0a9a6; }
+  .note.yellow .tx { color: #e3c078; }
+  .note.info .tx { color: var(--text-mute); }
+
+  .sendrow { margin-top: 8px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .sendrow .hint { font-size: 10px; color: var(--text-mute); font-family: var(--mono); flex: 1 1 240px; }
+  .sendrow .forcebox { font-size: 11px; color: var(--text-dim); display: flex; align-items: center; gap: 4px; font-family: var(--mono); }
+  .sendrow .forcebox select {
+    background: var(--bg-panel); color: var(--text); border: 1px solid var(--line);
+    border-radius: 6px; padding: 2px 6px; font-family: var(--mono); font-size: 11px;
+  }
+
+  /* 决策面板：只有出现 question 事件才出现（计划 §4.6） */
+  .qzone {
+    flex: 0 0 auto; border-bottom: 1px solid var(--line-soft);
+    background: #1a2230; padding: 8px 11px 9px;
+  }
+  .qzone[hidden] { display: none; }
+  .qzone .qhead { display: flex; align-items: baseline; gap: 7px; margin-bottom: 6px; }
+  .qzone .qkind {
+    font-size: 10px; font-family: var(--mono); color: #0e1116; background: var(--warn);
+    border-radius: 4px; padding: 0 5px; flex: 0 0 auto;
+  }
+  .qzone .qp { font-size: 11px; color: var(--text); line-height: 1.45; word-break: break-word; }
+  .qzone .qopts { display: flex; flex-wrap: wrap; gap: 6px; }
+  .qzone .qopts button { font-size: 11px; padding: 3px 9px; }
+  .qzone .qopts button.chosen { border-color: var(--accent); color: #fff; background: #1d4f8c; }
+  .qzone .qfoot { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+  .qzone .qfoot input {
+    flex: 1 1 auto; min-width: 0; background: #0f141b; color: var(--text);
+    border: 1px solid var(--line); border-radius: 6px; padding: 3px 7px; font: inherit; font-size: 11px;
+  }
+  .qzone .qfoot input:focus { outline: none; border-color: var(--accent); }
+  .qzone .qecho { font-size: 10px; font-family: var(--mono); color: var(--text-mute); flex: 0 1 auto; max-width: 55%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .qzone.done .qopts button { opacity: .5; }
+
+  /* 右侧：运行面板 */
+  section.run { flex: 0 0 548px; min-width: 0; overflow: hidden; display: flex; flex-direction: column; background: var(--bg-soft); border-left: 1px solid var(--line); min-height: 0; }
+  .run-head { padding: 8px 11px 7px; border-bottom: 1px solid var(--line-soft); display: flex; align-items: baseline; gap: 8px; }
+  .run-head .t { font-size: 11px; color: var(--text-dim); letter-spacing: .4px; }
+  .run-head .id { font-family: var(--mono); font-size: 10px; color: var(--text-mute); margin-left: auto; }
+  .canvas-wrap { flex: 1 1 auto; overflow: auto; position: relative; min-height: 120px; min-width: 0; }
+  #canvas { position: relative; }
+  #edges { position: absolute; left: 0; top: 0; overflow: visible; pointer-events: none; }
+  .card {
+    position: absolute; border: 1px solid var(--line); border-radius: 8px;
+    background: var(--bg-card); padding: 6px 8px 7px 10px; overflow: hidden;
+    display: flex; flex-direction: column;
+  }
+  .card::before {
+    content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--line);
+  }
+  .card.locked::before { background: var(--lock); }
+  .card.locked { border-color: #5c4426; }
+  .card.st-running::before, .card.st-retry::before, .card.st-revising::before { background: var(--accent); }
+  .card.st-done::before { background: var(--ok); }
+  .card.st-failed::before { background: var(--bad); }
+  .card.st-paused::before { background: var(--warn); }
+  .card.st-skipped::before { background: var(--text-mute); }
+  .card.st-waiting_external::before { background: var(--wait); }
+  .card.st-interrupted::before { background: #8b3a3a; }
+  .card .hd { display: flex; align-items: center; gap: 5px; flex: 0 0 auto; }
+  .card .wid { font-family: var(--mono); font-size: 10px; color: var(--text-mute); }
+  .card .badge {
+    font-size: 10px; border-radius: 3px; padding: 0 4px; border: 1px solid var(--line); color: var(--text-dim);
+    margin-left: auto; white-space: nowrap;
+  }
+  .card .role {
+    flex: 0 0 auto; font-size: 9px; color: var(--text-mute);
+    border: 1px solid var(--line-soft); border-radius: 3px; padding: 0 3px;
+  }
+  .badge.st-running, .badge.st-retry, .badge.st-revising { border-color: #2f5c8a; color: #7fb0e8; }
+  .badge.st-done { border-color: #2c5c35; color: var(--ok); }
+  .badge.st-failed { border-color: #6d2a2a; color: var(--bad); }
+  .badge.st-paused { border-color: #6b5220; color: var(--warn); }
+  .badge.st-waiting_external { border-color: #2e4d70; color: var(--wait); }
+  .badge.st-skipped, .badge.st-queued, .badge.st-interrupted { border-color: var(--line); color: var(--text-mute); }
+  .card .ti {
+    font-size: 12px; margin-top: 2px; line-height: 1.4; max-height: 2.8em;
+    overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  }
+  .card .ac { font-family: var(--mono); font-size: 10px; color: var(--text-mute); margin-top: 1px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .card .meta { display: flex; gap: 6px; font-family: var(--mono); font-size: 10px; color: var(--text-dim); margin-top: 3px; flex-wrap: wrap; }
+  .card .meta .q { color: var(--warn); }
+  .card .bar { height: 3px; border-radius: 2px; background: #232d3b; margin-top: 5px; overflow: hidden; }
+  .card .bar i { display: block; height: 100%; background: var(--accent); width: 0; }
+  .card.st-done .bar i { background: var(--ok); }
+  .card.st-failed .bar i { background: var(--bad); }
+  .card .step { font-size: 10.5px; color: #9fb0c6; margin-top: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .card .think {
+    font-size: 10.5px; color: var(--text-mute); margin-top: 2px; line-height: 1.45;
+    overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  }
+  .card .foot { margin-top: 4px; display: flex; flex-direction: column; gap: 1px; font-size: 10px; }
+  .card .foot .unmet { color: var(--warn); font-family: var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .card .foot .next { color: var(--text-mute); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .card .dot { position: absolute; right: 7px; bottom: 6px; width: 6px; height: 6px; border-radius: 50%; background: var(--ok); }
+
+  .done-zone { flex: 0 0 auto; border-top: 1px solid var(--line-soft); background: #121821; }
+  .done-head {
+    display: flex; align-items: center; gap: 7px; padding: 6px 11px; font-size: 11px;
+    color: var(--text-dim); cursor: pointer; user-select: none;
+  }
+  .done-head .caret { color: var(--text-mute); font-size: 9px; }
+  .done-head .cnt { color: var(--ok); }
+  .done-list { max-height: 176px; overflow: auto; padding: 0 11px 8px; display: flex; flex-direction: column; gap: 3px; }
+  .done-list.collapsed { display: none; }
+  .done-row { display: flex; align-items: baseline; gap: 6px; font-size: 11px; }
+  .done-row .w { font-family: var(--mono); color: var(--text-mute); font-size: 10px; flex: 0 0 20px; }
+  .done-row .s { flex: 0 0 auto; font-size: 10px; }
+  .done-row .s.done { color: var(--ok); }
+  .done-row .s.failed { color: var(--bad); }
+  .done-row .s.paused { color: var(--warn); }
+  .done-row .s.skipped, .done-row .s.waiting_external, .done-row .s.interrupted { color: var(--text-mute); }
+  .done-row .tt { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-dim); }
+  .done-row .el { font-family: var(--mono); font-size: 10px; color: var(--text-mute); }
+  .done-row .sr { font-family: var(--mono); font-size: 10px; color: var(--text-mute); }
+
+  /* 决策浮层 */
+  .askbar {
+    position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%);
+    background: #1b2532; border: 1px solid #3a4b63; border-radius: 10px; padding: 9px 12px;
+    box-shadow: 0 8px 26px rgba(0,0,0,.46); z-index: 40; min-width: 460px; max-width: 74vw;
+  }
+  .askbar .t { font-size: 11px; color: var(--text-dim); display: flex; gap: 7px; align-items: baseline; }
+  .askbar .t .k { font-family: var(--mono); font-size: 10px; color: #7fb0e8; border: 1px solid #2f5c8a; border-radius: 3px; padding: 0 4px; }
+  .askbar .p { font-size: 12px; margin: 6px 0 7px; white-space: pre-wrap; }
+  .askbar .b { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  .askbar input { background: #0f141b; border: 1px solid var(--line); border-radius: 6px; color: var(--text); font: inherit; font-size: 12px; padding: 3px 7px; width: 190px; }
+  .askbar .will { margin-top: 6px; font-family: var(--mono); font-size: 10px; color: var(--text-mute); }
+  .askbar .will b { color: var(--warn); font-weight: 500; }
+  .askbar .undo { font-size: 10px; }
+
+  .hidden { display: none !important; }
+  .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand">
+    <span class="tag" id="conn">连接中</span>
+    <h1>UE-RAG 入口</h1>
+    <span class="sub" id="rootpath">—</span>
+  </div>
+  <div class="runpick">
+    <label for="runsel">run</label>
+    <select id="runsel"><option value="">（无）</option></select>
+  </div>
+  <div class="gauge">
+    <span class="chip" id="g-par">并发 <b>0/3</b></span>
+    <span class="chip" id="g-lock">写锁 <b>—</b></span>
+    <span class="chip" id="g-queue">队列 <b>0</b></span>
+    <span class="chip" id="g-done">完成 <b>0/0</b></span>
+    <span class="chip" id="g-stop">停因 <b>—</b></span>
+  </div>
+</header>
+
+<main>
+  <aside class="sidebar">
+    <div class="side-head">
+      <div class="title"><span>项目文件</span><span id="treecount">只读</span></div>
+      <input type="search" id="treefilter" placeholder="按名字过滤（不做内容检索）" autocomplete="off">
+    </div>
+    <div class="tree" id="tree"></div>
+    <div class="side-foot">
+      拖到右侧输入框 = 带路径的附件。<br>
+      屏蔽 Binaries / Intermediate / Saved / DDC。
+    </div>
+  </aside>
+
+  <section class="chat">
+    <div class="thread" id="thread">
+      <div class="sysmsg" id="welcome">侧边栏拖文件或目录进来；输入框下方会实时显示将要交给 CLI 的原文（由服务端装配）。</div>
+    </div>
+
+    <div class="composer">
+      <div class="dropzone" id="dropzone">
+        <div class="chips" id="chips"></div>
+        <textarea id="q" placeholder="说清要做什么…… 例如：在关卡 L_NewTest3 放一个 BP_TestActor。（拖文件进来会在下方生成参考句）"></textarea>
+      </div>
+
+      <div class="preview-wrap">
+        <div class="preview-head">
+          <span>装配预览 · 将交给 CLI 的原文</span>
+          <span class="grow"></span>
+          <button id="btn-copy" type="button">复制</button>
+          <button id="btn-clearatts" type="button">清空附件</button>
+        </div>
+        <pre id="preview"></pre>
+      </div>
+
+      <div class="notes" id="notes"></div>
+
+      <div class="sendrow">
+        <label class="forcebox" title="多窗口 = 拆句后按依赖并行跑；单循环 = 一句话拆成步骤、每步跑同一张图；普通对话 = 只检索不改工程">
+          模式
+          <select id="mode">
+            <option value="multi" selected>多窗口</option>
+            <option value="loop">单循环</option>
+            <option value="chat">普通对话</option>
+          </select>
+        </label>
+        <button class="primary" id="btn-send" type="button" disabled>发送</button>
+        <button id="btn-resume" type="button" title=":resume latest + :quit，走同一条 stdin 通道（只对多窗口有意义）">续接最近</button>
+        <label class="forcebox" title="有活 run 时仍启动（退出码 2 会被显成「另一个 run 在跑」，不是失败）">
+          <input type="checkbox" id="chk-force" checked> --force
+        </label>
+        <span class="hint" id="sendhint">装配预览可复制；发送 = 写请求文件 + 起 agent（原 start.bat 菜单 1/2/3）。</span>
+      </div>
+    </div>
+  </section>
+
+  <section class="run">
+    <div class="run-head">
+      <span class="t">运行 · 窗口</span>
+      <span class="id" id="runid">—</span>
+    </div>
+    <div class="qzone" id="qzone" hidden>
+      <div class="qhead">
+        <span class="qkind" id="qkind">裁决</span>
+        <span class="qp" id="qp"></span>
+      </div>
+      <div class="qopts" id="qopts"></div>
+      <div class="qfoot">
+        <input type="text" id="qpath" placeholder="补路径（r 的答案写这里，例如 /Game/Blueprints 或 Public/FpsPawn.h）" autocomplete="off">
+        <span class="qecho" id="qecho"></span>
+      </div>
+    </div>
+    <div class="canvas-wrap" id="canvaswrap">
+      <div id="canvas">
+        <svg id="edges" xmlns="http://www.w3.org/2000/svg"></svg>
+      </div>
+    </div>
+    <div class="done-zone">
+      <div class="done-head" id="donehead">
+        <span class="caret" id="donecaret">▾</span>
+        <span class="cnt" id="donecnt">✓ 0 已完成</span>
+        <span id="donefail"></span>
+      </div>
+      <div class="done-list" id="donelist"></div>
+    </div>
+  </section>
+</main>
+
+<script id="entry-core">
+"use strict";
+(function () {
+
+  /* BOARD_STATUS_TABLE:BEGIN — 镜像 agent/statuses.py 的 WINDOW_STATE_LABELS（statuses.py:91）。
+     键集与值必须逐项一致，由 eval/check_observer_labels.py 钉住。改这里之前先改 statuses.py。 */
+  const BOARD_STATUS_TABLE = {
+    queued: "未开始",
+    running: "运行中",
+    retry: "重试",
+    done: "成功",
+    failed: "失败",
+    paused: "暂停",
+    skipped: "跳过",
+    waiting_external: "等待外部",
+    revising: "返工",
+    interrupted: "中断"
+  };
+  /* BOARD_STATUS_TABLE:END */
+
+  const STOP_REASON_TEXT = {
+    ok: "ok", paused: "paused", retry_exceeded: "retry_exceeded", read_stall: "read_stall",
+    judge_failed: "judge_failed", unresolved: "unresolved", no_evidence: "no_evidence"
+  };
+
+  const RUN_STATUS_TEXT = {
+    "成功": "成功", "部分完成": "部分完成", "未完成": "未完成", "失败": "失败",
+    "中断": "中断", running: "running", interrupted: "interrupted", orphaned: "orphaned"
+  };
+
+  const REF_LABEL = {
+    level: "参考关卡",
+    asset: "参考资产",
+    dir: "参考路径",
+    source: "参考文件",
+    doc: "参考文档"
+  };
+
+  const ROLE_NAME = {
+    level: "关卡", asset: "资产", dir: "目录", source: "源码", doc: "文档", other: "未识别"
+  };
+  // ---------------- 依赖与布局 ----------------
+  const DISPOSE_ACTION = "dispose_residual";         // agent/actions.py:21
+  const AUTOMATION_ACTION = "run_automation_test";
+
+  /** 与 run_windows._dependency_met 同口径。 */
+  function dependencyMet(depState, action) {
+    if (depState === "done") return true;
+    if (action === DISPOSE_ACTION && depState === "failed") return true;
+    return action === AUTOMATION_ACTION && (depState === "waiting_external" || depState === "skipped");
+  }
+
+  /** 边类型。判定顺序与 dependencyMet 一致：先问「放行了吗」，再按上游状态分色。 */
+  function edgeKind(depState, action) {
+    if (depState === "done") return "ok";
+    if (depState === "failed" || depState === "paused" || depState === "interrupted") {
+      // dispose_residual 认 failed 为「已交接」——那是放行，不是被挡
+      return dependencyMet(depState, action) ? "ok" : "blocked";
+    }
+    if (depState === "skipped" || depState === "waiting_external") {
+      return dependencyMet(depState, action) ? "ok" : "blocked";
+    }
+    return "pending";
+  }
+
+  /** 拓扑分层（最长路径深度）+ 两趟重心排序。环依赖不爆栈。 */
+  function layout(windows, opts) {
+    const o = opts || {};
+    // cardH 是布局网格用的**高度配额**，必须容得下一张卡的满配内容
+    // （标题 2 行 + 动作 + meta + 进度条 + 当前步骤 + 思考 2 行 + 交接 2 行）。
+    const cardW = o.cardW || 176, cardH = o.cardH || 186, gapX = o.gapX || 46, gapY = o.gapY || 14;
+    const ids = (windows || []).map(function (w) { return w.id; });
+    const byId = {};
+    (windows || []).forEach(function (w) { byId[w.id] = w; });
+
+    // 深度：沿 depends_on 取最长路径；用迭代 + 访问中集合防环
+    const depth = {};
+    const visiting = {};
+    function d(id) {
+      if (depth[id] != null) return depth[id];
+      if (visiting[id]) return 0;                    // 环：就地截断
+      visiting[id] = 1;
+      const deps = ((byId[id] || {}).depends_on || []).filter(function (x) { return byId[x]; });
+      let v = 0;
+      for (let i = 0; i < deps.length; i++) v = Math.max(v, d(deps[i]) + 1);
+      delete visiting[id];
+      depth[id] = v;
+      return v;
+    }
+    ids.forEach(d);
+
+    const layers = {};
+    ids.forEach(function (id) {
+      const k = depth[id];
+      (layers[k] || (layers[k] = [])).push(id);
+    });
+
+    // 重心排序：按上游平均行号
+    const layerKeys = Object.keys(layers).map(Number).sort(function (a, b) { return a - b; });
+    const order = {};
+    layerKeys.forEach(function (k) {
+      layers[k].forEach(function (id) { order[id] = ids.indexOf(id); });
+    });
+    for (let pass = 0; pass < 2; pass++) {
+      layerKeys.forEach(function (k) {
+        layers[k].sort(function (a, b) {
+          function bary(id) {
+            const deps = ((byId[id] || {}).depends_on || []).filter(function (x) { return order[x] != null; });
+            if (!deps.length) return order[id];
+            let sum = 0;
+            deps.forEach(function (x) { sum += order[x]; });
+            return sum / deps.length;
+          }
+          const ba = bary(a), bb = bary(b);
+          if (ba === bb) return a < b ? -1 : 1;
+          return ba - bb;
+        });
+        layers[k].forEach(function (id, i) { order[id] = i; });
+      });
+    }
+
+    const nodes = {};
+    let maxCol = 0, maxRow = 0;
+    layerKeys.forEach(function (k) {
+      layers[k].forEach(function (id, row) {
+        nodes[id] = {
+          id: id,
+          layer: k, row: row,
+          x: 10 + k * (cardW + gapX),
+          y: 10 + row * (cardH + gapY),
+          w: cardW, h: cardH
+        };
+        maxCol = Math.max(maxCol, k);
+        maxRow = Math.max(maxRow, row);
+      });
+    });
+
+    return {
+      nodes: nodes,
+      layers: layers,
+      order: layerKeys,
+      width: 10 * 2 + (maxCol + 1) * cardW + maxCol * gapX,
+      height: 10 * 2 + (maxRow + 1) * cardH + maxRow * gapY,
+      cardW: cardW, cardH: cardH
+    };
+  }
+
+  /** 连线：按两卡相对位置四分支选接点，避免从卡片中间横穿。 */
+  function edgePath(a, b) {
+    const ac = { x: a.x + a.w / 2, y: a.y + a.h / 2 };
+    const bc = { x: b.x + b.w / 2, y: b.y + b.h / 2 };
+    const dx = bc.x - ac.x, dy = bc.y - ac.y;
+    let x1, y1, x2, y2, c1x, c1y, c2x, c2y;
+
+    if (Math.abs(dx) >= Math.abs(dy)) {
+      // 水平为主
+      if (dx >= 0) {
+        x1 = a.x + a.w; y1 = ac.y; x2 = b.x; y2 = bc.y;
+        const mx = (x1 + x2) / 2;
+        c1x = mx; c1y = y1; c2x = mx; c2y = y2;
+      } else {
+        // 回边：绕右侧
+        x1 = a.x + a.w; y1 = ac.y; x2 = b.x + b.w; y2 = bc.y;
+        const mx = Math.max(x1, x2) + 34;
+        c1x = mx; c1y = y1; c2x = mx; c2y = y2;
+      }
+    } else if (dy > 0) {
+      // 目标在下方
+      x1 = ac.x; y1 = a.y + a.h; x2 = bc.x; y2 = b.y;
+      const my = (y1 + y2) / 2;
+      c1x = x1; c1y = my; c2x = x2; c2y = my;
+    } else {
+      // 目标在上方（回边）
+      x1 = ac.x; y1 = a.y; x2 = bc.x; y2 = b.y + b.h;
+      const my = (y1 + y2) / 2;
+      c1x = x1; c1y = my; c2x = x2; c2y = my;
+    }
+    return "M" + x1 + "," + y1 + " C" + c1x + "," + c1y + " " + c2x + "," + c2y + " " + x2 + "," + y2;
+  }
+
+  const EDGE_STYLE = {
+    ok:      { stroke: "#3fb950", dash: "", width: 1.4 },
+    pending: { stroke: "#4a5768", dash: "4 3", width: 1.1 },
+    blocked: { stroke: "#8b3a3a", dash: "", width: 1.4 }
+  };
+  // ---------------- 事件 → 卡片状态 ----------------
+  /** 空白 run。字段与 data/runs/*.json 的 windows[*] 对齐。 */
+  function blankRun(runId, query) {
+    return {
+      run_id: runId,
+      query: query || "",
+      status: "running",
+      started_at: "",
+      source: "",
+      max_workers: 3,
+      windows: {},
+      order: [],
+      writeLock: null,        // null = 从来没有 editor_gate 事件（显示 —，不显示「空闲」）
+      scopes: [],
+      integration: {},
+      stop_reason: "",
+      sim: false
+    };
+  }
+
+  function ensureWindow(run, ev) {
+    const id = String(ev.window || "");
+    if (!id) return null;
+    if (!run.windows[id]) {
+      run.windows[id] = {
+        id: id, title: id, action: "", depends_on: [], state: "queued",
+        attempt: 0, max_retries: 0, started_at: "", queue_ms: 0, elapsed: null,
+        step: "", reasoning: "", toolCalls: 0, unmet: [], unmetTotal: null, next: "",
+        filesModified: false, scope: "", stop_reason: "", ok: null, summary: "", role: ""
+      };
+      run.order.push(id);
+    }
+    return run.windows[id];
+  }
+
+  /** 事件 → run。返回被改动的窗口 id 列表（用于只重绘受影响卡片）。 */
+  function applyEvent(run, ev) {
+    const touched = [];
+    const type = String(ev && ev.type || "");
+    if (type === "run_start") {
+      run.started_at = ev.ts || run.started_at;
+      run.source = ev.source || run.source;
+      if (ev.max_workers) run.max_workers = Number(ev.max_workers) || run.max_workers;
+      (ev.windows || []).forEach(function (w) {
+        const win = ensureWindow(run, { window: w.id });
+        if (!win) return;
+        win.title = w.title || win.title;
+        win.action = w.action || win.action;
+        win.depends_on = (w.depends_on || []).slice();
+        win.state = w.state || win.state;
+        win.role = w.role || win.role;
+        win.max_retries = Number(w.max_retries || 0);
+        touched.push(win.id);
+      });
+      return touched;
+    }
+    if (type === "window_state") {
+      const win = ensureWindow(run, ev);
+      if (!win) return touched;
+      win.state = String(ev.state || win.state);
+      if (ev.attempt != null) win.attempt = Number(ev.attempt) || win.attempt;
+      if (ev.started_at) win.started_at = ev.started_at;
+      if (ev.queue_ms != null) win.queue_ms = Number(ev.queue_ms) || 0;
+      if (ev.role) win.role = ev.role;
+      touched.push(win.id);
+      return touched;
+    }
+    if (type === "tool_call") {
+      const win = ensureWindow(run, ev);
+      if (!win) return touched;
+      win.toolCalls += 1;
+      win.step = String(ev.node || ev.tool || win.step || "");
+      if (ev.reasoning) win.reasoning = String(ev.reasoning);
+      touched.push(win.id);
+      return touched;
+    }
+    if (type === "handoff") {
+      const win = ensureWindow(run, ev);
+      if (!win) return touched;
+      win.unmet = (ev.unmet || []).slice();
+      win.unmetTotal = ev.unmet_total == null ? win.unmet.length : Number(ev.unmet_total);
+      win.next = (ev.next || []).join("、") || win.next;
+      touched.push(win.id);
+      return touched;
+    }
+    if (type === "window_result") {
+      const win = ensureWindow(run, ev);
+      if (!win) return touched;
+      win.state = String(ev.state || win.state);
+      win.ok = ev.ok == null ? null : !!ev.ok;
+      win.summary = String(ev.summary || "");
+      if (ev.elapsed != null) win.elapsed = Number(ev.elapsed) || 0;
+      if (ev.retries != null) win.attempt = Number(ev.retries) + 1;
+      if (ev.stop_reason) win.stop_reason = String(ev.stop_reason);
+      touched.push(win.id);
+      return touched;
+    }
+    if (type === "files_modified") {
+      const win = ensureWindow(run, ev);
+      if (!win) return touched;
+      win.filesModified = true;
+      touched.push(win.id);
+      return touched;
+    }
+    if (type === "editor_gate") {
+      const mode = String(ev.mode || "");
+      const phase = String(ev.phase || "");
+      if (mode === "write" && phase === "enter") run.writeLock = String(ev.window || "");
+      if (mode === "write" && phase === "exit") run.writeLock = "";
+      return touched;
+    }
+    if (type === "run_end") {
+      run.status = String(ev.status || run.status);
+      run.stop_reason = String(ev.stop_reason || "");
+      run.writeLock = "";
+      return touched;
+    }
+    if (type === "integration") {
+      run.integration = { ok: ev.ok, status: ev.status, summary: ev.summary };
+      return touched;
+    }
+    return touched;
+  }
+
+  function gaugeOf(run, nowMs) {
+    const ids = run.order || [];
+    const active = ids.filter(function (id) {
+      const s = run.windows[id].state;
+      return s === "running" || s === "retry" || s === "revising";
+    });
+    const queued = ids.filter(function (id) {
+      const w = run.windows[id];
+      return w.state === "queued" && w.queue_ms > 0;
+    });
+    const done = ids.filter(function (id) { return run.windows[id].state === "done"; });
+    const finished = ids.filter(function (id) {
+      const s = run.windows[id].state;
+      return s === "done" || s === "failed" || s === "paused" || s === "skipped" ||
+             s === "waiting_external" || s === "interrupted";
+    });
+    return {
+      running: active.length,
+      max: run.max_workers || 3,
+      lock: run.writeLock === null ? null : run.writeLock,
+      queue: queued.length,
+      done: done.length,
+      total: ids.length,
+      finished: finished.length,
+      stop: run.stop_reason || ""
+    };
+  }
+
+  function statusText(state) { return BOARD_STATUS_TABLE[state] || state || ""; }
+
+  function queueText(ms) {
+    const n = Number(ms) || 0;
+    if (n <= 0) return "";
+    return n < 1000 ? ("排队 " + n + "ms") : ("排队 " + (n / 1000).toFixed(1) + "s");
+  }
+
+  function elapsedText(win, nowMs) {
+    if (win.elapsed != null) return win.elapsed.toFixed(1) + "s";
+    if (!win.started_at) return "";
+    const t0 = Date.parse(win.started_at);
+    if (isNaN(t0)) return "";
+    const sec = Math.max(0, (nowMs - t0) / 1000);
+    return sec.toFixed(sec < 10 ? 1 : 0) + "s";
+  }
+
+  function progressPct(win) {
+    const max = Number(win.max_retries || 0) + 1;
+    const att = Number(win.attempt || 0);
+    if (!att) return 0;
+    return Math.min(100, Math.round((Math.min(att, max) / max) * 100));
+  }
+
+  // =====================================================================
+  // 1) 与 server/entry.py 的接线（全部只读）
+  // =====================================================================
+  const $ = function (id) { return document.getElementById(id); };
+
+  function esc(s) {
+    return String(s == null ? "" : s)
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  }
+
+  function getJSON(url, opts) {
+    return fetch(url, opts).then(function (r) {
+      if (!r.ok) {
+        return r.text().then(function (t) {
+          throw new Error(r.status + " " + String(t || "").slice(0, 160));
+        });
+      }
+      return r.json();
+    });
+  }
+
+  const atts = [];                       // 当前附件（页面内存态；服务端无状态）
+  let attSeq = 0;
+  const state = {
+    run: blankRun("", ""),
+    cardH: 0,
+    es: null,                            // 当前 SSE
+    runId: "",
+    root: "AIAgentProject",
+    nodeCache: {},                       // path -> entries（侧边栏一层一层取）
+    events: [],                          // 这条 run 的事件（question/answer 从这里判 pending）
+    question: null                       // 当前等着答的那条 question
+  };
+
+  // ---------- 顶栏与运行列表 ----------
+  function loadHealth() {
+    getJSON("/api/health").then(function (h) {
+      state.root = String(h.project_dir || "").split(/[\\/]/).pop() || state.root;
+      $("rootpath").textContent = state.root;
+      $("rootpath").title = String(h.project_dir || "");
+      const lock = h.editor_lock || {};
+      const live = (h.live_runs || []).length;
+      const tag = $("conn");
+      tag.textContent = live ? ("活 run " + live) : "就绪";
+      tag.className = "tag" + (live ? " bad" : "");
+      tag.title = "端口 " + h.port + " · " + String(h.runs_dir || "") +
+        (lock.held ? (" · 写锁 " + (lock.window || "?")) : " · 没有锁文件");
+      // 没有锁文件时显示「—」，不显示「空闲」（写锁归属未知）。
+      if (lock.held) {
+        $("g-lock").className = "chip lock-on";
+        $("g-lock").innerHTML = "写锁 <b>" + esc(lock.window || "?") + "</b>";
+      }
+    }).catch(function (e) {
+      const tag = $("conn");
+      tag.textContent = "服务不在";
+      tag.className = "tag bad";
+      tag.title = String(e && e.message || e);
+    });
+  }
+
+  function loadRuns() {
+    return getJSON("/api/runs?limit=30").then(function (data) {
+      const sel = $("runsel");
+      const keep = sel.value;
+      sel.innerHTML = "";
+      const rows = data.runs || [];
+      if (!rows.length) {
+        sel.innerHTML = '<option value="">（还没有 run 记录）</option>';
+        return;
+      }
+      rows.forEach(function (row) {
+        const opt = document.createElement("option");
+        opt.value = row.run_id;
+        const st = RUN_STATUS_TEXT[row.status] || row.status || "";
+        opt.textContent = row.run_id + " · " + st + " · " + (row.windows || 0) + " 扇";
+        sel.appendChild(opt);
+      });
+      sel.value = rows.some(function (r) { return r.run_id === keep; }) ? keep : rows[0].run_id;
+      pickRun(sel.value);
+    });
+  }
+
+  function pickRun(runId) {
+    if (!runId) return;
+    state.runId = runId;
+    getJSON("/api/run/" + encodeURIComponent(runId) + "?tail=400").then(function (data) {
+      const run = blankRun(runId, String((data.run || {}).query || ""));
+      run.status = String((data.run || {}).status || run.status);
+      run.started_at = String((data.run || {}).started_at || "");
+      run.source = String((data.run || {}).source || "");
+      run.stop_reason = String((data.run || {}).stop_reason || "");
+      state.cardH = 0;
+      // 先按机读记录铺卡片（有出处），再把事件叠上去（事件是更细的进度）。
+      const windows = (data.run || {}).windows || {};
+      Object.keys(windows).forEach(function (id) {
+        const entry = windows[id] || {};
+        const win = ensureWindow(run, { window: id });
+        if (!win) return;
+        win.title = String(entry.title || win.title);
+        win.action = String(entry.action || "");
+        win.depends_on = (entry.depends_on || []).slice();
+        win.state = String(entry.state || win.state);
+        win.ok = entry.ok == null ? null : !!entry.ok;
+        win.summary = String(entry.summary || "");
+        win.error = String(entry.error || "");
+        if (entry.elapsed != null) win.elapsed = Number(entry.elapsed) || 0;
+        if (entry.retries != null) win.attempt = Number(entry.retries) + 1;
+        const w = entry.window || {};
+        if (w.max_retries != null) win.max_retries = Number(w.max_retries) || 0;
+        if (w.role) win.role = String(w.role);
+      });
+      (data.events || []).forEach(function (ev) { applyEvent(run, ev); });
+      state.run = run;
+      state.events = (data.events || []).slice();
+      renderRun();
+      syncQuestion(state.events);
+      followLive(runId, String((data.run || {}).status || ""));
+    }).catch(function (e) {
+      $("runid").textContent = "读不到 run：" + String(e && e.message || e);
+    });
+  }
+
+  function followLive(runId, status) {
+    if (state.es) { try { state.es.close(); } catch (err) { /* 已关 */ } state.es = null; }
+    if (status !== "running") return;    // 历史 run 不订阅：没有新事件，省一个长连接
+    const es = new EventSource("/api/stream/" + encodeURIComponent(runId));
+    state.es = es;
+    es.onmessage = function (msg) {
+      let ev;
+      try { ev = JSON.parse(msg.data); } catch (err) { return; }
+      if (!ev || ev.run_id && ev.run_id !== state.runId) return;
+      state.events.push(ev);
+      if (state.events.length > 800) state.events = state.events.slice(-800);
+      if (ev.type === "question" || ev.type === "answer") syncQuestion(state.events);
+      applyEvent(state.run, ev);
+      renderRun();
+      if (ev.type === "run_end") { es.close(); state.es = null; loadHealth(); }
+    };
+    es.onerror = function () { /* EventSource 自己会重连；不把断线当状态 */ };
+  }
+
+  // ---------- 侧边栏（一层一层取） ----------
+  function nodeEl(entry, depth) {
+    const wrap = document.createElement("div");
+    const row = document.createElement("div");
+    row.className = "node" + (entry.is_dir ? " dir" : "");
+    row.draggable = true;
+    row.dataset.path = entry.path;
+    row.title = entry.path + (entry.token ? ("  →  " + entry.token) : "");
+    row.innerHTML =
+      '<span class="ico">' + (entry.is_dir ? "▸" : "·") + "</span>" +
+      '<span class="nm">' + esc(entry.name) + "</span>" +
+      (entry.token ? '<span class="tk">' + esc(entry.token) + "</span>" : "");
+    wrap.appendChild(row);
+
+    row.addEventListener("dragstart", function (e) {
+      e.dataTransfer.effectAllowed = "copy";
+      const payload = { path: entry.path, isDir: !!entry.is_dir, name: entry.name };
+      e.dataTransfer.setData("application/x-ue-path", JSON.stringify(payload));
+      e.dataTransfer.setData("text/plain", entry.path);
+      row.classList.add("dragging");
+    });
+    row.addEventListener("dragend", function () { row.classList.remove("dragging"); });
+
+    if (entry.is_dir) {
+      const kids = document.createElement("div");
+      kids.className = "children" + (depth === 0 ? "" : " collapsed");
+      if (depth === 0) row.querySelector(".ico").textContent = "▾";
+      wrap.appendChild(kids);
+      let loaded = false;
+      const fill = function () {
+        if (loaded) return;
+        loaded = true;
+        kids.innerHTML = '<div class="node"><span class="ico">…</span><span class="nm">读取中</span></div>';
+        getJSON("/api/tree?path=" + encodeURIComponent(entry.path)).then(function (data) {
+          kids.innerHTML = "";
+          (data.entries || []).forEach(function (child) { kids.appendChild(nodeEl(child, depth + 1)); });
+          if (!(data.entries || []).length) {
+            kids.innerHTML = '<div class="node"><span class="ico">·</span><span class="nm">（空目录）</span></div>';
+          }
+        }).catch(function (e) {
+          kids.innerHTML = '<div class="node"><span class="ico">!</span><span class="nm">' +
+            esc(String(e && e.message || e)) + "</span></div>";
+        });
+      };
+      if (depth === 0) fill();
+      row.addEventListener("click", function () {
+        if (kids.classList.contains("collapsed")) fill();
+        const collapsed = kids.classList.toggle("collapsed");
+        row.querySelector(".ico").textContent = collapsed ? "▸" : "▾";
+      });
+    }
+    return wrap;
+  }
+
+  function renderTree() {
+    const host = $("tree");
+    host.innerHTML = '<div class="node"><span class="ico">…</span><span class="nm">读取工程根</span></div>';
+    getJSON("/api/tree?path=").then(function (data) {
+      host.innerHTML = "";
+      (data.entries || []).forEach(function (entry) { host.appendChild(nodeEl(entry, 0)); });
+      $("treecount").textContent = "只读 · " + (data.entries || []).length + " 项";
+    }).catch(function (e) {
+      host.innerHTML = '<div class="node"><span class="ico">!</span><span class="nm">' +
+        esc(String(e && e.message || e)) + "</span></div>";
+      $("treecount").textContent = "读不到";
+    });
+  }
+
+  function filterTree(text) {
+    const needle = String(text || "").trim().toLowerCase();
+    Array.prototype.forEach.call($("tree").querySelectorAll(".node"), function (row) {
+      if (!row.dataset.path) return;
+      const hit = !needle || row.textContent.toLowerCase().indexOf(needle) >= 0 ||
+        row.dataset.path.toLowerCase().indexOf(needle) >= 0;
+      row.style.display = hit ? "" : "none";
+    });
+  }
+
+  // ---------- 附件 chip ----------
+  const ROLE_OPTIONS = ["level", "asset", "dir", "source", "doc"];
+
+  function addAttachment(info) {
+    atts.push({
+      id: "a" + (++attSeq),
+      path: info.path,
+      name: info.name || String(info.path || "").split("/").pop(),
+      is_dir: !!info.isDir,
+      role: info.role || "",
+      external: !!info.external
+    });
+    renderChips();
+    refresh();
+  }
+
+  function renderChips() {
+    const host = $("chips");
+    host.innerHTML = "";
+    atts.forEach(function (a) {
+      const el = document.createElement("span");
+      el.className = "chipx" + (a.external ? " external" : "");
+      const token = a.token || (a.external ? "" : a.path);
+      el.innerHTML =
+        '<select class="r" data-id="' + a.id + '"' + (a.external ? " disabled" : "") + ">" +
+        ROLE_OPTIONS.map(function (r) {
+          return '<option value="' + r + '"' + (r === (a.role || "") ? " selected" : "") + ">" +
+            ROLE_NAME[r] + "</option>";
+        }).join("") + "</select>" +
+        '<span class="t" title="' + esc(a.path) + '">' +
+          esc(a.external ? (a.name + "（外部文件·拿不到路径）") : token) + "</span>" +
+        '<button class="x" data-del="' + a.id + '" title="移除">×</button>';
+      host.appendChild(el);
+    });
+    Array.prototype.forEach.call(host.querySelectorAll("select.r"), function (sel) {
+      sel.addEventListener("change", function () {
+        const a = atts.filter(function (x) { return x.id === sel.dataset.id; })[0];
+        if (a) { a.role = sel.value; renderChips(); refresh(); }
+      });
+    });
+    Array.prototype.forEach.call(host.querySelectorAll("button.x"), function (b) {
+      b.addEventListener("click", function () {
+        const at = atts.findIndex(function (x) { return x.id === b.dataset.del; });
+        if (at >= 0) atts.splice(at, 1);
+        renderChips();
+        refresh();
+      });
+    });
+  }
+
+  // ---------- 装配预览（走服务端纯函数） ----------
+  let previewSeq = 0;
+  function refresh() {
+    const seq = ++previewSeq;
+    const body = {
+      text: $("q").value,
+      atts: atts.map(function (a) {
+        return {
+          id: a.id, path: a.path, role: a.role,
+          is_dir: !!a.is_dir, external: !!a.external, name: a.name || ""
+        };
+      })
+    };
+    return getJSON("/api/preview", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body)
+    }).then(function (res) {
+      if (seq !== previewSeq) return res;      // 有更新的请求在飞，丢掉旧结果
+      // 服务端归一化后的 token 回写到 chip 上：chip 显示的就是要进句子的那个 token。
+      (res.accepted || []).forEach(function (item) {
+        const a = atts.filter(function (x) { return x.id === item.id; })[0];
+        if (a) { a.token = item.token; a.role = item.role; }
+      });
+      renderChips();
+      paintPreview(res);
+      return res;
+    }).catch(function (e) {
+      $("preview").textContent = "装配预览不可用：" + String(e && e.message || e);
+      $("notes").innerHTML = "";
+      $("btn-send").disabled = true;
+      return { ok: false, warnings: [] };
+    });
+  }
+
+  function paintPreview(res) {
+    const pre = $("preview");
+    if (!res.prompt) {
+      pre.innerHTML = '<span class="s-sep">（空）</span>';
+    } else {
+      const head = (res.lines || []).filter(function (l) { return l.kind === "text"; })
+        .map(function (l) { return esc(l.text); }).join("");
+      const rest = (res.lines || []).filter(function (l) { return l.kind === "att"; })
+        .map(function (l) {
+          const m = /^。(.*)$/.exec(l.text);
+          return '<span class="s-sep">。</span><span class="s-att">' + esc(m ? m[1] : l.text) + "</span>";
+        }).join("");
+      pre.innerHTML = head + rest;
+    }
+
+    const notes = $("notes");
+    notes.innerHTML = "";
+    const order = { red: 0, yellow: 1, info: 2 };
+    (res.warnings || []).slice().sort(function (a, b) { return order[a.level] - order[b.level]; })
+      .forEach(function (w) {
+        const d = document.createElement("div");
+        d.className = "note " + w.level;
+        d.innerHTML = '<span class="lv">' +
+          (w.level === "red" ? "拒发" : w.level === "yellow" ? "注意" : "信息") +
+          '</span><span class="tx">' + esc(w.msg) + "</span>";
+        notes.appendChild(d);
+      });
+    if (!(res.warnings || []).length) {
+      const d = document.createElement("div");
+      d.className = "note info";
+      d.innerHTML = '<span class="lv">信息</span><span class="tx">没有告警：' +
+        ((res.accepted || []).length ? ("附件 " + res.accepted.length + " 条都已归一化") : "无附件") + "。</span>";
+      notes.appendChild(d);
+    }
+    (res.notes || []).forEach(function (line) {
+      const d = document.createElement("div");
+      d.className = "note info";
+      d.innerHTML = '<span class="lv">装配</span><span class="tx">' + esc(line) + "</span>";
+      notes.appendChild(d);
+    });
+
+    // 发送按钮跟着装配结论走：有拒发级告警就禁用（告警本身在上面逐条列着）。
+    $("sendhint").textContent = res.ok
+      ? "装配可发：原文可复制；发送 = 写请求文件 + 起 agent（退出码 2 = 另一个 run 在跑）。"
+      : "有拒发级告警，先处理（见上）。";
+    $("btn-send").disabled = !res.ok;
+    $("dropzone").classList.toggle(
+      "bad", !res.ok && (res.warnings || []).some(function (w) { return w.level === "red"; }));
+  }
+
+  // ---------- 发送 / 续接（唯一写面：请求文件 + 收件箱） ----------
+  function sysmsg(text, cls) {
+    const el = document.createElement("div");
+    el.className = "sysmsg" + (cls ? " " + cls : "");
+    el.textContent = text;
+    $("thread").appendChild(el);
+    $("thread").scrollTop = $("thread").scrollHeight;
+    return el;
+  }
+
+  function send(resume) {
+    const btn = resume ? $("btn-resume") : $("btn-send");
+    const force = !!($("chk-force") || {}).checked;
+    const mode = String(($("mode") || {}).value || "multi");
+    const body = resume
+      ? { command: ":resume latest", force: force, mode: "multi" }
+      : { text: $("q").value, atts: atts.map(function (a) {
+          return { id: a.id, path: a.path, role: a.role, is_dir: !!a.is_dir,
+                   external: !!a.external, name: a.name || "" };
+        }), force: force, mode: mode };
+    btn.disabled = true;
+    getJSON("/api/run", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body)
+    }).then(function (res) {
+      btn.disabled = false;
+      if (!res.ok) {
+        sysmsg("没起 run：" + (res.error || "未知原因"), "bad");
+        (res.warnings || []).forEach(function (w) { sysmsg("· " + w.msg, "bad"); });
+        return;
+      }
+      sysmsg("已写请求文件 " + res.request + "，起进程 pid=" + res.pid +
+             "（日志 " + res.log + "）。");
+      if ((res.mode || mode) === "chat") {
+        // 普通对话不写 run 记录（chat.py 不进 board），没有卡片可等：只看日志收尾。
+        sysmsg("普通对话模式：不产生 run 记录，回答只写在日志里。");
+        return;
+      }
+      sysmsg("等待新 run 出现在 /api/runs …");
+      waitNewRun(res.before || [], 0);
+    }).catch(function (e) {
+      btn.disabled = false;
+      sysmsg("起 run 失败：" + String(e && e.message || e), "bad");
+    });
+  }
+
+  /** 起 run 之后新 run_id 要过一两秒才落盘（计划 3-3 的验收口径是 3 秒）。 */
+  function waitNewRun(before, tries) {
+    if (tries > 12) {
+      sysmsg("12 秒还没等到新 run 记录：看日志，或点「run」下拉里的新 id。", "bad");
+      return;
+    }
+    setTimeout(function () {
+      getJSON("/api/runs?limit=10").then(function (data) {
+        const known = {};
+        before.forEach(function (id) { known[id] = true; });
+        const fresh = (data.runs || []).filter(function (row) { return !known[row.run_id]; });
+        if (!fresh.length) { waitNewRun(before, tries + 1); return; }
+        const top = fresh[0].run_id;
+        sysmsg("新 run：" + top + "（" + (RUN_STATUS_TEXT[fresh[0].status] || fresh[0].status) + "）");
+        loadRuns();
+        const sel = $("runsel");
+        if (sel) { sel.value = top; }
+        pickRun(top);
+      }).catch(function () { waitNewRun(before, tries + 1); });
+    }, 900);
+  }
+
+  // ---------- 决策面板（只有出现 question 事件才弹） ----------
+  function renderQuestion(ev) {
+    const zone = $("qzone");
+    if (!ev) { zone.hidden = true; zone.classList.remove("done"); state.question = null; return; }
+    state.question = ev;
+    zone.hidden = false;
+    zone.classList.remove("done");
+    $("qkind").textContent = ev.kind === "brief" ? "任务书" :
+      ev.kind === "filter" ? "过滤器" : "裁决";
+    $("qp").textContent = String(ev.prompt || "");
+    const host = $("qopts");
+    host.innerHTML = "";
+    (ev.options || []).forEach(function (opt) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.textContent = String(opt.label || opt.value || "");
+      b.dataset.value = String(opt.value == null ? "" : opt.value);
+      b.addEventListener("click", function () { chooseOption(b, ev); });
+      host.appendChild(b);
+    });
+    if (!(ev.options || []).length) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.textContent = "在下面输入答案";
+      b.dataset.value = "";
+      b.addEventListener("click", function () { chooseOption(b, ev); });
+      host.appendChild(b);
+    }
+    $("qecho").textContent = "";
+    $("qpath").value = "";
+  }
+
+  /** 点一次只写一行：写完禁用按钮，直到下一条 question（计划 3-4）。 */
+  function chooseOption(button, ev) {
+    const raw = button.dataset.value || "";
+    let answer = raw;
+    if (raw === "r") {
+      const path = String($("qpath").value || "").trim();
+      if (!path) {
+        $("qecho").textContent = "先在上面填路径，再点 r";
+        $("qpath").focus();
+        return;
+      }
+      answer = "r " + path;
+    }
+    $("qecho").textContent = "将写入一行：" + answer;
+    Array.prototype.forEach.call($("qopts").querySelectorAll("button"), function (b) {
+      b.disabled = true;
+      b.classList.toggle("chosen", b === button);
+    });
+    $("qzone").classList.add("done");
+    getJSON("/api/answer", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        run_id: state.runId, question_id: String(ev.question_id || ""),
+        answer: answer, kind: String(ev.kind || "")
+      })
+    }).then(function (res) {
+      if (!res.ok) {
+        $("qecho").textContent = "没写进去：" + (res.error || "未知原因");
+        return;
+      }
+      sysmsg("已写入裁决：" + answer + "（" + res.path + "）");
+    }).catch(function (e) {
+      $("qecho").textContent = "没写进去：" + String(e && e.message || e);
+    });
+  }
+
+  /** 从事件流里找「还没答的那一条 question」。答过的不再弹（双键：run_id + question_id）。 */
+  function syncQuestion(events) {
+    let open = null;
+    const answered = {};
+    (events || []).forEach(function (ev) {
+      if (!ev) return;
+      if (ev.type === "answer" && ev.question_id) answered[String(ev.question_id)] = true;
+    });
+    (events || []).forEach(function (ev) {
+      if (!ev || ev.type !== "question") return;
+      const id = String(ev.question_id || "");
+      if (!id || answered[id]) return;
+      open = ev;
+    });
+    renderQuestion(open);
+  }
+
+  // ---------- 拖拽 ----------
+  function bindDrop() {    const zone = $("dropzone");
+    ["dragenter", "dragover"].forEach(function (t) {
+      zone.addEventListener(t, function (e) {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = "copy";
+        zone.classList.add("over");
+      });
+    });
+    ["dragleave", "dragend"].forEach(function (t) {
+      zone.addEventListener(t, function (e) {
+        if (e.target === zone) zone.classList.remove("over");
+      });
+    });
+    zone.addEventListener("drop", function (e) {
+      e.preventDefault();
+      zone.classList.remove("over");
+      const payload = e.dataTransfer.getData("application/x-ue-path");
+      if (payload) {
+        try {
+          addAttachment(JSON.parse(payload));
+          return;
+        } catch (err) { /* 落到下面几个分支 */ }
+      }
+      const plain = e.dataTransfer.getData("text/plain");
+      if (plain && /^(Content|Source|documents)\//.test(plain)) {
+        addAttachment({ path: plain, name: plain.split("/").pop() });
+        return;
+      }
+      const files = e.dataTransfer.files;
+      if (files && files.length) {
+        Array.prototype.forEach.call(files, function (f) {
+          addAttachment({ path: f.name, name: f.name, external: true });
+        });
+        return;
+      }
+      if (plain) addAttachment({ path: plain, name: plain.split("/").pop(), external: true });
+    });
+  }
+
+  // ---------- 启动 ----------
+  function boot() {
+    bindDrop();
+    loadHealth();
+    renderTree();
+    renderChips();
+    refresh();
+    renderRun();
+
+    $("treefilter").addEventListener("input", function () { filterTree(this.value); });
+    $("q").addEventListener("input", refresh);
+    $("btn-clearatts").addEventListener("click", function () {
+      atts.length = 0; renderChips(); refresh();
+    });
+    $("btn-copy").addEventListener("click", function () {
+      const btn = $("btn-copy");
+      const text = $("preview").textContent || "";
+      const done = function () {
+        btn.textContent = "已复制";
+        setTimeout(function () { btn.textContent = "复制"; }, 1200);
+      };
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(done, done);
+      } else {
+        done();
+      }
+    });
+    $("runsel").addEventListener("change", function () { pickRun(this.value); });
+    $("btn-send").addEventListener("click", send);
+    $("btn-resume").addEventListener("click", function () { send(true); });
+    $("q").addEventListener("keydown", function (e) {
+      if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); send(); }
+    });
+    $("donehead").addEventListener("click", function () {
+      const list = $("donelist");
+      list.classList.toggle("collapsed");
+      $("donecaret").textContent = list.classList.contains("collapsed") ? "▸" : "▾";
+    });
+
+    // 秒表：只有带 started_at 且没有 elapsed 的窗口才走字。
+    setInterval(function () {
+      if (!state.run.order.length) return;
+      renderGauge();
+      Array.prototype.forEach.call(document.querySelectorAll(".card"), function (c) {
+        const win = state.run.windows[c.dataset.win];
+        if (!win) return;
+        const el = elapsedText(win, currentNow());
+        const span = c.querySelector(".meta span");
+        if (span && el) span.textContent = el;
+      });
+    }, 480);
+
+    loadRuns();
+    setInterval(loadHealth, 15000);
+    setInterval(function () {
+      if (state.es) return;                 // 有 SSE 就别再整表重刷
+      loadRuns();
+    }, 20000);
+  }
+
+  function currentNow() { return Date.now(); }
+
+  function renderGauge() {
+    const g = gaugeOf(state.run, currentNow());
+    $("g-par").innerHTML = "并发 <b>" + g.running + "/" + g.max + "</b>";
+    const lockEl = $("g-lock");
+    if (g.lock === null) {
+      lockEl.className = "chip";
+      lockEl.innerHTML = "写锁 <b>—</b>";
+      lockEl.title = "没有 editor_gate 事件：不知道写锁归属，不显示「空闲」";
+    } else if (g.lock) {
+      lockEl.className = "chip lock-on";
+      lockEl.innerHTML = "写锁 <b>" + esc(g.lock) + "</b>";
+      lockEl.title = "该窗口在 editor_gate(mode=write) 里";
+    } else {
+      lockEl.className = "chip ok";
+      lockEl.innerHTML = "写锁 <b>空闲</b>";
+      lockEl.title = "已收到 editor_gate 的 exit";
+    }
+    $("g-queue").innerHTML = "队列 <b>" + g.queue + "</b>";
+    $("g-done").innerHTML = "完成 <b>" + g.done + "/" + g.total + "</b>";
+    const stopEl = $("g-stop");
+    stopEl.className = "chip" + (g.stop && g.stop !== "ok" ? " bad" : "");
+    stopEl.innerHTML = "停因 <b>" + esc(g.stop || "—") + "</b>";
+    $("runid").textContent = state.run.run_id || "—";
+  }
+
+  function cardEl(win, node, run) {
+    const div = document.createElement("div");
+    const st = win.state;
+    div.className = "card st-" + st + (run.writeLock === win.id ? " locked" : "");
+    div.style.left = node.x + "px";
+    div.style.top = node.y + "px";
+    div.style.width = node.w + "px";
+    div.style.height = node.h + "px";
+    div.dataset.win = win.id;
+
+    const q = queueText(win.queue_ms);
+    const el = elapsedText(win, currentNow());
+    const pct = progressPct(win);
+    const unmet = (win.unmet && win.unmet.length)
+      ? "↓未完成 " + win.unmet.length + "/" + (win.unmetTotal == null ? win.unmet.length : win.unmetTotal)
+      : "";
+
+    div.innerHTML =
+      '<div class="hd"><span class="wid">' + esc(win.id) + "</span>" +
+        (win.role ? '<span class="role">' +
+          esc(win.role === "research" ? "只读" : win.role === "review" ? "复审" : "执行") + "</span>" : "") +
+        '<span class="badge st-' + esc(st) + '">' + esc(statusText(st)) + "</span></div>" +
+      '<div class="ti">' + esc(win.title) + "</div>" +
+      '<div class="ac">' + esc(win.action || "（无动作）") + "</div>" +
+      '<div class="meta">' +
+        (el ? "<span>" + esc(el) + "</span>" : "") +
+        (q ? '<span class="q">' + esc(q) + "</span>" : "") +
+        (win.attempt > 1 ? "<span>第" + win.attempt + "次</span>" : "") +
+        (win.toolCalls > 1 ? "<span>工具" + win.toolCalls + "</span>" : "") +
+      "</div>" +
+      '<div class="bar"><i style="width:' + pct + '%"></i></div>' +
+      (win.step ? '<div class="step">' + esc(win.step) + "</div>" : "") +
+      (win.reasoning ? '<div class="think">' + esc(win.reasoning) + "</div>" : "") +
+      '<div class="foot">' +
+        (unmet ? '<div class="unmet" title="' + esc((win.unmet || []).join("；")) + '">' + esc(unmet) + "</div>" : "") +
+        (win.next ? '<div class="next" title="' + esc(win.next) + '">↑' + esc(win.next) + "</div>" : "") +
+      "</div>" +
+      (win.filesModified ? '<span class="dot" title="改过文件"></span>' : "");
+
+    div.title = win.id + " · " + win.title + (win.stop_reason ? " · 停因 " + win.stop_reason : "");
+    div.addEventListener("click", function () { showWindowLog(win); });
+    return div;
+  }
+
+  function renderRun() {
+    const run = state.run;
+    const ids = run.order || [];
+    const wins = ids.map(function (id) { return run.windows[id]; });
+    const canvas = $("canvas");
+    const svg = $("edges");
+
+    Array.prototype.slice.call(canvas.querySelectorAll(".card")).forEach(function (c) { c.remove(); });
+    while (svg.firstChild) svg.removeChild(svg.firstChild);
+
+    if (!wins.length) {
+      canvas.style.width = "100%";
+      canvas.style.height = "100%";
+      svg.setAttribute("width", "0");
+      svg.setAttribute("height", "0");
+      svg.removeAttribute("viewBox");
+      renderGauge();
+      renderDone();
+      return;
+    }
+
+    // 两趟：先量真实最高的一张，再用它重排（固定高度会裁掉思考与交接两行）。
+    let cardH = state.cardH || 0;
+    {
+      const probe = document.createElement("div");
+      probe.style.cssText = "position:absolute;left:-9999px;top:0;visibility:hidden;display:flex;flex-direction:column;";
+      wins.forEach(function (w) {
+        const c = cardEl(w, { x: 0, y: 0, w: 176, h: 0, id: w.id }, run);
+        c.style.position = "static";
+        c.style.height = "auto";
+        probe.appendChild(c);
+      });
+      canvas.appendChild(probe);
+      let max = 0;
+      Array.prototype.forEach.call(probe.children, function (c) { max = Math.max(max, c.offsetHeight); });
+      probe.remove();
+      cardH = Math.max(cardH, 120, Math.ceil(max));
+      state.cardH = cardH;
+    }
+
+    const lay = layout(wins, { cardH: cardH });
+    const W = Math.max(lay.width, 340);
+    const H = Math.max(lay.height, 200);
+    canvas.style.width = W + "px";
+    canvas.style.height = H + "px";
+    svg.removeAttribute("viewBox");   // 残留 viewBox 会把坐标整体缩放（一条边都画不出来）
+    svg.setAttribute("width", String(W));
+    svg.setAttribute("height", String(H));
+
+    wins.forEach(function (w) {
+      (w.depends_on || []).forEach(function (dep) {
+        const a = lay.nodes[dep], b = lay.nodes[w.id];
+        if (!a || !b) return;
+        const depState = (run.windows[dep] || {}).state || "queued";
+        const kind = edgeKind(depState, w.action);
+        const style = EDGE_STYLE[kind];
+        const p = document.createElementNS("http://www.w3.org/2000/svg", "path");
+        p.setAttribute("d", edgePath(a, b));
+        p.setAttribute("fill", "none");
+        p.setAttribute("stroke", style.stroke);
+        p.setAttribute("stroke-width", String(style.width));
+        if (style.dash) p.setAttribute("stroke-dasharray", style.dash);
+        p.setAttribute("data-edge", dep + "->" + w.id);
+        p.setAttribute("data-kind", kind);
+        svg.appendChild(p);
+      });
+    });
+
+    wins.forEach(function (w) {
+      const node = lay.nodes[w.id];
+      if (!node) return;
+      canvas.appendChild(cardEl(w, node, run));
+    });
+
+    renderGauge();
+    renderDone();
+  }
+
+  function renderDone() {
+    const run = state.run;
+    const ids = run.order || [];
+    const list = $("donelist");
+    const rows = ids.map(function (id) { return run.windows[id]; })
+      .filter(function (w) {
+        return ["done", "failed", "paused", "skipped", "waiting_external", "interrupted"].indexOf(w.state) >= 0;
+      });
+    const okCount = rows.filter(function (w) { return w.state === "done"; }).length;
+    const bad = rows.filter(function (w) { return w.state === "failed"; }).length;
+    $("donecnt").textContent = "✓ " + okCount + " 已完成";
+    $("donefail").textContent = bad ? ("· ✘ " + bad + " 失败") : "";
+    list.innerHTML = "";
+    rows.forEach(function (w) {
+      const d = document.createElement("div");
+      d.className = "done-row";
+      d.innerHTML =
+        '<span class="w">' + esc(w.id) + "</span>" +
+        '<span class="s ' + esc(w.state) + '">' + esc(statusText(w.state)) + "</span>" +
+        '<span class="tt" title="' + esc(w.summary) + '">' +
+          esc(w.title + (w.summary ? " — " + w.summary : "")) + "</span>" +
+        '<span class="sr">' + esc(w.stop_reason || "") + "</span>" +
+        '<span class="el">' + esc(w.elapsed != null ? w.elapsed.toFixed(1) + "s" : "") + "</span>";
+      list.appendChild(d);
+    });
+  }
+
+  function showWindowLog(win) {
+    const line = document.createElement("div");
+    line.className = "sysmsg";
+    line.textContent = win.id + " · " + (win.action || "无动作") + " · " +
+      (win.summary || win.step || "（暂无输出）") +
+      (win.unmet && win.unmet.length ? " · 未完成：" + win.unmet.join("；") : "");
+    $("thread").appendChild(line);
+    $("thread").scrollTop = $("thread").scrollHeight;
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", boot);
+  } else {
+    boot();
+  }
+})();
+</script>
+</body>
+</html>

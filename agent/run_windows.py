@@ -1958,6 +1958,10 @@ def execute_windows(query: str, complete=None, echo=print, emit=None, planned=No
 
     path = runs_md_path(run_id)
     events = _EventBus(run_id, emit=emit)
+    # 决策通道接上这条 run 的事件出口：`question` / `answer` 从这里发（计划 §6.3）。
+    from agent import ui_ask as _ui_ask
+
+    _ui_ask.attach(run_id, events.emit)
     from backends.select import bind_run
 
     bind_run(events.emit)
@@ -2627,6 +2631,10 @@ def _parse_args(argv=None):
     parser.add_argument("--board", action="store_true", help="终端面板（默认）")
     parser.add_argument("--resume", default="", help="续接的 run id，或 latest")
     parser.add_argument("--force", action="store_true", help="有活心跳时仍启动，并写下 forced_by")
+    parser.add_argument(
+        "--ui-inbox", default="",
+        help="UI 收件箱目录（data/ui/inbox）。缺行不自动 skip：等不到就按停止处理",
+    )
     return parser.parse_args(argv)
 
 
@@ -2683,14 +2691,32 @@ def _load_run(run_ref: str) -> dict | None:
 
 
 def _decide_window(window: dict, entry: dict) -> str:
-    """多窗口的人工裁决，对齐单循环：s 停止 / c 跳过 / r 路径。只问一次。"""
+    """多窗口的人工裁决，对齐单循环：s 停止 / c 跳过 / r 路径。只问一次。
+
+    `question` 事件发在拿答案**之前**（`agent/ui_ask.py`），按钮文案与这里打印的提示同源：
+    `options` 由 `_pause_hint` 的同一份字面生成，所以「UI 上写什么」与「终端里敲什么」
+    不可能漂移（Q-1）。收件箱等不到答案时按 `timeout` 收口 → 停止，**不替人跳过**。
+    """
+    from agent import ui_ask
     from agent.cli_log import pause_live
 
-    prompt = "裁决：" + _pause_hint(window, entry) + ": "
+    hint = _pause_hint(window, entry)
+    kind = "filter" if _filter_name_pause(window, entry) else "decide"
+    prompt = "裁决：" + hint + ": "
+    channel = ui_ask.active()
     try:
         with pause_live():
             print(f"\n{window.get('id')} 暂停：{entry.get('error') or entry.get('summary') or ''}", flush=True)
-            answer = input(prompt).strip()
+            if channel is None:
+                answer = input(prompt).strip()
+            else:
+                answer, source = channel.ask(
+                    kind=kind, window=str(window.get("id") or ""),
+                    prompt=prompt, hint=hint, default="s",
+                )
+                if source in ("eof", "timeout"):
+                    print("\n停止")
+                    return "stop"
     except (EOFError, KeyboardInterrupt):
         print("\n停止")
         return "stop"
@@ -2948,7 +2974,19 @@ def _run_query(query: str, board, echo, emit) -> tuple[int, Path | None]:
             def _ask(prompt="") -> str:
                 if board is not None and board.running():
                     board.stop()
-                return input(prompt)
+                from agent import ui_ask
+
+                channel = ui_ask.active()
+                if channel is None:
+                    return input(prompt)
+                answer, source = channel.ask(
+                    kind="brief", window="", prompt=str(prompt),
+                    options=ui_ask.brief_options(prompt), default="",
+                )
+                if source in ("eof", "timeout"):
+                    # brief_flow 捕获 EOFError 即「放弃」；这里走同一条路，不替人确认。
+                    raise EOFError("没有拿到任务书裁决")
+                return answer
 
             # D9：理解器没着落的半句必须进任务书，不许只在事件流里留一句。
             # 用签名探测传参：老签名没有 unresolved 时保持原行为，不炸。
@@ -3167,6 +3205,11 @@ def main(argv=None) -> None:
     from agent.run_guard import admit_live_runs, attach_claimed_stdin, sweep_orphan_runs
 
     args = _parse_args(argv)
+    from agent import ui_ask
+
+    # 决策通道：`--ui-inbox` 给了收件箱（UI 驱动）；没给也装一条，只走 stdin，
+    # 但 question/answer 照发——观测侧要能看到「这一扇在等谁表态」。
+    ui_ask.configure(inbox=(args.ui_inbox or None), stdin=input, printer=print)
     code = admit_live_runs(force=args.force)
     if code:
         raise SystemExit(code)

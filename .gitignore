@@ -40,3 +40,5 @@ data/build.lock
 data/last_cpp_build.json
 # lexicon.json 是人写的表；solver 只往这份候选队列提名，等同 action_candidates。
 data/skills/lexicon_candidates.json
+# HTML 入口层的两个写面（20261116-1530 计划 §6.2）：请求文件与三期收件箱都是运行态。
+data/ui/

@@ -1,8 +1,9 @@
 {
-  "total": 81,
-  "unverified_total": 9,
+  "total": 65,
+  "unverified_total": 25,
   "unverified": [
     "A",
+    "B",
     "I"
   ],
   "dimensions": {
@@ -16,11 +17,11 @@
     },
     "B": {
       "score": 16,
-      "verified": true,
+      "verified": false,
       "gap": "档案不足 10 句×3 轮",
       "evidence": "data/archive",
-      "basis": "evidence",
-      "counted": 16
+      "basis": "baseline",
+      "counted": 0
     },
     "C": {
       "score": 15,
@@ -59,7 +60,7 @@
       "score": 10,
       "verified": true,
       "gap": "",
-      "evidence": "data/costs.jsonl（111 行）；eval/report.py",
+      "evidence": "data/costs.jsonl（149 行）；eval/report.py",
       "basis": "evidence",
       "counted": 10
     },

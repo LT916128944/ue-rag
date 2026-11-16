@@ -397,7 +397,7 @@ def check_setup_wording() -> None:
     """P5-2 setup.ps1 措辞：WORKFLOW.md 描述 setup.ps1 的句子含「自己跑」时必须同时含「打印」；
     shortcuts/setup.ps1 实际只是 Write-Output 打印时，句子说「自己跑」就红。
 
-    为什么：setup.ps1 末尾三条是 Write-Output「下一步」，check_all / ingest.bat / start.bat 都要人自己跑。
+    为什么：setup.ps1 末尾三条是 Write-Output「下一步」，check_all / ingest.bat / 起入口服务都要人自己跑。
     文档写成脚本自己跑，换机的人会以为检查已经跑过。
     """
     script = ROOT / "shortcuts" / "setup.ps1"

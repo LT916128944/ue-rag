@@ -153,3 +153,30 @@ jobs:
       # 20261112-1220 §4.4：机器跑基准 + 人抽查做成真门。没有 batch/audit 时红是设计意图。
       - name: check_bench_audit
         run: python eval/check_bench_audit.py
+      # 20261116-1530 HTML 入口层第 2 期（S-0/A-1/A-2/O-1/O-2）。三条都只依赖本仓库：
+      # check_entry_spawn 把 subprocess.Popen 换成替身，钉 --force 透传 / 改名早于打开 /
+      # --plain 只在多窗口（原 check_start_bat 钉的旧菜单式 start.bat 已删除；现行
+      # AIAgentProject/start.bat 只起服务、不含 run 逻辑，判据搬到这里），
+      # check_entry_paths 在封闭环境跑 plan_windows 与 prompt_builder（一次模型调用都不许发生），
+      # check_observer_labels 只比状态表与 _runs_day 分桶。
+      - name: check_entry_spawn
+        run: python eval/check_entry_spawn.py
+      - name: check_entry_paths
+        run: python eval/check_entry_paths.py
+      - name: check_observer_labels
+        run: python eval/check_observer_labels.py
+      # 第 3 期：决策通道（question/answer 事件 + 收件箱）与驱动（请求文件 + 子进程）。
+      # subprocess.Popen 在 check_entry_drive 里换成替身，所以 CI 上不起真 run、不调模型。
+      - name: check_entry_questions
+        run: python eval/check_entry_questions.py
+      - name: check_entry_drive
+        run: python eval/check_entry_drive.py
+      # 一步拉起：默认自动开浏览器、--no-open 关掉、已有实例不抢端口、端口 listen 之后才开。
+      # 全离线：不起 uvicorn、不开真浏览器、不连编辑器。
+      - name: check_entry_launch
+        run: python eval/check_entry_launch.py
+      # 双击入口 AIAgentProject\start.bat：起服务这一件事本身也要钉。
+      # 它坏起来没有运行时症状（双击闪一下、页面没出来），所以换到无关 cwd 跑真 cmd，
+      # 钉 %~dp0 不被 shift 吃掉、默认 8011、参数转发、nopause/pause 口径、缺件指路。
+      - name: check_entry_bat
+        run: python eval/check_entry_bat.py

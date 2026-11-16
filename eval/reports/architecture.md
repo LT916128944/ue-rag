@@ -5,9 +5,9 @@
 ## 框架
 
 ```text
-start.bat ─┬─ 普通对话 chat.py ─ retrieve ─ 回答
-           ├─ 单循环 run_multi.py ─ plan_sequence ─ 每步同一张图
-           └─ 多窗口 run_windows.py ─ 规划者/任务书/快路径 ─ 每扇 run_task（只读并行过编辑器闸门）
+entry.html ─┬─ 普通对话 chat.py ─ retrieve ─ 回答
+            ├─ 单循环 run_multi.py ─ plan_sequence ─ 每步同一张图
+            └─ 多窗口 run_windows.py ─ 规划者/任务书/快路径 ─ 每扇 run_task（只读并行过编辑器闸门）
                                           board.py 面板 · brief.py 任务书+人审门 · ledger.py 台账
                                                             │
                     ┌─ Cursor 对话 ─ scan_mcp_tools.py ─ call_mcp_tool.py ─┐

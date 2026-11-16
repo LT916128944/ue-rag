@@ -8,7 +8,7 @@ Python 3.12。模型走 DeepSeek，向量库是 Chroma，嵌入模型是 `BAAI/b
 
 ## 准备
 
-换机可以跑 `shortcuts\setup.ps1`：找到 Python 3.12，建 `.venv`，`pip install -r requirements.txt`。`.env` 没有才从 `.env.example` 复制，已有则不动。然后它打印三条下一步：`python eval/check_all.py`、`shortcuts\ingest.bat`、旁边工程的 `start.bat`。不下载 UE，不写密钥。
+换机可以跑 `shortcuts\setup.ps1`：找到 Python 3.12，建 `.venv`，`pip install -r requirements.txt`。`.env` 没有才从 `.env.example` 复制，已有则不动。然后它打印三条下一步：`python eval/check_all.py`、`shortcuts\ingest.bat`、`python server/entry.py --port 8011`（**这一步就够**：服务会自己打开浏览器；`--no-open` 可关掉）。不下载 UE，不写密钥。
 
 也可以自己做：
 
@@ -60,6 +60,10 @@ copy .env.example .env
 
 `/api/health` 返回 `ok`、`model`、`mcp_url`、`mcp_up`，以及 `backend`、`index_present`、`circuit_closed`、`checkpoint_writable`、`disk_free_mb`。后五项各带 `ok` 和 `reason`。不调用模型。本机把 CI 里已有的离线检查串起来用 `python eval/check_all.py`。分数由 `python eval/check_scorecard.py` 按证据写入 `data/harness/scorecard.json`。成本按 `caller` 分列，没有行的入口不填 0。
 
+浏览器侧的 HTML 入口层是 `server/entry.py`（`python server/entry.py --port 8011`，127.0.0.1:8011），入口页在 `server/static/entry.html`（本仓库内，页面由本服务提供，`GET /` 直接读那个文件）：目录侧边栏（`/api/tree?path=` 一次只列一层，屏蔽 `Binaries / Intermediate / Saved / DerivedDataCache / .vs`）、拖拽附件、装配预览、运行面板（卡片与连线来自 `data/runs/**/*.json` 与 `data/events/<run_id>.jsonl`）、决策面板（只在出现 `question` 事件时弹出）。**读**走 `/api/runs`、`/api/run/<id>`、`/api/stream/<id>`、`/api/tree`、`/api/health`、`/api/questions/<id>`；**写**只有三个文件——`data/ui/req/<ts>.txt`（`POST /api/run` 写一行需求，再 `subprocess` 起对应模式的 agent 脚本；多窗口带 `--plain --force`）、`data/ui/inbox/<run_id>.jsonl`（`POST /api/answer` 一行一条裁决）、`data/ui/logs/<ts>.log`。装配预览 `POST /api/preview` 仍是纯函数（`server/prompt_builder.py`）。这一层只 import `config/core/server`，不 import `agent`——`run_guard` 的活 run 互斥、`UE_RAG_STDIN` 的原子改名、`editor_lock` 的跨进程锁都长在「一个进程一条 run」上，UI 只喂文件、只读文件。`--force` 由 `_spawn` 按请求体透传，改名（`.consumed`）在 `subprocess` 打开之前完成，`--plain` 只挂多窗口那条路——三条都由 `eval/check_entry_spawn.py` 钉住（原 `check_start_bat.py` 钉的是旧版菜单式 `start.bat`，那份菜单已删除；现在的 `AIAgentProject/start.bat` 只做启动，不含任何菜单与 run 逻辑）。
+
+裁决通道在 `agent/ui_ask.py`，四条口径：`question` 事件发在 `input()` **之前**（带 `question_id/kind/window/prompt/options[]/default`）；`options` 与 `_pause_hint` 的同一份字面生成，UI 按钮与终端提示不会漂移；收件箱按 `run_id`+`question_id` 双键、**领取即改名**（`os.replace`，两进程只有一个拿到），对不上的行丢弃并告警；**缺行不许当成自动 skip**——等不到答案就按 `timeout` 收口、走与 EOF 同一条「停止」路。`question`/`answer` 不进 `cli_log._VISIBLE`（它们给人看，不是子 CLI 日志）。`entry.py` 从人写的 `UE_RAG_UI_INBOX` 透传 `--ui-inbox`；不设就只有终端裁决。
+
 ## 入库
 
 资产导出要在编辑器 Python 里跑，其余可以在本目录跑：
@@ -95,7 +99,7 @@ python agent/run_windows.py
 python agent/run_windows.py --resume latest
 ```
 
-工程根目录的 `start.bat` 就是这四条：1 普通对话，2 单循环，3 多窗口，4 续接。
+`server/static/entry.html` 就是这四条入口的页面形态：模式「普通对话 / 单循环 / 多窗口」，加「续接最近」。双击 `AIAgentProject\start.bat` 即起服务并开页（`start.bat` 只做启动，不做菜单；三个模式在页面上选）。
 
 项目语料 MCP（stdio）提供 `search_ue_project` 和 `get_project_summary`：
 

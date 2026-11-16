@@ -101,7 +101,7 @@ def execute_ue_tool(tool_name: str, arguments: str, task: dict | None = None) ->
 
                 return json.dumps({
                     "ok": False,
-                    "error": "write refused。改 C++ 用 start.bat 菜单 3，确认后会编译；源码留下后启动编辑器。",
+                    "error": "write refused。改 C++ 用入口页「多窗口」模式，确认后会编译；源码留下后启动编辑器。",
                     "policy": policy_snapshot(task),
                 }, ensure_ascii=False)
             from core.source_edit import apply_unified_diff

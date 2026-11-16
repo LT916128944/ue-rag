@@ -148,7 +148,7 @@ HELP_TEXT = """
   - List all actors in the current level
   - Move the SkyLight_0 actor up by 100 units and verify
 
-改 C++ 不在这里写文件。用 start.bat 菜单 3，确认后会编译；源码留下后启动编辑器。
+改 C++ 不在这里写文件。用入口页的「多窗口」模式，确认后会编译；源码留下后启动编辑器。
 """
 
 

@@ -974,10 +974,16 @@ def check_windows() -> None:
             assert speed["planner_called"] is True
             assert [window["action"] for window in speed["windows"]] == ["edit_cpp"]
 
-            bat = (UE_PROJECT_DIR / "start.bat").read_text(encoding="utf-8")
-            assert "run_multi.py" in bat
-            assert "run_windows.py" in bat
-            assert "run_agent.py" not in bat
+            # 入口接线：20261116 起入口是 server/entry.py（页面 server/static/entry.html，
+            # 同仓；AIAgentProject 根只留 start.bat 一个入口）。
+            # 旧菜单式 start.bat 已删除；现行 AIAgentProject/start.bat 只起服务、不含菜单，
+            # 模式表仍然只有这里一份。判据不变：两个真入口脚本都通，run_agent.py 不再进菜单。
+            from server.entry import MODE_SCRIPTS
+
+            entry_scripts = set(MODE_SCRIPTS.values())
+            assert "run_multi.py" in entry_scripts
+            assert "run_windows.py" in entry_scripts
+            assert "run_agent.py" not in entry_scripts
             guide = (UE_PROJECT_DIR / "WORKFLOW.md").read_text(encoding="utf-8")
             assert "单循环" in guide
             assert "多窗口" in guide

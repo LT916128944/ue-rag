@@ -1,7 +1,8 @@
 # agent/run_guard.py
 """无主 run 与 stdin 单次消费。
 
-start.bat 把 UE_RAG_STDIN 重定向给 run_windows。超时转后台的 cmd 若没死干净，
+入口层（`server/entry.py::_spawn`，原先的 `start.bat`）把 UE_RAG_STDIN 重定向给 run_windows。
+超时转后台的 cmd 若没死干净，
 会拿着同一份输入再起一个真 run。这里用一次原子改名占住文件；run 记录写 pid
 和心跳，REPL 启动时把超 30 分钟无心跳的 running 改判 orphaned，并在 md 留名。
 不杀进程。有活心跳时入口默认拒绝；带 --force 才放行，并在被越过的 run 的事件里
@@ -38,7 +39,7 @@ def claim_stdin(raw: str | None = None, *, runs_dir: Path | None = None) -> str:
     目标文件已经不在、只剩 .consumed：没有未过期心跳时把 .consumed 交回这次
     调用并返回 ok；有未过期心跳时仍返回 busy。
     两个活进程同时改名，只有一个 os.replace 成功，失败的一方仍是 busy。
-    start.bat 会在重定向之前改名并设 UE_RAG_STDIN_CLAIMED=1：文件一旦被
+    入口层会在重定向之前改名并设 UE_RAG_STDIN_CLAIMED=1：文件一旦被
     cmd 打开，Windows 就不许再改名（WinError 32），所以这条路径不再改第二次。
     """
     if os.environ.get("UE_RAG_STDIN_CLAIMED", "").strip() == "1":

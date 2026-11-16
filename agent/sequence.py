@@ -3439,6 +3439,10 @@ def run_sequence(query: str, decide, *, choices: bool = False, layered: bool = F
         from agent.run_windows import _EventBus
 
         events = _EventBus(stamp)
+        # 决策通道接上这条 run 的事件出口（question / answer 从这里发）。
+        from agent import ui_ask
+
+        ui_ask.attach(stamp, events.emit)
     from backends.select import bind_run
 
     bind_run(None if events is None else events.emit)

@@ -120,4 +120,4 @@ if ($receiptCode -ne 0) {
 Write-Output "下一步："
 Write-Output "python eval/check_all.py"
 Write-Output "shortcuts/ingest.bat"
-Write-Output "AIAgentProject/start.bat"
+Write-Output "RAG/ue-rag/.venv/Scripts/python.exe server/entry.py --port 8011  （一步拉起：起服务并自动开浏览器；入口页 server/static/entry.html）"

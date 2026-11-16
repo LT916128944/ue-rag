@@ -1652,6 +1652,30 @@ def _strip_owned_spans(clause: str, steps: list[dict]) -> str:
     return text
 
 
+_REFERENCE_PREFIX_RE = re.compile(r"^(?:参考关卡|参考资产|参考路径|参考文件|参考文档|路径|文件|目录|资产|源码)\s*[:：]?\s*")
+_REFERENCE_GAME_RE = re.compile(r"^/Game(?:/[A-Za-z0-9_]+)+$")
+_REFERENCE_SOURCE_RE = re.compile(r"^(?:Public|Private)/[A-Za-z0-9_]+\.(?:h|cpp)$")
+_REFERENCE_DOC_RE = re.compile(r"^documents/[A-Za-z0-9_.\-/]+$")
+
+
+def _is_reference_clause(clause: str) -> bool:
+    """纯路径半句是**引用**，不是新需求。只认三种形状，不猜别的。
+
+    HTML 入口层（`server/prompt_builder.py`）把每个附件追加成一句「。参考资产：/Game/UI/WBP_HUD」。
+    不认它的话，这条半句只能是 uncovered —— 原本强命中的规则链会整个掉进理解器（多一次模型调用，
+    且可能改落点，20261116 实测：`编译工程。参考文件：Public/FpsPawn.h` 由 rules 变 planner）。
+    认成 constraint 是同一形状的既有做法：它不是要执行的东西，只是给归地的一条提示。
+    """
+    text = _REFERENCE_PREFIX_RE.sub("", str(clause or "").strip()).strip()
+    if not text or any(ch.isspace() for ch in text):
+        return False
+    return bool(
+        _REFERENCE_GAME_RE.match(text)
+        or _REFERENCE_SOURCE_RE.match(text)
+        or _REFERENCE_DOC_RE.match(text)
+    )
+
+
 def _clause_rows(query: str, steps: list[dict]) -> list[dict]:
     """半句账本。constraint 是限制，covered 是规则已经认领，uncovered 交给模型。"""
     clauses = [part.strip() for part in re.split(r"[，,；;。]", query or "") if part.strip()]
@@ -1660,6 +1684,10 @@ def _clause_rows(query: str, steps: list[dict]) -> list[dict]:
     rows = []
     for clause in clauses:
         if re.search(r"别|不要|无需|不用", clause) and not re.search(r"关卡|地图|蓝图|编译|测试", clause):
+            rows.append({"clause": clause, "status": "constraint"})
+            continue
+        # 纯路径半句（UI 追加的附件句）算引用，与上面「别/不要」同一个形状。
+        if _is_reference_clause(clause):
             rows.append({"clause": clause, "status": "constraint"})
             continue
         if not steps or not _clause_accounted(clause, steps):

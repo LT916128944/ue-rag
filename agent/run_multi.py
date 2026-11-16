@@ -22,8 +22,21 @@ def _decide(step: dict, summary: dict | None) -> str:
     else:
         print("这一步失败，已暂停。")
         prompt = "裁决：s 停止 / c 跳过这一步 / r 重试这一步: "
+    from agent import ui_ask
+
+    channel = ui_ask.active()
     try:
-        answer = input(prompt).strip()
+        if channel is None:
+            answer = input(prompt).strip()
+        else:
+            # 与菜单 3 同一条通道：question 先发，答案可能来自收件箱（UI）或 stdin。
+            answer, source = channel.ask(
+                kind="decide", window="", prompt=prompt,
+                hint=prompt, default="s",
+            )
+            if source in ("eof", "timeout"):
+                print("\n停止")
+                return "stop"
     except (EOFError, KeyboardInterrupt):
         print("\n停止")
         return "stop"
@@ -54,7 +67,16 @@ def main(argv=None) -> None:
     sys.stdout.reconfigure(encoding="utf-8")
     parser = argparse.ArgumentParser(description="单循环")
     parser.add_argument("--force", action="store_true", help="有活心跳时仍启动，并写下 forced_by")
+    parser.add_argument(
+        "--ui-inbox", default="",
+        help="UI 收件箱目录（data/ui/inbox）。缺行不自动 skip：等不到就按停止处理",
+    )
     args = parser.parse_args(argv)
+    from agent import ui_ask
+
+    # 与菜单 3 同一个通道。菜单 2 的 run 没有机读 json，UI 侧看不到卡片，
+    # 但答案通道一致：给 `--ui-inbox` 就能从收件箱答（计划 §7 的 3-2）。
+    ui_ask.configure(inbox=(args.ui_inbox or None), stdin=input, printer=print)
     code = admit_live_runs(force=args.force)
     if code:
         raise SystemExit(code)
