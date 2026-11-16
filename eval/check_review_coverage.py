@@ -16,7 +16,8 @@ B（新建关卡 L_NewTest2）/ C（FPS 玩法）是 `windows: []`，而人审�
 2) 存在零窗口范围时 brief_flow 空输入**不得**返回 confirm（必须循环要显式表态），
    喂正确确认词后通过且 gap_ack.acknowledged 为真；
 3) dry-run 预演不写盘（data/skills/action_candidates.json 内容不变）；
-4) 反例守卫：每范围都有窗口的正常任务书，人审文本与旧版**逐字一致**，空输入仍 = 通过；
+4) 反例守卫：每范围都有窗口的正常任务书，人审文本与旧版**逐字一致**（表格按 80 列定宽渲染，
+   终端宽度不进断言——见 `_RENDER_WIDTH`），空输入仍 = 通过；
 5) D9：intent.unresolved 进任务书 md 的「尚未完成清单」，两条原文都在。
 
 不打开编辑器、不调模型、不联网：生成器是假的 complete，补窗路径按需打桩，
@@ -61,6 +62,13 @@ OLD_MD_REPR = (
 # 2026-10-27 按 rich 15.0.0 重新生成（89f5c7c 把 rich 升到 15.0.0，模糊宽度字符
 # 计列宽 +1，表格内容逐字未变）。金标准钉的是「正常任务书不加噪音」，渲染器升级后
 # 按当前渲染结果重录；再往后任何内容噪音仍会被这条断言拦下。
+#
+# `[事实]` 表里的「现状：…」行**不是噪音**，是 agent/brief.py 自 7398507（2026-10-15）
+# 起有意加的 pending_note 渲染（表格侧 `[dim]现状：{scope['pending_note']}[/dim]`，
+# md 侧同样有 `<br>现状：…`）：它把「代码已有，缺接线」这类能力现状摆到人审门前，
+# 让人看得出这一步是接线活还是从零写。所以**两份金标准里本来就含这一行**（89f5c7c
+# 重录时一并收了进 md 与表格），它既不该被当成噪音删，也不该再被当成新噪音加一次。
+# 表格里少一行/多一行内容仍然是红。
 OLD_PRETTY_REPR = (
     '                                 任务书·人审门                                  \\n'
     '┌────────────────────────────┬────────────────────────────────────┬────────────┐\\n'
@@ -213,13 +221,46 @@ def _validated(raw: dict) -> dict:
     return validate_brief(json.loads(json.dumps(raw, ensure_ascii=False)), raw["query"])
 
 
+# 人审表格的**渲染宽度钉死 80 列**：金标准记的是 80 列下的逐字输出，而列表宽会随终端宽变。
+# `[事实]` `_print_brief_pretty` 的 `Table(..., expand=True)` 里中间列是 `ratio=1`，
+# 列宽 = Console 宽度 − 其它两列 − 边框，所以**终端宽度会改渲染内容**：rich 的 Console 在
+# Windows 控制台里 `legacy_windows=True` 时 width = 80−1 = 79
+# （rich/console.py 的 `ConsoleDimensions(self._width - self.legacy_windows, …)`），
+# 整张表窄一格、每个单元格少一个空格——同一次改动在 CI 的 80 列下绿、在本机 79 列下红，
+# 而「正常任务书有没有被加噪音」一个字都没变。这里只钉宽度，**内容断言一字不放**。
+_RENDER_WIDTH = 80
+
+
+@contextlib.contextmanager
+def _pinned_console_width(width: int = _RENDER_WIDTH):
+    """临时把 rich 的 Console 换成定宽版本。
+
+    `_print_brief_pretty` 里是现场 `from rich.console import Console`，所以换模块属性即可
+    生效；用完还原，不污染本用例的其它断言与后续用例。"""
+    import rich.console as rich_console
+
+    saved = rich_console.Console
+
+    class _FixedWidthConsole(saved):
+        def __init__(self, *args, **kwargs):
+            kwargs.setdefault("width", width)
+            super().__init__(*args, **kwargs)
+
+    rich_console.Console = _FixedWidthConsole
+    try:
+        yield width
+    finally:
+        rich_console.Console = saved
+
+
 def _render(brief: dict) -> tuple[str, str]:
-    """(md 文本, 人审门表格的控制台文本)。表格走 rich，输出进 stdout 由这里抓。"""
+    """(md 文本, 人审门表格的控制台文本)。表格走 rich，输出进 stdout 由这里抓。
+    渲染宽度固定见 `_RENDER_WIDTH`（不钉的话断言会跟着终端宽度漂）。"""
     from agent.brief import _print_brief_pretty, render_brief_md
 
     md = render_brief_md(brief)
     buf = io.StringIO()
-    with contextlib.redirect_stdout(buf):
+    with contextlib.redirect_stdout(buf), _pinned_console_width():
         _print_brief_pretty(brief, printer=lambda text: print(text))
     return md, buf.getvalue()
 
@@ -530,6 +571,10 @@ def check_normal_brief_is_unchanged(directory: Path) -> None:
         "正常任务书的 md 与旧版不一致（不许给正常任务加噪音）", md)
     assert table == OLD_PRETTY_REPR.replace("\\n", "\n"), (
         "正常任务书的人审表格与旧版不一致（不许给正常任务加噪音）", table)
+    # 「现状：…」是 pending_note 的有意渲染（见 OLD_PRETTY_REPR 上方的注释），不是噪音：
+    # 这份正常任务书里只有 A 写了 pending_note，所以它必须**恰好出现一次**——
+    # 既钉住这个功能还在（别在修噪音时把有意义的现状行也删了），也钉住它没被复制成噪音。
+    assert table.count("现状：") == 1, ("正常任务书的「现状」行数变了", table.count("现状："), table)
     assert "窗口覆盖" not in md, "正常任务书不该多出一列"
     assert "能力缺口" not in md and "能力缺口" not in table
 

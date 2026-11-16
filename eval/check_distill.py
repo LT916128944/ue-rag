@@ -8,6 +8,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from eval._pin_offline import close_now  # noqa: E402
+
+close_now()  # 离线封闭：本机 .env 的求解/放行开关不进断言（20261111 求解兜底改路由后同类漂移）
+
 
 def _quiet(*_args, **_kwargs):
     return None
@@ -51,6 +55,7 @@ def check_skills() -> None:
         drop_skill,
         load_skills,
         promote_from_route,
+        promoted_as_routes,
         remember_shadow,
         validate_skill,
         validate_store,
@@ -77,6 +82,12 @@ def check_skills() -> None:
             assert all(item.get("status") == "shadow" for item in load_skills())
             assert match_learned("给 BP_A 打上可交互，让 BP_B 与它交互") is None
             assert promote_from_route(route, source_run="run-1") == "skill-demo"
+            bare = dict(route)
+            bare["id"] = "skill-empty-source"
+            assert promote_from_route(bare, source_run="") == "skill-empty-source"
+            stored = next(item for item in load_skills() if item.get("id") == "skill-empty-source")
+            assert stored.get("status") == "shadow", stored
+            assert all(item.get("id") != "skill-empty-source" for item in promoted_as_routes())
             hit = match_learned("给 BP_A 打上可交互，让 BP_B 与它交互")
             assert hit is not None
             assert [step.get("action") for step in hit] == ["set_pickable", "judge_pickup"]

@@ -22,6 +22,29 @@ def _quiet(*_args, **_kwargs):
     return None
 
 
+def _passed_judge(task: dict, summary: str) -> dict:
+    """窗口 ok 时附上合同已认的判词。summary 与该窗口结果相同。
+
+    图任务（编译工程）不带 action，种类写在 verify 里。
+    """
+    from agent.actions import JUDGE_BY_ACTION
+    from agent.harness import EVIDENCE_KINDS
+
+    kind = JUDGE_BY_ACTION.get(str(task.get("action") or "")) or ""
+    if not kind:
+        for spec in task.get("verify") or []:
+            found = str(spec.get("kind") or "") if isinstance(spec, dict) else ""
+            if found in EVIDENCE_KINDS:
+                kind = found
+                break
+    if not kind:
+        kind = "editor_assert"
+    return {
+        "test": {"ok": True, "kind": kind, "summary": summary, "errors": []},
+        "judge_kind": kind,
+    }
+
+
 def check_gate() -> None:
     """闸门单测：两个读并行持有；写在读退出前拿不到。"""
     from agent import run_windows as rw
@@ -69,19 +92,26 @@ def check_events_and_state(runs: Path, events_dir: Path) -> None:
     def fake_ok(task, trace_path=None, thread_id=None, on_row=None):
         calls.append((task.get("action"), thread_id, task.get("target_ref")))
         if task.get("action") in ("judge_pickup", "check_pickup"):
+            summary = "不能拾取：距离 150.0 uu，超过 100"
             if on_row:
                 on_row({"node": "direct", "tool": task.get("action"), "ok": True, "elapsed": 0})
-            return {"id": task.get("id"), "ok": True, "summary": "不能拾取：距离 150.0 uu，超过 100",
-                    "judge": "不能", "thread_id": thread_id}
+            return {"id": task.get("id"), "ok": True, "summary": summary,
+                    "judge": "不能", "thread_id": thread_id, **_passed_judge(task, summary)}
+        summary = "bPickable 为真，带 InteractableActor"
         if on_row:
             on_row({"node": "direct", "tool": task.get("action"), "ok": True, "elapsed": 0})
-        return {"id": task.get("id"), "ok": True, "summary": "bPickable 为真，带 InteractableActor",
-                "ref": "ActorRef", "in_level": True, "thread_id": thread_id}
+        return {"id": task.get("id"), "ok": True, "summary": summary,
+                "ref": "ActorRef", "in_level": True, "thread_id": thread_id,
+                **_passed_judge(task, summary)}
+
+    from eval._pin_backend import pinned_backend
 
     original = run_task_mod.run_task
     run_task_mod.run_task = fake_ok
     try:
-        code, run_path = rw.execute_windows(mark, complete=planner, echo=_quiet)
+        # monolith 下这两条不进执行窗口。这里验的是官方后端仍会执行并记下事件。
+        with pinned_backend("official"):
+            code, run_path = rw.execute_windows(mark, complete=planner, echo=_quiet)
     finally:
         run_task_mod.run_task = original
     assert code == 0, code
@@ -173,8 +203,10 @@ def check_resume(runs: Path, events_dir: Path) -> None:
 
     def fake(task, trace_path=None, thread_id=None, on_row=None):
         calls.append({"action": task.get("action"), "thread": thread_id, "target_ref": task.get("target_ref")})
-        return {"id": task.get("id"), "ok": True, "summary": "复跑成功", "judge": "能",
-                "ref": "NewRef", "in_level": True, "thread_id": thread_id}
+        summary = "复跑成功"
+        return {"id": task.get("id"), "ok": True, "summary": summary, "judge": "能",
+                "ref": "NewRef", "in_level": True, "thread_id": thread_id,
+                **_passed_judge(task, summary)}
 
     original = run_task_mod.run_task
     run_task_mod.run_task = fake
@@ -293,7 +325,9 @@ def check_parallel() -> None:
         if key in ("W1", "W2"):
             time.sleep(0.35)
         spans[key] = (start, time.perf_counter())
-        return {"id": task.get("id"), "ok": True, "summary": "能拾取", "judge": "能", "thread_id": thread_id}
+        summary = "能拾取"
+        return {"id": task.get("id"), "ok": True, "summary": summary, "judge": "能",
+                "thread_id": thread_id, **_passed_judge(task, summary)}
 
     original = run_task_mod.run_task
     run_task_mod.run_task = fake
@@ -330,10 +364,14 @@ def check_artifacts() -> None:
     def fake(task, trace_path=None, thread_id=None, on_row=None):
         action = str(task.get("action") or "")
         if action == "set_pickable":
-            return {"id": task.get("id"), "ok": True, "summary": "ok",
-                    "ref": f"ref-{task.get('actor_name')}", "in_level": True, "thread_id": thread_id}
+            summary = "ok"
+            return {"id": task.get("id"), "ok": True, "summary": summary,
+                    "ref": f"ref-{task.get('actor_name')}", "in_level": True, "thread_id": thread_id,
+                    **_passed_judge(task, summary)}
         got[str(task.get("actor_name"))] = str(task.get("target_ref"))
-        return {"id": task.get("id"), "ok": True, "summary": "能拾取", "judge": "能", "thread_id": thread_id}
+        summary = "能拾取"
+        return {"id": task.get("id"), "ok": True, "summary": summary, "judge": "能",
+                "thread_id": thread_id, **_passed_judge(task, summary)}
 
     original = run_task_mod.run_task
     run_task_mod.run_task = fake
@@ -630,6 +668,19 @@ def check_launch_only() -> None:
     assert _wants_launch_editor(query) is True
     assert _wants_launch_editor("打开虚幻商城看道具") is False
     assert _wants_launch_editor("打开 UE 编辑器") is True
+
+    # 打开已有关卡必须是规则命中：先启动，再 open_level。不叫模型，不进求解。
+    opened = "打开编辑器，打开关卡 L_NewTest"
+
+    def _no_model(_messages):
+        raise AssertionError("打开已有关卡不应调用模型")
+
+    planned_open = plan_windows(opened, complete=_no_model)
+    assert planned_open["source"] == "rules", planned_open.get("source")
+    assert [item["action"] for item in planned_open["windows"]] == ["launch_editor", "open_level"], planned_open["windows"]
+    opened_level = planned_open["windows"][1]
+    assert opened_level["slots"].get("level") == "L_NewTest", opened_level
+    assert opened_level.get("save") is False and opened_level.get("pie") is False, opened_level
 
 
 def check_board() -> None:
@@ -1237,17 +1288,26 @@ def check_intent_layer(runs: Path, events_dir: Path) -> None:
         def fake_ok(task, trace_path=None, thread_id=None, on_row=None):
             if on_row:
                 on_row({"node": "direct", "tool": task.get("action"), "ok": True, "elapsed": 0})
+            summary = (
+                "bPickable 为真，带 InteractableActor"
+                if task.get("action") == "set_pickable" else "不能拾取：距离远"
+            )
             return {
                 "id": task.get("id"), "ok": True,
-                "summary": "bPickable 为真，带 InteractableActor" if task.get("action") == "set_pickable" else "不能拾取：距离远",
+                "summary": summary,
                 "judge": "不能" if task.get("action") != "set_pickable" else None,
                 "ref": "ActorRef", "in_level": True, "thread_id": thread_id,
+                **_passed_judge(task, summary),
             }
+
+        from eval._pin_backend import pinned_backend
 
         original = run_task_mod.run_task
         run_task_mod.run_task = fake_ok
         try:
-            code, run_path = rw.execute_windows(mark_query, complete=mark_intent, echo=_quiet)
+            # monolith 下这两条不进执行窗口。这条验官方后端仍能跑完并回写句式。
+            with pinned_backend("official"):
+                code, run_path = rw.execute_windows(mark_query, complete=mark_intent, echo=_quiet)
         finally:
             run_task_mod.run_task = original
         assert code == 0, code
@@ -1271,7 +1331,8 @@ def check_intent_layer(runs: Path, events_dir: Path) -> None:
         raw_text = json.dumps(entry, ensure_ascii=False)
         assert "BP_Gun" not in raw_text, "回写不得记资产名"
 
-        variant = plan_windows("给 BP_Gun2 打上可交互标签，让 BP_Gun 与它交互", complete=boom)
+        with pinned_backend("official"):
+            variant = plan_windows("给 BP_Gun2 打上可交互标签，让 BP_Gun 与它交互", complete=boom)
         assert variant["source"] == "learned" and variant["planner_called"] is False
         assert variant["understand_called"] is False and variant["route_hit"] is True
         assert [window.get("action") for window in variant["windows"]] == ["set_pickable", "judge_pickup"]
@@ -1317,8 +1378,9 @@ def check_index_stale(events_dir: Path) -> None:
         }
 
     def fake(task, trace_path=None, thread_id=None, on_row=None):
-        return {"id": task.get("id"), "ok": True, "summary": str(task.get("summary") or task.get("ref_path") or ""),
-                "thread_id": thread_id}
+        summary = str(task.get("summary") or task.get("ref_path") or "")
+        return {"id": task.get("id"), "ok": True, "summary": summary,
+                "thread_id": thread_id, **_passed_judge(task, summary)}
 
     original = run_task_mod.run_task
     run_task_mod.run_task = fake

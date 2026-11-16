@@ -4,6 +4,7 @@
 不调用模型，不改图。任务的 save / pie 缺省跟随 UE_DEFAULT_SAVE / UE_DEFAULT_PIE（缺省 true）。
 合同的 passed 只由对得上的裁判改写。
 """
+import hashlib
 import json
 import os
 import re
@@ -219,41 +220,123 @@ def build_criteria(criteria: list | None = None, windows: list | None = None) ->
     return _bind_windows(rows, windows)
 
 
+def judge_evidence_sha1(judge: dict | None) -> str:
+    """判词印章：只哈希 ok、kind、window、summary。键序固定，改一个 summary 字节印章就变。"""
+    judge = judge if isinstance(judge, dict) else {}
+    payload = {
+        "ok": judge.get("ok") is True,
+        "kind": str(judge.get("kind") or ""),
+        "window": str(judge.get("window") or ""),
+        "summary": str(judge.get("summary") or ""),
+    }
+    raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha1(raw.encode("utf-8")).hexdigest()
+
+
+def _judge_proves(item: dict, judge: dict | None) -> bool:
+    """这份判词能不能证明这条条款。manual 永远不能。
+    synthetic 只放行证明窗口恰好只有它自己的条款。
+    automation 跑了 0 个测试的「失败数 0」不证明任何条款。"""
+    if not isinstance(judge, dict) or judge.get("ok") is not True:
+        return False
+    if str(item.get("evidence_kind") or "") == "manual":
+        return False
+    kind = str(judge.get("kind") or "")
+    if kind not in EVIDENCE_KINDS or str(item.get("evidence_kind") or "") != kind:
+        return False
+    wid = str(judge.get("window") or "").strip()
+    owners = item.get("windows")
+    if wid and isinstance(owners, list) and wid not in [str(one) for one in owners]:
+        return False
+    if judge.get("synthetic") is True:
+        if not wid or [str(one) for one in (owners or [])] != [wid]:
+            return False
+    tests = judge.get("tests")
+    if kind == "automation" and isinstance(tests, list):
+        if not tests:
+            return False
+        want = str(item.get("filter") or "").strip()
+        if want and not any(str(one).startswith(want) for one in tests):
+            return False
+    return True
+
+
 def apply_judge(criteria: list | None, judge: dict | None) -> list[dict]:
     """只有 judge.ok 且 kind 等于 evidence_kind 才改成通过。manual 保持 false。
     judge 带了 window 时，只有条款的 windows 列了它才算证明得动；没列的条款不动。
     synthetic 判词（launch_editor：只证明「端口通了」）只放行证明窗口恰好只有它自己的条款——
     宽绑定的条款混着别的证据窗口，端口连通证明不了内容（20261027-180955 的假通过）。
-    automation 还要求真正跑到了测试：跑了 0 个测试的「失败数 0」不证明任何条款。"""
+    automation 还要求真正跑到了测试：跑了 0 个测试的「失败数 0」不证明任何条款。
+    翻成 passed 时写下判词的 evidence_sha1。回放对不上由 replay_judge 把条款打回 false。"""
     out = [dict(item) for item in (criteria or []) if isinstance(item, dict)]
     if not isinstance(judge, dict) or judge.get("ok") is not True:
         return out
-    kind = str(judge.get("kind") or "")
-    if kind not in EVIDENCE_KINDS:
-        return out
-    wid = str(judge.get("window") or "").strip()
-    synthetic = judge.get("synthetic") is True
-    tests = judge.get("tests")
+    digest = judge_evidence_sha1(judge)
     for item in out:
-        if str(item.get("evidence_kind") or "") == "manual":
+        if not _judge_proves(item, judge):
             continue
-        if str(item.get("evidence_kind") or "") != kind:
-            continue
-        owners = item.get("windows")
-        if wid and isinstance(owners, list) and wid not in [str(one) for one in owners]:
-            continue
-        if synthetic:
-            # 只证明自己那一扇：条款的证明窗口必须恰好只有它，宽绑定一律不动
-            if not wid or [str(one) for one in owners or []] != [wid]:
-                continue
-        if kind == "automation" and isinstance(tests, list):
-            if not tests:
-                continue
-            want = str(item.get("filter") or "").strip()
-            if want and not any(str(one).startswith(want) for one in tests):
-                continue
         item["passed"] = True
+        item["evidence_sha1"] = digest
     return out
+
+
+def replay_judge(criteria: list | None, judge: dict | None) -> list[dict]:
+    """回放：判词对得上、但 evidence_sha1 与判词印章不一致时，条款回到 false。
+    不写新印章，不把 false 翻成 true。模型文本不进这个函数。"""
+    digest = judge_evidence_sha1(judge)
+    out: list[dict] = []
+    for item in criteria or []:
+        if not isinstance(item, dict):
+            continue
+        row = dict(item)
+        if row.get("passed") is True and _judge_proves(row, judge):
+            if str(row.get("evidence_sha1") or "") != digest:
+                row["passed"] = False
+        out.append(row)
+    return out
+
+
+def _window_failed(window: dict) -> bool:
+    """执行窗口失败。state 优先；没有 state 时只认 ok 明确为 false。"""
+    state = str(window.get("state") or "")
+    if state:
+        return state == "failed"
+    return window.get("ok") is False
+
+
+def sentence_outcome(windows: list | None, criteria: list | None) -> str:
+    """整句三态。只看窗口结果和条款，不看模型说的「成功」「已完成」。
+
+    - 有执行窗口失败，条款却全是 passed：failed（20261027-180955 的整句口径）。
+    - 有 manual 且没有人签（passed 仍不是 true）：partial。其余条款全过也不是 ok。
+    - 非 manual 全部 passed，没有失败窗口，没有未签 manual：ok。
+    """
+    rows = [item for item in (criteria or []) if isinstance(item, dict)]
+    wins = [item for item in (windows or []) if isinstance(item, dict)]
+    any_failed = any(_window_failed(item) for item in wins)
+    all_passed = bool(rows) and all(item.get("passed") is True for item in rows)
+    if any_failed and all_passed:
+        return "failed"
+    unsigned = [
+        item for item in rows
+        if item.get("evidence_kind") == "manual" and item.get("passed") is not True
+    ]
+    if unsigned:
+        return "partial"
+    non_manual = [item for item in rows if item.get("evidence_kind") != "manual"]
+    if not any_failed and all(item.get("passed") is True for item in non_manual):
+        return "ok"
+    return "failed"
+
+
+def sentence_exit(outcome: str) -> int:
+    """ok=0，failed=1，partial=3。
+    partial 与 failed 分开。不用 2：2 已经是「有活心跳」的菜单退出码。"""
+    if outcome == "ok":
+        return 0
+    if outcome == "partial":
+        return 3
+    return 1
 
 
 def ignore_model_claim(criteria: list | None, text: str = "") -> list[dict]:

@@ -46,8 +46,18 @@ def _decide(step: dict, summary: dict | None) -> str:
     return "stop"
 
 
-def main() -> None:
+def main(argv=None) -> None:
+    import argparse
+
+    from agent.run_guard import admit_live_runs
+
     sys.stdout.reconfigure(encoding="utf-8")
+    parser = argparse.ArgumentParser(description="单循环")
+    parser.add_argument("--force", action="store_true", help="有活心跳时仍启动，并写下 forced_by")
+    args = parser.parse_args(argv)
+    code = admit_live_runs(force=args.force)
+    if code:
+        raise SystemExit(code)
     print("单循环。一句话拆成步骤，每一步跑同一张图。")
     print("失败或做不了时暂停。记录在 data/runs。输入 :quit 退出。\n")
     while True:

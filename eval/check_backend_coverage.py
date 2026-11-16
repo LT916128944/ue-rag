@@ -119,10 +119,116 @@ def check_unsupported_have_reason() -> None:
     assert not overlap, f"原语同时出现在 MAPPED 和 UNSUPPORTED：{overlap}"
 
 
+def _plan_files() -> set[str]:
+    from config import UE_PROJECT_DIR
+
+    folder = UE_PROJECT_DIR / "Plan"
+    if not folder.is_dir():
+        return set()
+    return {path.name for path in folder.glob("*-实例属性缺口.md")}
+
+
+def check_partial_windows_stay_unresolved() -> None:
+    """monolith 下 judge_pickup / 依赖 set_properties 的 set_pickable 不进执行窗口。
+
+    官方后端这两条仍可进窗口。place_batch 不在依赖表里，过滤留着它。
+    COVERAGE 的 partial 原因文字保持原样。"""
+    import json
+
+    from eval._pin_backend import pinned_backend
+
+    assert COVERAGE["judge_pickup"].startswith("partial:")
+    assert "get_properties" in COVERAGE["judge_pickup"]
+    assert COVERAGE["set_pickable"].startswith("partial:")
+    assert "set_properties" in COVERAGE["set_pickable"]
+
+    from core.monolith_bridge import (
+        EXISTING_INSTANCE_PROP_DEPS,
+        INSTANCE_PROP_TOOLS,
+        MAPPED,
+        UNSUPPORTED,
+    )
+
+    assert "get_properties" in UNSUPPORTED and "get_properties" not in MAPPED
+    assert "set_properties" in UNSUPPORTED and "set_properties" not in MAPPED
+    assert "place_batch" not in EXISTING_INSTANCE_PROP_DEPS
+    assert EXISTING_INSTANCE_PROP_DEPS["set_pickable"] & INSTANCE_PROP_TOOLS == {"get_properties", "set_properties"}
+    assert "get_properties" in EXISTING_INSTANCE_PROP_DEPS["judge_pickup"]
+
+    from agent.plan_windows import _hold_existing_instance_props
+
+    mixed = {
+        "source": "understood",
+        "windows": [
+            {"id": "W1", "action": "place_batch", "slots": {"blueprint": "BP_Coin"}, "depends_on": []},
+            {"id": "W2", "action": "judge_pickup", "slots": {"target": "BP_Coin", "picker": "BP_Pawn"},
+             "depends_on": ["W1"]},
+            {"id": "W3", "action": "set_pickable", "slots": {"target": "BP_Coin"}, "depends_on": []},
+        ],
+        "intent": {"unresolved": [], "actions": ["place_batch", "judge_pickup", "set_pickable"]},
+    }
+    before = _plan_files()
+    with pinned_backend("monolith"):
+        held = _hold_existing_instance_props("按设计图放置，再给 BP_Coin 打上可交互标签，并裁决能否拾取", mixed)
+    assert [window["action"] for window in held["windows"]] == ["place_batch"], held["windows"]
+    assert held["windows"][0]["depends_on"] == []
+    assert held["intent"]["unresolved"]
+    new_notes = _plan_files() - before
+    assert new_notes, "monolith 丢掉实例属性窗口时要在 Plan/ 写一行"
+    from config import UE_PROJECT_DIR
+
+    note = (UE_PROJECT_DIR / "Plan" / next(iter(new_notes))).read_text(encoding="utf-8")
+    assert "monolith 读不到或写不了实例属性" in note
+    for name in new_notes:
+        (UE_PROJECT_DIR / "Plan" / name).unlink(missing_ok=True)
+
+    query = "给 BP_Coin 打上可交互标签，再让 BP_Pawn 拾取它"
+
+    def complete(_messages):
+        return json.dumps({
+            "query": query,
+            "goals": [
+                {"action": "set_pickable", "slots": {"target": "BP_Coin"}},
+                {"action": "judge_pickup", "slots": {"target": "BP_Coin", "picker": "BP_Pawn"}},
+            ],
+            "criteria": [{
+                "id": "c-editor_assert",
+                "evidence_kind": "editor_assert",
+                "text": "BP_Coin 可拾取",
+            }],
+            "constraints": {},
+            "unresolved": [],
+        }, ensure_ascii=False)
+
+    from agent.plan_windows import plan_windows
+
+    with pinned_backend("official"):
+        official = plan_windows(query, complete=complete)
+    official_actions = [window.get("action") for window in official["windows"]]
+    assert official_actions == ["set_pickable", "judge_pickup"], official_actions
+
+    before = _plan_files()
+    with pinned_backend("monolith"):
+        blocked = plan_windows(query, complete=complete)
+    blocked_actions = [window.get("action") for window in blocked["windows"]]
+    assert "judge_pickup" not in blocked_actions, blocked_actions
+    assert "set_pickable" not in blocked_actions, blocked_actions
+    assert blocked_actions == [], blocked_actions
+    unresolved = (blocked.get("intent") or {}).get("unresolved") or blocked.get("unresolved") or []
+    assert unresolved, blocked
+    assert any("可交互" in str(item) or "拾取" in str(item) for item in unresolved), unresolved
+    new_notes = _plan_files() - before
+    assert new_notes
+    for name in new_notes:
+        (UE_PROJECT_DIR / "Plan" / name).unlink(missing_ok=True)
+    print("ok: monolith 下实例属性窗口转入 unresolved，官方后端仍可进窗口")
+
+
 def main() -> None:
     check_bridge_covers_sequence_tools()
     check_catalog_rows()
     check_unsupported_have_reason()
+    check_partial_windows_stay_unresolved()
     print("backend coverage ok")
 
 

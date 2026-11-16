@@ -10,7 +10,7 @@
 - 就算挑中了 `compile_widget`，那也只是**编译**，一个控件都没加，
   却会让「控件图已改并编译通过」这条条款变成通过——那是假成功。
 
-所以这里按仓库既有口径把合同写进代码：HUD 要哪六个控件、放在哪个角、父类是谁，
+所以这里按仓库既有口径把合同写进代码：HUD 要哪些控件、放在哪个角、父类是谁，
 都由代码决定；模型只负责「这一扇要不要做」。执行一次就够，全程零模型调用。
 不是 FPS HUD 的句子返回 None，交回原来的 repair 路径。
 """
@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import re
 
-# 六个合同控件：名字与 UFpsHUDWidget 的 BindWidgetOptional 字段一一对应。
+# 合同控件：名字与 UFpsHUDWidget 的 BindWidgetOptional 字段一一对应。
 # 左下血条 / 右下子弹 / 右手雷 / 右中载具名字、上下车提示、时速
 #
 # 坐标口径（20261029 修正）：CanvasPanel 的 offset 是**相对锚点**的，不是屏幕绝对坐标。
@@ -30,6 +30,8 @@ HUD_LAYOUT: tuple[tuple[str, str, dict, dict, str], ...] = (
     ("txt_Health", "top_left", {"x": 40, "y": 1000}, {"x": 220, "y": 52}, "100"),
     ("txt_Ammo", "top_left", {"x": 1660, "y": 1000}, {"x": 220, "y": 46}, "12"),
     ("txt_Grenade", "top_left", {"x": 1660, "y": 950}, {"x": 220, "y": 46}, "0"),
+    # 火箭筒弹药：AFpsPawn::GetRocketAmmoText 直接给 "火箭弹 2/3"，WBP 不用再拼。
+    ("txt_RocketAmmo", "top_left", {"x": 1660, "y": 1060}, {"x": 280, "y": 46}, "火箭弹 3/3"),
     ("txt_VehicleName", "top_left", {"x": 700, "y": 430}, {"x": 520, "y": 42}, "简易载具"),
     ("txt_EnterPrompt", "top_left", {"x": 700, "y": 480}, {"x": 520, "y": 42}, "按 E 上车"),
     ("txt_VehicleSpeed", "top_left", {"x": 700, "y": 530}, {"x": 520, "y": 42}, "0 km/h"),
@@ -38,8 +40,40 @@ HUD_LAYOUT: tuple[tuple[str, str, dict, dict, str], ...] = (
 HUD_PARENT = "/Script/AIAgentProject.FpsHUDWidget"
 HUD_DEFAULT_REF = "/Game/UI/WBP_FpsHUD.WBP_FpsHUD"
 
-# 句子里出现这些词，才认为它在要这六个读数里的东西。
+# 句子里出现这些词，才认为它在要这些读数里的东西。
 _HUD_TOKENS = ("血条", "血量", "子弹", "弹药", "手雷", "载具", "时速", "上下车", "HUD")
+
+# 「编译代码/编译工程」——点名要编译。排除「编译蓝图/编译控件」，那是另一扇。
+_CODE_COMPILE_RE = re.compile(r"(?<!图)(?<!蓝图)编译(?!蓝图|控件|图|BP_|WBP_)")
+
+# 点名要一段玩法实现（不是只要 HUD）：动词 + 玩法词。只留确定性强的几种说法，
+# 太宽会把「右中部显示载具信息」这类纯 HUD 句子误判成要改 C++。
+_GAMEPLAY_VERBS = r"(实现|做|加|加个|加上|新增|增加|改成|改成个)"
+_GAMEPLAY_TOKENS = r"(T\s*键|按\s*T|射击|开火|火箭筒|火箭弹|发射|游戏玩法|玩法)"
+_GAMEPLAY_RE = re.compile(_GAMEPLAY_VERBS + r"[^，,。；;]{0,20}?" + _GAMEPLAY_TOKENS)
+
+# 玩法落在哪个 C++ 类上：本项目 FPS 玩法的落点是 AFpsPawn（人 + 枪 + HUD 挂载）。
+# 句子点名别的 A 前缀类就照点名的那个走；认不出退回 AFpsPawn（合同判据会兜住）。
+_CLASS_RE = re.compile(r"\b(A[A-Z][A-Za-z0-9_]{2,})\b")
+
+
+def wants_code_compile(text: str) -> bool:
+    """这句点名要编译代码/编译工程。"""
+    return bool(_CODE_COMPILE_RE.search(str(text or "")))
+
+
+def wants_gameplay(text: str) -> bool:
+    """这句点名要一段玩法实现（T 键/射击/火箭筒/玩法 + 实现类动词）。"""
+    return bool(_GAMEPLAY_RE.search(str(text or "")))
+
+
+def gameplay_class(text: str) -> str:
+    """玩法落在哪个 C++ 类：句子点名的唯一 A 类，否则本项目 FPS 玩法的落点 AFpsPawn。"""
+    names = {name for name in _CLASS_RE.findall(str(text or ""))}
+    if len(names) == 1:
+        return names.pop()
+    return "AFpsPawn"
+
 
 
 def is_fps_hud_request(text: str) -> bool:
@@ -98,7 +132,7 @@ def _names(tree: list) -> list[str]:
 
 
 def build_fps_hud(step: dict) -> dict | None:
-    """把六个合同控件落进目标 WBP。不是 FPS HUD 请求 → None（交回原路径）。
+    """把合同控件落进目标 WBP。不是 FPS HUD 请求 → None（交回原路径）。
 
     返回结构与 `repair_blueprint` 一致：{ok, attempts, exec_count, summary/error, tools}。
     `tools` 里记真实写过的原语，run_windows 的「只读不算完成」检查读它。
@@ -136,7 +170,7 @@ def build_fps_hud(step: dict) -> dict | None:
         }
     existing = _names(tree.get("data"))
 
-    # ② 父类必须是 FpsHUDWidget，否则六个 BindWidgetOptional 绑不上，HUD 永远是空文案。
+    # ② 父类必须是 FpsHUDWidget，否则 BindWidgetOptional 绑不上，HUD 永远是空文案。
     parent = _call("editor_toolset.toolsets.blueprint.BlueprintTools", "get_parent",
                    {"blueprint": {"refPath": ref}})
     parent_ref = ""
@@ -200,7 +234,7 @@ def build_fps_hud(step: dict) -> dict | None:
     _call("editor_toolset.toolsets.asset.AssetTools", "save_assets",
           {"asset_paths": [package]})
 
-    # ⑤ 复查：六个名字必须真的都在（不信「调用成功」）。
+    # ⑤ 复查：合同名字必须真的都在（不信「调用成功」）。
     again = _call("UMGToolSet.UMGToolSet", "GetWidgets", {"widgetBlueprint": {"refPath": ref}})
     final = _names(again.get("data"))
     missing = [name for name, *_ in HUD_LAYOUT if name not in final]
@@ -210,7 +244,7 @@ def build_fps_hud(step: dict) -> dict | None:
             "error": f"{ref} 复查缺控件：{'、'.join(missing)}",
         }
     summary = (
-        f"{ref} 六个合同控件齐（新增 {'、'.join(added) if added else '无，原本就在'}），"
+        f"{ref} 合同控件齐（新增 {'、'.join(added) if added else '无，原本就在'}），"
         f"父类 FpsHUDWidget，已编译并保存这份资产。"
     )
     return {
@@ -235,6 +269,20 @@ def hud_windows(query: str) -> list[dict] | None:
     if not is_fps_hud_request(text):
         return None
 
+    # 门只认整句（20261111）：这条链只认领得住整句的纯 HUD 需求。
+    # 句子里还有这条链接不住的半句（滑铲/冲刺/改速度…）时返回 None，交回 L1/求解，
+    # 不把整句领走后让后半句静默丢掉（混句实测：HUD 摆了，玩法半句蒸发）。
+    planned_actions: list[str] = []
+    if "打开编辑器" in text or "启动编辑器" in text:
+        planned_actions.append("launch_editor")
+    if _level_token(text):
+        planned_actions.append("open_level")
+    planned_actions += ["create_widget_blueprint", "edit_widget_blueprint", "check_fps_hud"]
+    from agent.plan_windows import _clauses_accounted
+
+    if not _clauses_accounted(text, [{"action": action} for action in planned_actions]):
+        return None
+
     from agent.plan_windows import materialize
 
     ref = widget_ref_from({"query": text})
@@ -251,6 +299,7 @@ def hud_windows(query: str) -> list[dict] | None:
                                    wid=f"W{len(windows) + 1}", depends=deps,
                                    retries=1, text=text))
 
+
     if "打开编辑器" in text or "启动编辑器" in text:
         _add("launch_editor", {}, "启动 UE 编辑器")
     level = _level_token(text)
@@ -261,7 +310,7 @@ def hud_windows(query: str) -> list[dict] | None:
          f"新建/定位 {asset}")
     _add("edit_widget_blueprint",
          {"folder": folder, "name": asset},
-         f"摆放 {asset} 的六个 HUD 控件")
+         f"摆放 {asset} 的 HUD 控件")
     _add("check_fps_hud", {"widget": ref}, "只读核对 FPS HUD")
     return windows
 

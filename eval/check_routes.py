@@ -10,6 +10,30 @@ from eval._pin_offline import close_now
 
 close_now()  # 离线封闭：本机 .env 的求解/放行开关不进断言（20261028 check_upgrade 漂红教训）
 
+
+def _passed_judge(task: dict, summary: str) -> dict:
+    """窗口 ok 时附上合同已认的判词。summary 与该窗口结果相同。
+
+    图任务（编译工程）不带 action，种类写在 verify 里。
+    """
+    from agent.actions import JUDGE_BY_ACTION
+    from agent.harness import EVIDENCE_KINDS
+
+    kind = JUDGE_BY_ACTION.get(str(task.get("action") or "")) or ""
+    if not kind:
+        for spec in task.get("verify") or []:
+            found = str(spec.get("kind") or "") if isinstance(spec, dict) else ""
+            if found in EVIDENCE_KINDS:
+                kind = found
+                break
+    if not kind:
+        kind = "editor_assert"
+    return {
+        "test": {"ok": True, "kind": kind, "summary": summary, "errors": []},
+        "judge_kind": kind,
+    }
+
+
 from agent.graph import route_after_build, route_after_observe
 from agent.roles import plan_role, tool_allowed
 
@@ -679,6 +703,14 @@ def check_windows() -> None:
     finally:
         _config.allow_umg = _saved_allow
 
+    def _as_official(fn):
+        # 这两条在 monolith 下拆句就转入 unresolved，不再进执行窗口。
+        # 这里验的是官方后端仍能拆出并执行它们。
+        from eval._pin_backend import pinned_backend
+
+        with pinned_backend("official"):
+            return fn()
+
     mark = "给场景的 BP_TestActor 的 tag 标记为可交互物，使得 BP_TestPawn 可以与它交互"
     second = "给 BP_Sphere 打上可交互标签，让 BP_TestPawn 与它交互"
     good = json.dumps({
@@ -746,7 +778,7 @@ def check_windows() -> None:
                 seen["messages"] = messages
                 return good
 
-            planned = plan_windows(mark, complete=planner)
+            planned = _as_official(lambda: plan_windows(mark, complete=planner))
             assert planned["planner_called"] is True
             assert planned["wrote_route"] is True
             assert [window["action"] for window in planned["windows"]] == ["set_pickable", "judge_pickup"]
@@ -774,7 +806,7 @@ def check_windows() -> None:
             assert remember_route(mark, planned["windows"]) is False
             assert len(load_routes()) == 1
 
-            again = plan_windows(mark, complete=boom)
+            again = _as_official(lambda: plan_windows(mark, complete=boom))
             assert again["planner_called"] is False
             assert again["source"] == "learned"
             assert called["n"] == 0
@@ -784,7 +816,7 @@ def check_windows() -> None:
             assert steps[0]["slots"]["target"] == "BP_Sphere"
             assert steps[1]["slots"]["picker"] == "BP_TestPawn"
             assert steps[0]["realizable"] is True
-            learned_second = plan_windows(second, complete=boom)
+            learned_second = _as_official(lambda: plan_windows(second, complete=boom))
             assert learned_second["planner_called"] is False
             assert match_learned("让 BP_A 与 BP_B 交互") is None
             assert match_learned("把今天的笔记整理一下") is None
@@ -796,25 +828,29 @@ def check_windows() -> None:
             def fake_ok(task, trace_path=None, thread_id=None, on_row=None):
                 calls.append((task.get("action"), thread_id, task.get("target_ref")))
                 if task.get("action") in ("judge_pickup", "check_pickup"):
+                    summary = "不能拾取：距离 150.0 uu，超过 100"
                     return {
                         "id": task.get("id"),
                         "ok": True,
-                        "summary": "不能拾取：距离 150.0 uu，超过 100",
+                        "summary": summary,
                         "judge": "不能",
                         "thread_id": thread_id,
+                        **_passed_judge(task, summary),
                     }
+                summary = "bPickable 为真，带 InteractableActor"
                 return {
                     "id": task.get("id"),
                     "ok": True,
-                    "summary": "bPickable 为真，带 InteractableActor",
+                    "summary": summary,
                     "ref": "ActorRef",
                     "in_level": True,
                     "thread_id": thread_id,
+                    **_passed_judge(task, summary),
                 }
 
             run_task_mod.run_task = fake_ok
             try:
-                code, run_path = execute_windows(mark, complete=boom, echo=quiet)
+                code, run_path = _as_official(lambda: execute_windows(mark, complete=boom, echo=quiet))
                 assert code == 0
                 assert [item[0] for item in calls] == ["set_pickable", "judge_pickup"]
                 assert calls[0][1] and calls[0][1] != calls[1][1]
@@ -838,7 +874,7 @@ def check_windows() -> None:
                     }
 
                 run_task_mod.run_task = fake_missing
-                code, run_path = execute_windows(mark, complete=boom, echo=quiet)
+                code, run_path = _as_official(lambda: execute_windows(mark, complete=boom, echo=quiet))
                 assert code == 1
                 assert calls == ["set_pickable", "set_pickable"]
                 assert "judge_pickup" not in calls

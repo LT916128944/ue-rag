@@ -104,6 +104,17 @@ UNSUPPORTED = {
 # 编辑器里做」。消费方（扇级报告 / 人工清单）按这个集合展示，不比字符串。
 MANUAL_GAPS = frozenset({"SetNamedSlotContent", "GetWidgetClassInfo"})
 
+# 拆句读取（20261111-1428）：实例已经在关卡里、还要读或改它的属性时，窗口依赖的
+# official 原语。不放进 MAPPED，也不编造成功返回。place_batch 在生成时写 props，
+# 不在这张表里。
+INSTANCE_PROP_TOOLS = frozenset({"get_properties", "set_properties"})
+
+EXISTING_INSTANCE_PROP_DEPS = {
+    "judge_pickup": frozenset({"get_properties"}),
+    "check_pickup": frozenset({"get_properties"}),
+    "set_pickable": frozenset({"get_properties", "set_properties"}),
+}
+
 
 _NOT_FOUND_TOKENS = ("Actor not found", "Blueprint not found", "Failed to load", "not found")
 

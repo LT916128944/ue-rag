@@ -56,6 +56,13 @@ def _load_env(path: Path) -> None:
 
 
 ENV_PATH = PROJECT_ROOT / ".env"
+# 【计划外改动，20261111 W1】进程级注入点，只有这一个用途：离线检查（check_scorecard 的
+# 健康探针、check_scoring_integrity）要起一个「配置自由」的子进程去打一次真实 /api/health，
+# 不给注入点就造不出「某项探活 ok=false」的假，P2(b) 会退化成恒真。不给的话下面所有路径
+# 与改动前逐字同名同值：ENV_PATH = PROJECT_ROOT/".env"。
+_ENV_OVERRIDE = os.environ.get("UE_DOTENV_PATH", "").strip()
+if _ENV_OVERRIDE:
+    ENV_PATH = Path(_ENV_OVERRIDE).resolve()
 
 
 def env_value(env_path: Path, key: str) -> str | None:
@@ -99,8 +106,9 @@ def _env_str(name: str, default: str) -> str:
 
 
 def _env_path(name: str, default: Path) -> Path:
-    return Path(_env_str(name, str(default)))
-
+    """环境变量为空或没写时返回 default 本身（不是一个字符串化的 default）。"""
+    raw = _env_str(name, "")
+    return Path(raw) if raw else default
 
 def _env_float(name: str, default: float) -> float:
     raw = os.getenv(name)
@@ -169,15 +177,79 @@ def task_flag(task: dict | None, key: str) -> bool:
         return value
     return default_save() if key == "save" else default_pie()
 
-def task_policy(*, save: bool | None = None, pie: bool | None = None) -> dict:
-    """造任务字典时展开：{"save": ..., "pie": ...}，缺省跟随上面两个开关。"""
+def _save_pie(*, save: bool | None, pie: bool | None) -> dict:
     return {
         "save": default_save() if save is None else bool(save),
         "pie": default_pie() if pie is None else bool(pie),
     }
 
 
-_load_env(PROJECT_ROOT / ".env")
+def _policy_writes(value) -> list:
+    if not isinstance(value, (list, tuple)):
+        return []
+    return [str(item) for item in value if isinstance(item, str)]
+
+
+def _dsh_session_path() -> Path:
+    """与 server/dsh_bridge.py 同一条：UE_DSH_TASK_PATH，否则数据目录下的 session_task.json。"""
+    override = os.environ.get("UE_DSH_TASK_PATH", "").strip()
+    if override:
+        return Path(override)
+    data_override = os.environ.get("UE_DSH_DATA_DIR", "").strip()
+    root = Path(data_override) if data_override else DATA_DIR
+    return root / "dsh" / "session_task.json"
+
+
+def _dsh_policy() -> dict:
+    """只认 session_task.json。缺文件、读失败、不是对象，都是全拒绝。不看调用方 task。"""
+    deny = {"allow_writes": [], "save": False, "pie": False}
+    path = _dsh_session_path()
+    if not path.is_file():
+        return dict(deny)
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return dict(deny)
+    if not isinstance(data, dict):
+        return dict(deny)
+    return {
+        "allow_writes": _policy_writes(data.get("allow_writes")),
+        "save": bool(data.get("save")),
+        "pie": bool(data.get("pie")),
+    }
+
+
+def run_policy(entry: str, task: dict | None = None) -> dict:
+    """两套剖面，同一组键：allow_writes、save、pie。两边的 bool 不必相等。
+
+    menu：save/pie 等于 task_policy，allow_writes 用调用方已经放进 task 的那份。
+    dsh：只读 session_task.json。task 参数里的 allow_writes / save / pie 一律忽略。
+    """
+    if entry == "dsh":
+        return _dsh_policy()
+    if entry != "menu":
+        raise ValueError(f"未知入口 {entry}")
+    body = task or {}
+    save = body.get("save") if isinstance(body.get("save"), bool) else None
+    pie = body.get("pie") if isinstance(body.get("pie"), bool) else None
+    flags = _save_pie(save=save, pie=pie)
+    return {
+        "allow_writes": _policy_writes(body.get("allow_writes")),
+        "save": flags["save"],
+        "pie": flags["pie"],
+    }
+
+
+def task_policy(*, save: bool | None = None, pie: bool | None = None) -> dict:
+    """薄包装：只要菜单剖面的 save / pie。缺省跟随 default_save / default_pie。"""
+    policy = run_policy("menu", {
+        **({} if save is None else {"save": bool(save)}),
+        **({} if pie is None else {"pie": bool(pie)}),
+    })
+    return {"save": policy["save"], "pie": policy["pie"]}
+
+
+_load_env(ENV_PATH)
 
 
 def editor_backend() -> str:
@@ -221,9 +293,14 @@ def monolith_root() -> Path:
     """说明书与离线查询的源码位置。已加载的插件在工程 Plugins/Monolith。"""
     return Path(_file_or_env("UE_MONOLITH_ROOT", r"E:\UEProject\AIWork\RAG\monolith-master"))
 
-DATA_DIR = PROJECT_ROOT / "data"
+# 【计划外改动，20261111 W1】DATA_DIR / MCP_INDEX_PATH 各多一个环境变量注入点，
+# 理由同上（健康探针要能把索引指到一个不存在的文件，才造得出 index_present.ok=false）。
+# 不设这两个变量时，行为与改动前逐字等价：
+#   DATA_DIR       = PROJECT_ROOT / "data"
+#   MCP_INDEX_PATH = DATA_DIR / "ue_mcp_index.json"
+DATA_DIR = _env_path("UE_DATA_DIR", PROJECT_ROOT / "data")
 CHROMA_PATH = DATA_DIR / "chroma"
-MCP_INDEX_PATH = DATA_DIR / "ue_mcp_index.json"
+MCP_INDEX_PATH = _env_path("UE_MCP_INDEX_PATH", DATA_DIR / "ue_mcp_index.json")
 TRACES_DIR = DATA_DIR / "traces"
 
 _DEFAULT_EDITOR = Path(r"D:\UEEngline\UE_5.82\UE_5.8\Engine\Binaries\Win64\UnrealEditor-Cmd.exe")

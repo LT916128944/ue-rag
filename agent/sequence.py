@@ -1,10 +1,11 @@
 """按顺序跑拆开的步骤。失败或做不了时停下来，并把每一步写进 data/runs。"""
 import json
+import os
 import re
 from datetime import datetime
 from pathlib import Path
 
-from config import PROJECT_ROOT, task_flag, task_policy
+from config import PROJECT_ROOT, run_policy, task_flag
 
 RUNS_DIR = PROJECT_ROOT / "data" / "runs"
 
@@ -256,7 +257,7 @@ def repair_blueprint_once(step: dict) -> dict:
     }
     result = monolith.exec(
         namespace, action_name, params,
-        task={"allow_writes": [action_name], **task_policy()},
+        task=_menu_task([action_name]),
         transport=_monolith_transport,
     )
     if not result.get("ok"):
@@ -353,7 +354,7 @@ def _run_action(step: dict) -> dict:
     from core.editor_exec import exec_tool
     from core.judge import judge
 
-    task = {"allow_writes": ["create", "add_to_scene_from_asset"], **task_policy()}
+    task = _menu_task(["create", "add_to_scene_from_asset"])
     action = step.get("action")
     if action in ("compile_blueprint", "bind_blueprint", "create_widget_blueprint", "edit_widget_blueprint"):
         from backends.select import current_backend
@@ -619,6 +620,16 @@ def _read_task() -> dict:
     return {"allow_writes": [], "save": False, "pie": False}
 
 
+def _menu_task(allow_writes, *, save: bool | None = None, pie: bool | None = None) -> dict:
+    """菜单执行任务。save/pie 没写就走菜单缺省，allow_writes 用调用方已经放进来的那份。"""
+    body: dict = {"allow_writes": list(allow_writes)}
+    if isinstance(save, bool):
+        body["save"] = save
+    if isinstance(pie, bool):
+        body["pie"] = pie
+    return run_policy("menu", body)
+
+
 def _monolith_active() -> bool:
     from backends.select import current_backend
 
@@ -659,7 +670,7 @@ def _save_level(step: dict) -> dict:
             # 键在、列表空：关卡真的没有未落盘的改动（全幂等重跑就是这种），不算失败
             return {"ok": True, "saved": False, "note": "没有未保存的关卡改动"}
         saved = monolith_exec("editor", "save_packages", {"packages": maps},
-                              task={"allow_writes": [], **task_policy(save=True, pie=False)},
+                              task=_menu_task([], save=True, pie=False),
                               transport=_monolith_transport)
         if not saved.get("ok"):
             return {"ok": False, "saved": False,
@@ -685,7 +696,7 @@ def _save_level(step: dict) -> dict:
     saved = exec_tool(
         _ASSET_TOOLS, "save_assets",
         {"asset_paths": [level_path]},
-        task={"allow_writes": [], **task_policy(save=True, pie=False)},
+        task=_menu_task([], save=True, pie=False),
     )
     if not saved.get("ok"):
         return {"ok": False, "saved": False,
@@ -927,7 +938,7 @@ def _create_widget_blueprint(step: dict) -> dict:
     if not present.get("ok"):
         return present
     note = f"{ref}（已存在，不重复新建）" if present.get("present") else ref
-    write = {"allow_writes": ["create", "set_parent"], **task_policy()}
+    write = _menu_task(["create", "set_parent"])
     if not present.get("present"):
         created = exec_tool(
             "editor_toolset.toolsets.blueprint.BlueprintTools",
@@ -985,7 +996,7 @@ def _create_widget_blueprint(step: dict) -> dict:
     # U1：验收不只「资产存在」，还要这张 Widget Blueprint 编得过。编译是只读裁判，不保存。
     from core.judge import judge
 
-    test = judge({"kind": "blueprint_compile", "refPath": ref}, {"allow_writes": [], **task_policy()})
+    test = judge({"kind": "blueprint_compile", "refPath": ref}, _menu_task([]))
     out = {"ok": True, "id": name, "ref": ref, "index_note": f"{note}；已保存这份资产"}
     out["test"] = test
     out["judge_kind"] = "blueprint_compile"
@@ -1207,8 +1218,8 @@ def _create_level(step: dict) -> dict:
     template = _level_template_path()
     if not template:
         return {"ok": False, "id": name, "error": "没有关卡模板。设置 UE_LEVEL_TEMPLATE，或先导出 project_context 的 level_name。"}
-    # save 跟随 task_policy()：落盘是这一步的交付，关掉 save 就让它在保存那一步如实失败。
-    write = {"allow_writes": ["duplicate", "save_assets", "load_level"], **task_policy()}
+    # save 跟随菜单剖面：落盘是这一步的交付，关掉 save 就让它在保存那一步如实失败。
+    write = _menu_task(["duplicate", "save_assets", "load_level"])
     from backends.select import current_backend
 
     if current_backend() == "monolith":
@@ -1322,7 +1333,7 @@ def _load_existing_level(package: str, name: str) -> dict:
     from backends.monolith import exec as monolith_exec
     from backends.select import current_backend
 
-    write = {"allow_writes": ["load_level"], **task_policy(save=True, pie=False)}
+    write = _menu_task(["load_level"], save=True, pie=False)
     if current_backend() == "monolith":
         probed = monolith_exec(
             "project", "get_asset_details", {"asset_path": package}, task=_read_task(),
@@ -1429,7 +1440,7 @@ def _ensure_blueprint(slot: dict) -> dict:
     if present.get("present"):
         return {"ok": True, "note": f"{ref} 已存在"}
     parent = _script_parent(asset, str(slot.get("parent") or ""))
-    task = {"allow_writes": ["create", "set_parent"], **task_policy()}
+    task = _menu_task(["create", "set_parent"])
     created = exec_tool(
         "editor_toolset.toolsets.blueprint.BlueprintTools",
         "create",
@@ -1472,7 +1483,7 @@ def _place_one(slot: dict, location: tuple[float, float, float], snap: bool) -> 
     ensured = _ensure_blueprint(slot)
     if not ensured.get("ok"):
         return ensured
-    task = {"allow_writes": ["add_to_scene_from_asset"], **task_policy()}
+    task = _menu_task(["add_to_scene_from_asset"])
     placed = exec_tool(
         _SCENE,
         "add_to_scene_from_asset",
@@ -1625,7 +1636,7 @@ def _probe_play(step: dict) -> dict:
     stem = _pawn_stem(query)
     if not stem:
         return {"ok": False, "error": "句子里对不上唯一的 Pawn"}
-    pie = {"allow_writes": [], **task_policy(save=False, pie=True)}
+    pie = _menu_task([], save=False, pie=True)
     app = "EditorToolset.EditorAppToolset"
     started = exec_tool(
         app,
@@ -1674,7 +1685,7 @@ def _probe_look(step: dict) -> dict:
     note = str(result.get("summary") or "镜头测试通过")
     if not step.get("pie"):
         return {"ok": True, "index_note": note}
-    pie = {"allow_writes": [], **task_policy(save=False, pie=True)}
+    pie = _menu_task([], save=False, pie=True)
     app = "EditorToolset.EditorAppToolset"
     started = exec_tool(
         app,
@@ -1744,7 +1755,7 @@ def _move_actor(step: dict) -> dict:
 
         x, y, z = before["location"]
         capture_props(str(step.get("run_id")), ref, {"location": {"x": x, "y": y, "z": z}}, kind="location")
-    write = {"allow_writes": ["set_actor_transform"], **task_policy()}
+    write = _menu_task(["set_actor_transform"])
     moved = exec_tool(
         _ACTOR,
         "set_actor_transform",
@@ -1816,7 +1827,7 @@ def _set_pickable(step: dict) -> dict:
                 ref,
                 {"bPickable": values.get("bPickable"), "Tags": values.get("Tags")},
             )
-    write = {"allow_writes": ["set_properties", "add_tag"], **task_policy()}
+    write = _menu_task(["set_properties", "add_tag"])
     wrote = exec_tool(
         _OBJECT,
         "set_properties",
@@ -1986,7 +1997,7 @@ _FPS_SOURCES = (
 FPS_HUD_REF = "/Game/UI/WBP_FpsHUD.WBP_FpsHUD"
 FPS_HUD_PARENT = "FpsHUDWidget"
 FPS_HUD_WIDGETS = (
-    "txt_Health", "txt_Ammo", "txt_Grenade",
+    "txt_Health", "txt_Ammo", "txt_Grenade", "txt_RocketAmmo",
     "txt_VehicleName", "txt_EnterPrompt", "txt_VehicleSpeed",
 )
 
@@ -2109,8 +2120,8 @@ def _check_fps_hud(step: dict) -> dict:
         summary = f"{ref} 不合格：" + "；".join(problems) + "。控件图能编过，不等于 HUD 会动。"
     else:
         summary = (
-            f"{ref} 六个合同控件都在，父类是 {FPS_HUD_PARENT}，{mount_note}；"
-            "血条占位 100、子弹/手雷数量、载具名字/上下车提示 E/时速都由该控件显示。"
+            f"{ref} 合同控件都在，父类是 {FPS_HUD_PARENT}，{mount_note}；"
+            "血条占位 100、子弹/手雷数量、火箭弹剩余发数、载具名字/上下车提示 E/时速都由该控件显示。"
         )
     judge = {"ok": not problems, "kind": "editor_assert", "summary": summary, "errors": []}
     out = {
@@ -2295,7 +2306,7 @@ def _implement_shooter(step: dict) -> dict:
     if not task_flag(step, "save"):
         return _fps_fail(level, "save 未放行，不能加载关卡核对场景。不把临时世界测试当成完成。")
 
-    write = {"allow_writes": [], **task_policy(save=True, pie=False)}
+    write = _menu_task([], save=True, pie=False)
 
     def call(namespace: str, action: str, params: dict) -> dict:
         return monolith_exec(namespace, action, params, task=write, transport=_monolith_transport)
@@ -2440,7 +2451,7 @@ def _implement_grenade(step: dict) -> dict:
     if not task_flag(step, "save"):
         return _fps_fail(level, "save 未放行，不能加载关卡核对场景。不把临时世界测试当成完成。")
 
-    write = {"allow_writes": [], **task_policy(save=True, pie=False)}
+    write = _menu_task([], save=True, pie=False)
 
     def call(namespace: str, action: str, params: dict) -> dict:
         return monolith_exec(namespace, action, params, task=write, transport=_monolith_transport)
@@ -2703,7 +2714,7 @@ def _set_scalar_param(step: dict) -> dict:
 
             capture_props(str(step.get("run_id")), instance_ref,
                           {"parameter": param, "value": old_value}, kind="scalar")
-    write = {"allow_writes": ["set_scalar_parameter"], **task_policy()}
+    write = _menu_task(["set_scalar_parameter"])
     wrote = exec_tool(
         _MATERIAL_INSTANCE,
         "set_scalar_parameter",
@@ -2739,7 +2750,7 @@ def _set_scalar_param(step: dict) -> dict:
         saved = exec_tool(
             _ASSET_TOOLS, "save_assets",
             {"asset_paths": [package]},
-            task={"allow_writes": [], **task_policy(save=True, pie=False)},
+            task=_menu_task([], save=True, pie=False),
         )
         if not saved.get("ok"):
             return {"ok": False, "id": instance_ref, "ref": instance_ref,
@@ -2916,8 +2927,10 @@ def _place_batch(step: dict) -> dict:
     if not entries:
         return {"ok": False, "id": blueprint, "error": "设计图里没有合法条目，不放。"}
     base_name = asset_path.rsplit("/", 1)[-1]
-    write = {"allow_writes": ["add_to_scene_from_asset", "set_properties", "set_actor_transform"],
-             **task_policy(save=task_flag(step, "save"), pie=False)}
+    write = _menu_task(
+        ["add_to_scene_from_asset", "set_properties", "set_actor_transform"],
+        save=task_flag(step, "save"), pie=False,
+    )
     placed = skipped = corrected = 0
     created: list[str] = []
     props_at_spawn: dict[str, bool] = {}
@@ -3181,8 +3194,7 @@ def _remove_batch(step: dict) -> dict:
     targets, why = _removal_targets(raw)
     if not targets:
         return {"ok": False, "error": f"没有要删的条目：{why}，不猜。"}
-    write = {"allow_writes": ["remove_from_scene"],
-             **task_policy(save=task_flag(step, "save"), pie=False)}
+    write = _menu_task(["remove_from_scene"], save=task_flag(step, "save"), pie=False)
     removed: list[dict] = []
     for entry in targets:
         name = entry["name"]
@@ -3420,6 +3432,7 @@ def run_sequence(query: str, decide, *, choices: bool = False, layered: bool = F
     from agent.run_task import run_task
 
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    os.environ["UE_RAG_RUN_ID"] = stamp
     path = RUNS_DIR / stamp.split("-", 1)[0] / f"{stamp}.md"
     events = None
     if choices:

@@ -10,7 +10,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from agent.catalog import CATALOG, DISPOSE_ACTION, INTEGRATE_ACTION
+from agent.catalog import CATALOG, DISPOSE_ACTION, INTEGRATE_ACTION, spec_of
 from agent.ledger import ledger_summary_text
 from config import PROJECT_ROOT
 
@@ -614,7 +614,7 @@ def _retrieval_titles(query: str, k: int = 3) -> list[str]:
     return titles[:k]
 
 
-def brief_system_prompt() -> str:
+def brief_system_prompt(windows: list[dict] | None = None) -> str:
     """任务书生成器只看动作表和任务书 schema。工具 schema、检索正文一律不给。"""
     lines = [
         "你只输出 JSON 任务书，不解释。",
@@ -624,6 +624,7 @@ def brief_system_prompt() -> str:
         "windows 只能用动作表里的动作和槽位名；看不准就不要编。windows 的 depends_on 只引用先出现的窗口 id。",
         "候选窗口给了 id 时，范围 windows 必须原样引用候选的 id 和 action，不要自己编动作、槽位或路径，也不要漏掉候选窗口。",
         "只能等、不能跑的外部服务写进 external_dependencies。范围等外部服务时，把服务名写进该范围的 external_dep。",
+        "没有外部服务时 external_dependencies 用空数组，external_dep 用空字符串。不要编造服务名。",
         "estimate_hours 是记录字段，不是执行预算；给不出就不写，代码会按动作表估。免责由代码自动带，不要写。",
         "",
         "输出形状：",
@@ -641,18 +642,47 @@ def brief_system_prompt() -> str:
                              "slots": {"target": "BP_名字"}, "depends_on": []}],
             }],
             "integration": {"title": "累计集成、验证与交付", "deliverables": ["对修改做一次只读复验"]},
-            "external_dependencies": [{"name": "Main/M-UE", "provides": "权威初始化", "status": "服务未恢复"}],
+            "external_dependencies": [],
         }, ensure_ascii=False),
         "",
-        "动作表：",
     ]
-    for name, spec in CATALOG.items():
-        if name in (INTEGRATE_ACTION, DISPOSE_ACTION):
-            continue
-        slots = "、".join(spec["slots"]) if spec["slots"] else "无"
-        if spec.get("mode") == "one":
-            slots += "（有一个即可）"
-        lines.append(f"- {name}。槽位：{slots}。{spec['summary']}")
+    candidate_actions: list[str] = []
+    for w in (windows or []):
+        action = str((w or {}).get("action") or "").strip()
+        if action and action not in candidate_actions:
+            candidate_actions.append(action)
+    if candidate_actions:
+        # 20261111 P3：已拿到候选窗口时不再贴整份动作表——提示里只留这些窗口的
+        # 动作名和槽位，生成器照引用即可；不再与 understand.py 各贴一份全表。
+        lines.append(
+            "候选窗口的动作与槽位（范围 windows 原样引用候选 id 与 action，不要新编动作、槽位或路径）："
+        )
+        for action in candidate_actions:
+            spec = spec_of(action)
+            if isinstance(spec, dict):
+                slots = "、".join(spec["slots"]) if spec["slots"] else "无"
+                if spec.get("mode") == "one":
+                    slots += "（有一个即可）"
+                lines.append(f"- {action}。槽位：{slots}。{spec['summary']}")
+            else:
+                lines.append(f"- {action}（代码补窗动作，不在动作表；原样引用，不要改写）。")
+    else:
+        lines.append("动作表：")
+        for name, spec in CATALOG.items():
+            if name in (INTEGRATE_ACTION, DISPOSE_ACTION):
+                continue
+            slots = "、".join(spec["slots"]) if spec["slots"] else "无"
+            if spec.get("mode") == "one":
+                slots += "（有一个即可）"
+            lines.append(f"- {name}。槽位：{slots}。{spec['summary']}")
+    if any(str((w or {}).get("action") or "") == "solve" for w in (windows or [])):
+        # 20261111 P2：求解兜底的任务书引用预演方案，不再要求生成器
+        # 「只能用动作表重写一遍」——动作表里本来就没有 solve。
+        lines.append("")
+        lines.append(
+            "候选窗口里有受控求解扇（action=solve）与它的方案：范围 windows 原样引用它的 id 与 action，"
+            "方案文本照抄进该范围的 pending_note。动作表里没有 solve，不要把它改写成表内动作，也不要漏掉它。"
+        )
     return "\n".join(lines)
 
 
@@ -669,6 +699,14 @@ def brief_user_prompt(query: str, windows: list[dict] | None, ledger_text: str, 
         "检索标题": titles,
         "候选窗口": candidates,
     }
+    # 求解兜底（20261111 P2）：候选扇带着预演方案时一并给生成器，任务书引用这份方案。
+    plans = [
+        str(w.get("solver_plan") or "").strip()
+        for w in (windows or [])
+        if isinstance(w, dict) and str(w.get("solver_plan") or "").strip()
+    ]
+    if plans:
+        payload["求解方案"] = plans[:2]
     return json.dumps(payload, ensure_ascii=False)
 
 
@@ -976,7 +1014,7 @@ def generate_brief(query: str, windows: list[dict] | None = None, complete=None,
     if feedback:
         user += "\n上一轮审阅意见（据此修改）：" + str(feedback)[:600]
     messages = [
-        {"role": "system", "content": brief_system_prompt()},
+        {"role": "system", "content": brief_system_prompt(windows)},
         {"role": "user", "content": user},
     ]
     try:

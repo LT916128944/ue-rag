@@ -135,6 +135,11 @@ _LAUNCH_EDITOR_RE = re.compile(
 )
 # 单独一个「启动/打开 UE 或虚幻」不够：「打开虚幻商城」也会命中，必须排除商店这类对象。
 _LAUNCH_EDITOR_EXCLUDE_RE = re.compile(r"商城|市场|Marketplace|商店|资产库", re.I)
+# 「打开已有关卡」不是「新建关卡」，也不是「打开编辑器」。
+_OPEN_LEVEL_RE = re.compile(
+    r"(?:打开|切到|切换到|进入|载入|加载)\s*(?:已有|现有|当前)?\s*(?:关卡|地图)",
+    re.I,
+)
 _PICKUP_BY_RE = re.compile(
     r"(?P<target>A[A-Z][A-Za-z0-9_]*)\s*能否被\s*(?P<picker>A[A-Z][A-Za-z0-9_]*)\s*拾取"
 )
@@ -1123,6 +1128,44 @@ _LEVEL_CREATE_RE = re.compile(
 )
 
 
+def _wants_open_level(query: str) -> bool:
+    """句子要求打开一份已经存在的关卡。新建关卡不算。"""
+    if _wants_create_level(query):
+        return False
+    return _OPEN_LEVEL_RE.search(query or "") is not None
+
+
+def _open_level_task(query: str) -> dict:
+    """「打开关卡 L_X」由代码接住。没有这份关卡就让执行层失败，不改成新建，也不进求解。"""
+    from agent.plan_windows import resolve_existing_level
+
+    task = _base(query)
+    task["title"] = "打开已有关卡"
+    task["action"] = "open_level"
+    task["verify"] = [{"kind": "editor_assert", "text": "/Game 下关卡资产存在且已成为当前关卡"}]
+    task["allow_writes"] = ["load_level"]
+    task["save"] = False
+    task["pie"] = False
+    task["max_retries"] = 0
+    raw = _level_token(query)
+    found = resolve_existing_level(raw) if raw else {"ok": False, "error": "缺少关卡名，不猜。"}
+    if not found.get("ok"):
+        task.update({
+            "ok": False,
+            "blocked": True,
+            "error": str(found.get("error") or "缺少关卡名，不猜。"),
+        })
+        return task
+    task["query"] = (
+        f"{query.strip()}\n打开已有关卡 {raw} 并切为当前关卡。不新建，不改场景内容。"
+    )
+    task["slots"] = {"level": raw}
+    for key in ("level_name", "level_path", "ref_path", "asset_name", "package_path"):
+        if found.get(key):
+            task[key] = found[key]
+    return task
+
+
 def _wants_create_level(query: str) -> bool:
     """句子里真的要求新建一个关卡（不是「在这个关卡里做什么」）。
     「新建/创建/建一个/做一个 + 紧邻的 关卡/地图」才算；中间夹了别的词（做一个平台跳跃关卡）不算。"""
@@ -1409,6 +1452,7 @@ def _plan_rules(query: str) -> list[dict] | None:
     )
     editor_hit = _wants_scene_move(query)
     create_level_hit = _wants_create_level(query)
+    open_level_hit = _wants_open_level(query)
     launch_only = (
         _wants_launch_editor(query)
         and not compile_hit
@@ -1417,6 +1461,7 @@ def _plan_rules(query: str) -> list[dict] | None:
         and not named_bp
         and not editor_hit
         and not create_level_hit
+        and not open_level_hit
     )
     if launch_only:
         # 只要求启动编辑器：给一扇真正启动编辑器的步骤，不再交给规划者编 compile_project
@@ -1431,6 +1476,11 @@ def _plan_rules(query: str) -> list[dict] | None:
         if _wants_launch_editor(query):
             steps.append(_launch_editor_task(query))
         steps.append(_create_level_task(query))
+    elif open_level_hit:
+        # 打开已有关卡同样先启动再打开。不要只留 launch_editor，把「打开关卡」扔进求解。
+        if _wants_launch_editor(query):
+            steps.append(_launch_editor_task(query))
+        steps.append(_open_level_task(query))
     if project_compile:
         steps.append(_project_compile_task(query))
     if cpp_hit:

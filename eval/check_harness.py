@@ -783,6 +783,18 @@ def apply_judge_auto(rows, judge):
     return apply_judge(rows, judge)
 
 
+def check_unsigned_manual_is_partial() -> None:
+    """有未签 manual → 整句 partial。条款文本写「已完成」也不参与判定。临时条款。"""
+    from agent.harness import sentence_outcome
+
+    windows = [{"id": "W1", "state": "done", "ok": True}]
+    criteria = [
+        {"id": "c-tmp-build", "evidence_kind": "cpp_build", "passed": True, "text": "已完成"},
+        {"id": "c-tmp-manual", "evidence_kind": "manual", "passed": False, "text": "已完成"},
+    ]
+    assert sentence_outcome(windows, criteria) == "partial"
+
+
 def main() -> int:
     check_decision_fields()
     check_contract()
@@ -797,6 +809,7 @@ def main() -> int:
     check_catalog_and_policy()
     check_props()
     check_under_delivery_guard()
+    check_unsigned_manual_is_partial()
     print("harness ok")
     return 0
 

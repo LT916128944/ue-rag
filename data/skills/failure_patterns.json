@@ -46,19 +46,6 @@
       "conflicts": []
     },
     {
-      "id": "solver-fail-caf546e4",
-      "symptom": "exit 6 Unhandled 1 aggregate exceptions\n",
-      "symptom_detail": "",
-      "note": "求解 build_failed：上一扇交接：\n{\"window\": \"W2\", \"unmet\": [\"AIAgent.Fps.Hit 失败数为 0\", \"AIAgent.Fps.Grenade 失败数为 0\"], \"unmet_total\": 2, \"unmet_omit",
-      "fix_tools": [],
-      "source_runs": [
-        "W4"
-      ],
-      "successes": 0,
-      "status": "shadow",
-      "conflicts": []
-    },
-    {
       "id": "decomposer-fake-external-172416",
       "symptom": "等待外部 Main/M-UE",
       "symptom_detail": "拆窗器把没跑的窗口标成等待外部，外部依赖名是编造的（Main/M-UE 不在登记表里），任务书整段假暂停",
@@ -170,19 +157,6 @@
       "conflicts": []
     },
     {
-      "id": "solver-fail-484adff6",
-      "symptom": "solver-read_only_plan",
-      "symptom_detail": "",
-      "note": "求解 read_only_plan：在关卡L_NewTest3中调整子弹射速到原先100倍",
-      "fix_tools": [],
-      "source_runs": [
-        "SBW-A-SOLVE"
-      ],
-      "successes": 0,
-      "status": "shadow",
-      "conflicts": []
-    },
-    {
       "id": "solver-fail-9982f478",
       "symptom": "solver-exec_failed",
       "symptom_detail": "",
@@ -209,13 +183,39 @@
       "conflicts": []
     },
     {
-      "id": "solver-fail-97d170e1",
-      "symptom": "方案里没有可执行的步骤",
+      "id": "solver-fail-caf546e4",
+      "symptom": "exit 6 Unhandled 1 aggregate exceptions\n",
       "symptom_detail": "",
-      "note": "求解 plan_failed：往关卡里放一个 Actor",
+      "note": "求解 build_failed：上一扇交接：\n{\"window\": \"W4\", \"unmet\": [], \"unmet_total\": 0, \"unmet_omitted\": 0, \"evidence\": [{\"kind\": \"cpp_build\", \"ok\": true",
+      "fix_tools": [],
+      "source_runs": [
+        "W5"
+      ],
+      "successes": 0,
+      "status": "shadow",
+      "conflicts": []
+    },
+    {
+      "id": "solver-fail-484adff6",
+      "symptom": "solver-no_criteria",
+      "symptom_detail": "",
+      "note": "求解 no_criteria：打开编辑器，打开关卡 L_NewTest",
       "fix_tools": [],
       "source_runs": [
         "W1"
+      ],
+      "successes": 0,
+      "status": "shadow",
+      "conflicts": []
+    },
+    {
+      "id": "solver-fail-97d170e1",
+      "symptom": "方案里没有可执行的步骤",
+      "symptom_detail": "",
+      "note": "求解 plan_failed：给 BP_TestEnemy 接上 OnPatrol、OnChase、OnMeleeAttack 的表现",
+      "fix_tools": [],
+      "source_runs": [
+        "SBW-A-SOLVE"
       ],
       "successes": 0,
       "status": "shadow",

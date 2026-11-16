@@ -11,7 +11,12 @@ editor_assert 扇（launch/open_level/place_batch 都在）→ W1 launch_editor 
 ② launch_editor 判词打 synthetic，apply_judge 只放行「证明窗口恰好只有它自己」的条款；
 ③ 本文件：用 20261027-180955 的真实形态做回归——窗口全败时条款必须保持 false。
 
+20261021-195220 的 run 文件不在 data/runs 或 data/archive。按文档里的决策字段
+（W5 automation、tests 为空、summary「失败数 0」）用当前 build_criteria + apply_judge
+回放，条款保持 false，已由 180955 的收窄盖住，不加新用例。
+
 纯函数，不调模型、不动编辑器。"""
+import json
 import sys
 from pathlib import Path
 
@@ -138,12 +143,93 @@ def check_pickup_claim_not_rebound() -> None:
     assert rows[3].get("windows") == ["W9"], "已有显式归属的条款不能被覆盖"
 
 
+def check_flip_hash_and_replay() -> None:
+    """合法翻牌带 evidence_sha1；改一个 summary 字节后回放，条款回到 false。"""
+    from agent.harness import apply_judge, build_criteria, judge_evidence_sha1, replay_judge
+
+    windows = [{"id": "W1", "action": "launch_editor", "slots": {}, "depends_on": []}]
+    criteria = build_criteria(None, windows)
+    judge = {"ok": True, "kind": "editor_assert", "window": "W1", "synthetic": True,
+             "summary": "编辑器已连通"}
+    flipped = apply_judge(criteria, judge)
+    assert flipped[0]["passed"] is True
+    assert flipped[0].get("evidence_sha1") == judge_evidence_sha1(judge)
+    bad = dict(judge)
+    bad["summary"] = judge["summary"] + "x"
+    assert replay_judge(flipped, bad)[0]["passed"] is False
+    assert replay_judge(flipped, judge)[0]["passed"] is True
+
+
+def check_failed_windows_all_green() -> None:
+    """窗口失败且条款全过 → 整句 failed。临时条款，不改 feature_list。"""
+    from agent.harness import sentence_exit, sentence_outcome
+
+    windows = [{"id": "W3", "state": "failed"}, {"id": "W4", "state": "failed"}]
+    criteria = [
+        {"id": "c-tmp-coins", "evidence_kind": "editor_assert", "passed": True},
+        {"id": "c-tmp-door", "evidence_kind": "editor_assert", "passed": True},
+    ]
+    assert sentence_outcome(windows, criteria) == "failed"
+    assert sentence_exit("partial") != sentence_exit("failed")
+
+
+def check_manual_attest_only_manual() -> None:
+    """临时目录：无文件 / 哈希被改 → false；哈希相符只翻 manual。editor_assert 拒绝人签。"""
+    import hashlib
+    import json
+    import tempfile
+
+    from agent.manual_attest import apply_manual_attest
+
+    criteria = [
+        {"id": "c-tmp-manual", "evidence_kind": "manual", "passed": False, "text": "人绑"},
+        {"id": "c-tmp-assert", "evidence_kind": "editor_assert", "passed": False, "text": "读数"},
+    ]
+    with tempfile.TemporaryDirectory() as tmp_name:
+        folder = Path(tmp_name)
+        attest = folder / "attestations"
+        attest.mkdir()
+        bare = apply_manual_attest(criteria, attest)
+        assert bare[0]["passed"] is False and bare[1]["passed"] is False
+
+        evidence = folder / "steps.json"
+        evidence.write_bytes(b"patrol-steps")
+        digest = hashlib.sha1(evidence.read_bytes()).hexdigest()
+        body = {
+            "criterion_id": "c-tmp-manual",
+            "person": "tester",
+            "signed_at": "2026-11-11T15:00:00",
+            "evidence_path": "../steps.json",
+            "evidence_sha1": "0" * 40,
+        }
+        (attest / "c-tmp-manual.json").write_text(json.dumps(body), encoding="utf-8")
+        (attest / "c-tmp-assert.json").write_text(json.dumps({
+            **body, "criterion_id": "c-tmp-assert", "evidence_sha1": digest,
+        }), encoding="utf-8")
+        mismatched = apply_manual_attest(criteria, attest)
+        assert mismatched[0]["passed"] is False, "哈希不符仍翻了 manual"
+        assert mismatched[1]["passed"] is False, "人签翻了 editor_assert"
+
+        body["evidence_sha1"] = digest
+        (attest / "c-tmp-manual.json").write_text(json.dumps(body), encoding="utf-8")
+        matched = apply_manual_attest(criteria, attest)
+        assert matched[0]["passed"] is True and matched[0].get("evidence_sha1") == digest
+        assert matched[1]["passed"] is False
+
+    listed = json.loads((ROOT / "data" / "harness" / "feature_list.json").read_text(encoding="utf-8"))
+    patrol = next(item for item in listed["items"] if item.get("id") == "patrol-presentation")
+    assert patrol.get("passed") is False, "本检查不许改 patrol-presentation.passed"
+
+
 def main() -> None:
     check_real_shape_stays_false()
     check_launch_only_still_flips()
     check_synthetic_never_flips_wide()
     check_gate_covered_rebind()
     check_pickup_claim_not_rebound()
+    check_flip_hash_and_replay()
+    check_failed_windows_all_green()
+    check_manual_attest_only_manual()
     print("criteria binding ok")
 
 

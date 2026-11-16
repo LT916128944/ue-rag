@@ -13,6 +13,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+from eval._pin_offline import close_now  # noqa: E402
+
+close_now()  # 离线封闭：本机 .env 的求解/放行开关不进断言（20261111 求解兜底改路由后同类漂移）
+
 QUERY = (
     "在 UE 5.8 里做一个能玩的平台跳跃关卡：玩家操纵 ATestPawn，去碰旋转发光的金币（碰到后金币隐藏）、"
     "左上角 UMG 计数碰到的金币数，以及 90 秒倒计时，收齐金币开门显示通关、"

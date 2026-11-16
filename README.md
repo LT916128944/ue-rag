@@ -8,6 +8,10 @@ Python 3.12。模型走 DeepSeek，向量库是 Chroma，嵌入模型是 `BAAI/b
 
 ## 准备
 
+换机可以跑 `shortcuts\setup.ps1`：找到 Python 3.12，建 `.venv`，`pip install -r requirements.txt`。`.env` 没有才从 `.env.example` 复制，已有则不动。然后它打印三条下一步：`python eval/check_all.py`、`shortcuts\ingest.bat`、旁边工程的 `start.bat`。不下载 UE，不写密钥。
+
+也可以自己做：
+
 ```powershell
 python -m venv .venv
 .venv\Scripts\activate
@@ -32,7 +36,7 @@ copy .env.example .env
 | `UE_ALLOW_PYTHON` | `false` | `true`。`editor.run_python` 的缺省放行；任务显式 `allow_python: false` 仍拒绝（DSH session_task.json 优先） |
 | `UE_DEFAULT_SAVE` / `UE_DEFAULT_PIE` | `true` | `true` |
 | `UE_EXEC_MODE` | `real` | 注释掉。`mock` 才启用注入错误 |
-| `UE_SOLVER_ENABLED` | `false` | `true`。表外需求补不出窗口时自动补一扇受控求解扇（预算闸门见 WORKFLOW） |
+| `UE_SOLVER_ENABLED` | `false` | `true`。表外需求补不出窗口、或理解器 goals 盖不住整句时进求解兜底（预算闸门见 WORKFLOW） |
 | `UE_SOLVER_EDITOR_CALLS` / `UE_SOLVER_BUILD_ROUNDS` / `UE_SOLVER_MODEL_CALLS` | 8 / 3 / 6 | 注释掉 |
 | `UE_SOLVER_META_CALLS` | 12 | 注释掉。discover / describe / 列测试走这份额度；describe 命中 `capability_surface.json` 的 params 缓存时不占 |
 | `UE_SOLVER_NAMESPACES` | `editor,mesh,niagara,blueprint,material` | 注释掉。monolith 没有 `asset` namespace，别再往里放 |
@@ -52,7 +56,9 @@ copy .env.example .env
 
 两边同时在听时，启动会被拒绝：`monolith` 要关掉插件 Unreal MCP（ModelContextProtocol），`official` 要关掉 Monolith，然后重启编辑器。PCG 在 Monolith 上没有命名空间，调用失败，不回退 8000。
 
-`backend=monolith` 时，`compile_blueprint`、`bind_blueprint`、`create_widget_blueprint`、`edit_widget_blueprint` 对同一张蓝图最多修 3 次。第 3 次仍失败就停，错误含「已尝试 3 次，Monolith 不具备该能力」。对应的 `UE_ALLOW_*` 不是 true 时次数是 0。场景/资产/材质原语（find_actors、add_to_scene_from_asset、set_actor_transform、save_assets 等）由 `core/monolith_bridge.py` 翻译成对应 monolith action，映射外的原语带原因拒绝（覆盖矩阵见 `eval/check_backend_coverage.py`）。
+`backend=monolith` 时，`compile_blueprint`、`bind_blueprint`、`create_widget_blueprint`、`edit_widget_blueprint` 对同一张蓝图最多修 3 次。第 3 次仍失败就停，错误含「已尝试 3 次，Monolith 不具备该能力」。对应的 `UE_ALLOW_*` 不是 true 时次数是 0。场景/资产/材质原语（find_actors、add_to_scene_from_asset、set_actor_transform、save_assets 等）由 `core/monolith_bridge.py` 翻译成对应 monolith action，映射外的原语带原因拒绝。`eval/check_backend_coverage.py` 里除 `judge_pickup`、`set_pickable`（没有 `get_properties` / `set_properties`）标 `partial` 外，动作清单是 `both`。monolith 下这两条在拆句转入 unresolved，不进执行窗口；官方后端仍可进窗口。写前快照方式是 `compensating`，不代替 Undo。内容条款被「编辑器已打开」翻绿的形状由 `eval/check_criteria_binding.py` 钉住。翻牌带判词 `evidence_sha1`；回放时印章对不上，条款回到 false。`run_windows` 收尾写整句 `ok` / `partial` / `failed`，退出码是 0 / 3 / 1。有活心跳仍是退出码 2。`manual` 只由人写的 `data/attestations/<criterion_id>.json` 翻，模型文本不改 `passed`。
+
+`/api/health` 返回 `ok`、`model`、`mcp_url`、`mcp_up`，以及 `backend`、`index_present`、`circuit_closed`、`checkpoint_writable`、`disk_free_mb`。后五项各带 `ok` 和 `reason`。不调用模型。本机把 CI 里已有的离线检查串起来用 `python eval/check_all.py`。分数由 `python eval/check_scorecard.py` 按证据写入 `data/harness/scorecard.json`。成本按 `caller` 分列，没有行的入口不填 0。
 
 ## 入库
 

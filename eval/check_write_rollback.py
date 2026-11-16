@@ -214,6 +214,237 @@ def check_restore_triggers_cover_new_actions() -> None:
     print("ok: run_windows 失败还原覆盖 place_batch / set_scalar_param")
 
 
+def _row(run_id: str) -> dict:
+    return json.loads(_props_file(run_id).read_text(encoding="utf-8"))
+
+
+def check_snapshot_record_is_compensating() -> None:
+    """每条写前快照带动作、目标、逆操作、幂等键，方式是 compensating。"""
+    with _with_snapshot_dir() as ps:
+        ps.capture_props("run-rec", "/Game/M/MI_Coin.MI_Coin",
+                         {"parameter": "Emissive", "value": 1.5}, kind="scalar")
+        doc = _row("run-rec")
+    assert doc.get("method") == "compensating", doc
+    item = doc["items"][0]
+    assert item["method"] == "compensating", item
+    assert item["action"] == "set_scalar_param", item
+    assert item["ref"] == "/Game/M/MI_Coin.MI_Coin"
+    assert item["inverse"] == "set_scalar_parameter", item
+    assert item["idempotency_key"] == "scalar:/Game/M/MI_Coin.MI_Coin:Emissive", item
+    assert item["consumed"] is False
+    print("ok: 快照方式是 compensating，带动作、ref、逆操作、幂等键")
+
+
+def check_mid_write_failure_restores_old_scalar() -> None:
+    """1. 写属性中途失败：scalar 恢复到快照里的旧值。同一幂等键第二次回滚跳过。"""
+    import core.editor_exec as editor_exec
+    import agent.sequence as sequence
+
+    calls: list[float] = []
+
+    def fake(toolset, tool, args=None, *, task=None, timeout=None):
+        if tool == "set_scalar_parameter":
+            calls.append(float((args or {}).get("value")))
+        return {"ok": True, "data": None}
+
+    with _with_snapshot_dir() as ps:
+        ps.capture_props("run-mid", "/Game/M/MI_Coin.MI_Coin",
+                         {"parameter": "Emissive", "value": 1.5}, kind="scalar")
+        ps.capture_props("run-mid", "/Game/M/MI_Coin.MI_Coin",
+                         {"parameter": "Emissive", "value": 1.5}, kind="scalar")
+        original = editor_exec.exec_tool
+        saved = sequence._save_level
+        editor_exec.exec_tool = fake
+        sequence._save_level = lambda _step: {"ok": True, "saved": True}
+        try:
+            from eval._pin_backend import pinned_backend
+
+            with pinned_backend("official"):
+                out = ps.compensate_write_failure("run-mid", {"ok": False, "error": "中途失败"})
+                again = ps.restore_props("run-mid")
+        finally:
+            editor_exec.exec_tool = original
+            sequence._save_level = saved
+        doc = _row("run-mid")
+    assert out["ok"] is True and out["restored"] == ["/Game/M/MI_Coin.MI_Coin"], out
+    assert calls == [1.5], calls
+    assert again == [], again
+    assert doc.get("consumed") is True, doc
+    print("ok: 写属性中途失败后 scalar 写回旧值，同一幂等键不回滚两次")
+
+
+def check_compile_failure_keeps_snapshot() -> None:
+    """2. 编译失败：快照仍在，不被标成已消费。"""
+    with _with_snapshot_dir() as ps:
+        ps.capture_props("run-compile", "Coin_1", {"bPickable": False})
+        ps.note_compile_failure("run-compile")
+        doc = _row("run-compile")
+    assert doc.get("consumed") is False, doc
+    assert doc.get("outcome") == "compile_failed", doc
+    assert doc["items"] and doc["items"][0]["consumed"] is False
+    assert doc["items"][0]["fields"]["bPickable"] is False
+    print("ok: 编译失败不消费快照")
+
+
+def check_save_failure_keeps_level_diff() -> None:
+    """3. 保存失败：快照仍在，关卡差异记录留在快照目录。"""
+    import core.editor_exec as editor_exec
+    import agent.sequence as sequence
+
+    def fake(toolset, tool, args=None, *, task=None, timeout=None):
+        return {"ok": True, "data": None}
+
+    with _with_snapshot_dir() as ps:
+        ps.capture_props("run-save", "/Game/M/MI_Coin.MI_Coin",
+                         {"parameter": "Emissive", "value": 0.25}, kind="scalar")
+        original = editor_exec.exec_tool
+        saved = sequence._save_level
+        editor_exec.exec_tool = fake
+        sequence._save_level = lambda _step: {"ok": False, "error": "保存失败"}
+        try:
+            from eval._pin_backend import pinned_backend
+
+            with pinned_backend("official"):
+                restored = ps.restore_props("run-save")
+        finally:
+            editor_exec.exec_tool = original
+            sequence._save_level = saved
+        doc = _row("run-save")
+        diff_path = ps.level_diff_path("run-save")
+        diff = json.loads(diff_path.read_text(encoding="utf-8"))
+    assert restored == ["/Game/M/MI_Coin.MI_Coin"], restored
+    assert doc.get("consumed") is False, doc
+    assert diff_path.name == "level_diff.json"
+    assert diff.get("reason") == "保存失败" and "保存失败" in diff.get("error", ""), diff
+    assert diff["refs"] == ["/Game/M/MI_Coin.MI_Coin"], diff
+    print("ok: 保存失败留下关卡差异，快照未消费")
+
+
+def check_connection_failure_stops_and_writes_manual() -> None:
+    """4. 逆操作连接失败：写 manual_intervention，不继续下一条。"""
+    import core.editor_exec as editor_exec
+
+    calls: list[str] = []
+
+    def fake(toolset, tool, args=None, *, task=None, timeout=None):
+        if tool == "set_scalar_parameter":
+            calls.append(str((args or {}).get("instance", {}).get("refPath")))
+            return {"ok": False, "error": "连接失败"}
+        return {"ok": True, "data": None}
+
+    with _with_snapshot_dir() as ps:
+        ps.capture_props("run-conn", "MI_A", {"parameter": "Emissive", "value": 1}, kind="scalar")
+        ps.capture_props("run-conn", "MI_B", {"parameter": "Emissive", "value": 2}, kind="scalar")
+        original = editor_exec.exec_tool
+        editor_exec.exec_tool = fake
+        try:
+            from eval._pin_backend import pinned_backend
+
+            with pinned_backend("official"):
+                out = ps.compensate_write_failure("run-conn", {"ok": False, "error": "连接失败"})
+        finally:
+            editor_exec.exec_tool = original
+        manual = json.loads(ps.manual_path("run-conn").read_text(encoding="utf-8"))
+    assert calls == ["MI_B"], calls
+    assert out["ok"] is False, out
+    assert manual.get("kind") == "manual_intervention" and manual.get("open") is True, manual
+    assert manual.get("method") == "compensating"
+    print("ok: 连接失败写 manual_intervention，不再做下一条逆操作")
+
+
+def check_conflict_stops_without_either_snapshot() -> None:
+    """同一 ref 两份旧值不一致：一份都不执行，写 manual_intervention。"""
+    with _with_snapshot_dir() as ps:
+        ps.capture_props("run-conflict", "Actor_B", {"bPickable": True})
+        ps.capture_props("run-conflict", "Actor_B", {"bPickable": False})
+        seen: list[str] = []
+        restored = ps.restore_props("run-conflict", writer=lambda ref, _item: seen.append(ref))
+        manual = json.loads(ps.manual_path("run-conflict").read_text(encoding="utf-8"))
+        outcome = ps.resume_orphaned("run-conflict")
+    assert seen == [] and restored == [], (seen, restored)
+    assert manual.get("open") is True, manual
+    assert outcome["ok"] is False and outcome["stopped"] is True, outcome
+    print("ok: 旧值冲突不回滚，并留下 manual_intervention")
+
+
+def check_orphaned_resume_restores_in_reverse() -> None:
+    """5. sweep 改判 orphaned 之后，续接先按快照逆序恢复；恢复失败则停。"""
+    import os
+    from datetime import datetime, timedelta
+
+    import core.editor_exec as editor_exec
+    from agent.run_guard import sweep_orphan_runs
+
+    calls: list[str] = []
+
+    def fake(toolset, tool, args=None, *, task=None, timeout=None):
+        if tool == "set_scalar_parameter":
+            calls.append(str((args or {}).get("instance", {}).get("refPath")))
+            return {"ok": True, "data": None}
+        return {"ok": True, "data": None}
+
+    with _with_snapshot_dir() as ps:
+        import agent.sequence as sequence
+
+        run_id = "20261028-010101"
+        ps.capture_props(run_id, "MI_A", {"parameter": "Emissive", "value": 1}, kind="scalar")
+        ps.capture_props(run_id, "MI_B", {"parameter": "Emissive", "value": 2}, kind="scalar")
+        runs = Path(os.environ["UE_SNAPSHOT_DIR"]).parent / "runs"
+        day = runs / "20261028"
+        day.mkdir(parents=True)
+        record = {
+            "run_id": run_id,
+            "status": "running",
+            "pid": os.getpid(),
+            "heartbeat_at": (datetime.now() - timedelta(minutes=31)).isoformat(timespec="seconds"),
+        }
+        (day / f"{run_id}.json").write_text(json.dumps(record), encoding="utf-8")
+        marked = sweep_orphan_runs(runs)
+        data = json.loads((day / f"{run_id}.json").read_text(encoding="utf-8"))
+        original = editor_exec.exec_tool
+        saved = sequence._save_level
+        editor_exec.exec_tool = fake
+        sequence._save_level = lambda _step: {"ok": True, "saved": True}
+        try:
+            from eval._pin_backend import pinned_backend
+
+            with pinned_backend("official"):
+                outcome = ps.resume_orphaned(run_id)
+        finally:
+            editor_exec.exec_tool = original
+            sequence._save_level = saved
+
+        fail_calls: list[str] = []
+
+        def fail(toolset, tool, args=None, *, task=None, timeout=None):
+            if tool == "set_scalar_parameter":
+                fail_calls.append(str((args or {}).get("instance", {}).get("refPath")))
+                return {"ok": False, "error": "连接失败"}
+            return {"ok": True, "data": None}
+
+        bad = "20261028-020202"
+        ps.capture_props(bad, "MI_A", {"parameter": "Emissive", "value": 1}, kind="scalar")
+        ps.capture_props(bad, "MI_B", {"parameter": "Emissive", "value": 2}, kind="scalar")
+        editor_exec.exec_tool = fail
+        try:
+            from eval._pin_backend import pinned_backend
+
+            with pinned_backend("official"):
+                stopped = ps.resume_orphaned(bad)
+        finally:
+            editor_exec.exec_tool = original
+        manual_was_open = ps.manual_open(bad)
+        source = (ROOT / "agent" / "run_windows.py").read_text(encoding="utf-8")
+    assert marked == [run_id], marked
+    assert data["status"] == "orphaned", data
+    assert outcome["ok"] is True and calls == ["MI_B", "MI_A"], (outcome, calls)
+    assert stopped["ok"] is False and stopped["stopped"] is True, stopped
+    assert fail_calls == ["MI_B"], fail_calls
+    assert manual_was_open
+    assert "resume_orphaned" in source
+    print("ok: orphaned 后续接先逆序恢复，恢复失败则停")
+
+
 def main() -> int:
     check_scalar_snapshot_write_back()
     check_scalar_capture_skipped_when_old_unreadable()
@@ -221,6 +452,13 @@ def main() -> int:
     check_created_removal_is_conservative()
     check_monolith_save_reads_dirty_packages()
     check_restore_triggers_cover_new_actions()
+    check_snapshot_record_is_compensating()
+    check_mid_write_failure_restores_old_scalar()
+    check_compile_failure_keeps_snapshot()
+    check_save_failure_keeps_level_diff()
+    check_connection_failure_stops_and_writes_manual()
+    check_conflict_stops_without_either_snapshot()
+    check_orphaned_resume_restores_in_reverse()
     print("write rollback ok")
     return 0
 

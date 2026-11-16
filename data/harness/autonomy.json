@@ -1,0 +1,42 @@
+{
+  "machine_records": {
+    "count": 3,
+    "expected": 30,
+    "produced_by": {
+      "agent/bench_record.record_round（bench_runner 调）": 3
+    }
+  },
+  "manual_criteria_ratio": {
+    "manual": 0,
+    "total": 20,
+    "ratio": 0.0
+  },
+  "human_touchpoints": [
+    {
+      "id": "authorize",
+      "type": "安全边界",
+      "what": "在 data/dsh/session_task.json 里开 allow_writes/save/pie",
+      "minutes": 1
+    },
+    {
+      "id": "pie-look",
+      "type": "能力边界",
+      "what": "巡逻表现进 PIE 看一眼",
+      "minutes": 2
+    },
+    {
+      "id": "attest-sign",
+      "type": "审计",
+      "what": "python agent\\attest_sign.py --criterion patrol-presentation --person <名字> --yes",
+      "minutes": 0.5
+    },
+    {
+      "id": "audit-sample",
+      "type": "审计",
+      "what": "按 batch.sampled 抽查 3 条",
+      "minutes": 15
+    }
+  ],
+  "human_minutes_estimate": 18.5,
+  "generated_at": "2026-11-12T15:16:11+08:00"
+}

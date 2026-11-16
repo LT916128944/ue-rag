@@ -12,26 +12,24 @@ import os
 import subprocess
 import sys
 import time
-from contextlib import contextmanager
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from config import DATA_DIR  # noqa: E402
-from core import editor_exec, risk  # noqa: E402
+from config import run_policy  # noqa: E402
+from core import editor_exec  # noqa: E402
+from core.editor_lock import data_dir, editor_lock as _editor_lock  # noqa: E402
 from core.rag_core import retrieve  # noqa: E402
 from mcp.server.mcpserver import MCPServer  # noqa: E402
 
 mcp = MCPServer("ue-rag-dsh")
-_STALE_LOCK = 900.0
 _CLI_TIMEOUT = 320.0
 _INLINE_LIMIT = 1200
 
 
 def _data_dir() -> Path:
-    override = os.environ.get("UE_DSH_DATA_DIR", "").strip()
-    return Path(override) if override else DATA_DIR
+    return data_dir()
 
 
 def _task_path() -> Path:
@@ -40,105 +38,25 @@ def _task_path() -> Path:
 
 
 def _policy_task() -> dict:
+    """allow_writes / save / pie 只走 run_policy('dsh')。图引用和 python 仍从同一份文件补。"""
+    policy = run_policy("dsh")
+    extra = {"allow_blueprint_ref": "", "allow_python": False}
     path = _task_path()
-    if not path.is_file():
-        return {"allow_writes": [], "save": False, "pie": False, "allow_blueprint_ref": "", "allow_python": False}
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {"allow_writes": [], "save": False, "pie": False, "allow_blueprint_ref": "", "allow_python": False}
-    if not isinstance(data, dict):
-        data = {}
-    return {
-        "allow_writes": [str(item) for item in (data.get("allow_writes") or []) if isinstance(item, str)],
-        "save": bool(data.get("save")),
-        "pie": bool(data.get("pie")),
-        "allow_blueprint_ref": str(data.get("allow_blueprint_ref") or ""),
-        "allow_python": data.get("allow_python") is True,
-    }
+    if path.is_file():
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            data = None
+        if isinstance(data, dict):
+            extra = {
+                "allow_blueprint_ref": str(data.get("allow_blueprint_ref") or ""),
+                "allow_python": data.get("allow_python") is True,
+            }
+    return {**policy, **extra}
 
 
 def _is_write(toolset: str, tool: str) -> bool:
-    if tool in editor_exec.SAVE_TOOLS or tool in editor_exec.PIE_TOOLS:
-        return True
-    if tool in editor_exec.BLUEPRINT_EDIT_TOOLS:
-        return True
-    if editor_exec.is_write_tool(tool):
-        return True
-    return risk.tier(tool) in ("mid", "high")
-
-
-def _pid_alive(pid: int) -> bool:
-    """持锁进程还在不在。Windows 不能用 os.kill(pid, 0)（那会真把进程杀掉），走 tasklist。
-
-    查不出来时按「还活着」算：宁可多等 900 秒，也不抢活进程的锁造成并发写编辑器。
-    """
-    if pid <= 0:
-        return False
-    if os.name == "nt":
-        try:
-            proc = subprocess.run(
-                ["tasklist", "/FI", f"PID eq {pid}", "/NH"],
-                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=15,
-            )
-        except (OSError, subprocess.SubprocessError):
-            return True
-        if proc.returncode != 0 or not (proc.stdout or "").strip():
-            return True
-        return str(pid) in proc.stdout
-    try:
-        os.kill(pid, 0)
-    except OSError:
-        return False
-    return True
-
-
-def _lock_stale(lock: Path) -> bool:
-    """超过 900 秒，或记的 pid 已经不在了（进程崩溃留下的锁）。读不懂锁文件就当它还持有。"""
-    try:
-        age = time.time() - lock.stat().st_mtime
-    except OSError:
-        return True
-    if age > _STALE_LOCK:
-        return True
-    try:
-        held = json.loads(lock.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return False
-    if not isinstance(held, dict):
-        return False
-    try:
-        pid = int(held.get("pid") or 0)
-    except (TypeError, ValueError):
-        return False
-    if pid <= 0:
-        return False
-    return not _pid_alive(pid)
-
-
-@contextmanager
-def _editor_lock():
-    lock = _data_dir() / "locks" / "editor.lock"
-    lock.parent.mkdir(parents=True, exist_ok=True)
-    acquired = False
-    for _ in range(2):
-        try:
-            fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-        except FileExistsError:
-            if _lock_stale(lock):
-                lock.unlink(missing_ok=True)
-                continue
-            raise RuntimeError("editor busy") from None
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            json.dump({"pid": os.getpid(), "ts": time.time()}, handle)
-        acquired = True
-        break
-    if not acquired:
-        raise RuntimeError("editor busy")
-    try:
-        yield
-    finally:
-        lock.unlink(missing_ok=True)
+    return editor_exec.is_editor_write(toolset, tool)
 
 
 def _spill(payload: dict, name: str) -> dict:
@@ -263,18 +181,22 @@ def exec_editor_tool(toolset: str, tool: str, args: dict | None = None) -> dict:
     name, err = _backend_gate()
     if err:
         return {"ok": False, "error": err}
-    if name == "monolith":
-        from backends.monolith import exec as monolith_exec
-
-        return _bounded(monolith_exec(toolset, tool, args or {}, task=_policy_task()), "exec")
     task = _policy_task()
     write = _is_write(toolset, tool)
+
+    def _run() -> dict:
+        if name == "monolith":
+            from backends.monolith import exec as monolith_exec
+
+            return monolith_exec(toolset, tool, args or {}, task=task)
+        return editor_exec.exec_tool(toolset, tool, args or {}, task=task)
+
     try:
         if write:
             with _editor_lock():
-                result = editor_exec.exec_tool(toolset, tool, args or {}, task=task)
+                result = _run()
         else:
-            result = editor_exec.exec_tool(toolset, tool, args or {}, task=task)
+            result = _run()
     except RuntimeError as exc:
         return {"ok": False, "error": str(exc)}
     return _bounded(result, "exec")

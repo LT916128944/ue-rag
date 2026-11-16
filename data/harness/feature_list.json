@@ -1,5 +1,5 @@
 {
-  "updated": "2026-10-29",
+  "updated": "2026-11-12",
   "note": "passed 只由裁判或离线检查改写，不由模型宣布。done->passed:true；pending/wont->passed:false。",
   "items": [
     {
@@ -91,7 +91,7 @@
       "status": "pending",
       "passed": false,
       "evidence": "Plan/20261017-1507-巡逻敌人蓝图人工步骤.md",
-      "notes": "2026-10-27 复核（U2）：AIAgent.Enemy.Patrol automation 实测 1 passed / 0 failed（monolith editor.run_automation_tests，真裁判证据，C++ 半边绿）。ATestEnemy 的行为是 C++ 状态机（TickPatrol/TickChase/TickAttack），行为树被取代，不建装饰性 BT。monolith 蓝图词表没有「覆写组件 BlueprintImplementableEvent」的节点类型（resolve_node 干跑实测），OnPatrol/OnChase/OnMeleeAttack 的表现接线仍由人绑；动画对无骨架的 Actor 不适用，受击表现待伤害链路。剩余工作已是纯人工接线，automation 无法再收窄这条 pending"
+      "notes": "2026-11-12 复核：C++ 半边绿（AIAgent.Enemy.Patrol automation 1 passed / 0 failed，改前后一致）。ATestEnemy 行为是 C++ 状态机（TickPatrol/TickChase/TickAttack），不建装饰性 BT。**2026-10-27 那条归因已作废**：monolith 词表从来不缺节点类型，真因是 BlueprintImplementableEvent 只能由声明它的类自身实现——事件声明在 UTestEnemyPatrolComponent 上，BP_TestEnemy（父类 ATestEnemy）够不到，与词表无关；override_parent_function 也不适用（它只覆写父类的可覆写函数）。2026-11-12 已改 C++：给组件补三个 BlueprintAssignable 多播委托（OnPatrolDyn/OnChaseDyn/OnMeleeAttackDyn），四处事件调用点补 Broadcast；BP_TestEnemy 的 EventGraph 已接三个 AddDelegate + CustomEvent，get_execution_flow 从 BeginPlay 可走到三个绑定节点，PIE 实测日志出现 patrol 表现行 13 次。剩余：把这条跑出一条带 evidence_sha1 的 run 记录（bench_record 只收 passed=true 且带印章的条款）。动画对无骨架 Actor 不适用，受击表现待伤害链路"
     },
     {
       "id": "editor-transaction",

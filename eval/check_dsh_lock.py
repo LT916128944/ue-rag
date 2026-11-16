@@ -8,6 +8,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import re
 import sys
 import tempfile
 import threading
@@ -100,7 +101,14 @@ def _lock_body(module, tmp) -> None:
         ok_count = sum(1 for item in results if item.get("ok") is True)
         busy = [item for item in results if item.get("ok") is False]
         check(ok_count == 1, f"并发写应恰好一个成功: {results}")
-        check(len(busy) == 1 and "editor busy" in str(busy[0].get("error")), f"另一个应是 editor busy: {results}")
+        check(len(busy) == 1, f"另一个应是 editor busy: {results}")
+        busy_text = str(busy[0].get("error"))
+        check("editor busy" in busy_text, f"另一个应是 editor busy: {results}")
+        backend = re.search(r"backend=(\S+)", busy_text)
+        pid = re.search(r"pid=(\d+)", busy_text)
+        check(pid is not None, f"busy 文本没有持有者 pid: {busy_text}")
+        check(backend is not None and "run_id=" in busy_text,
+              f"busy 文本应带持有者 backend 和 run_id: {busy_text}")
         check(not lock.exists(), "并发用例结束后锁文件残留")
     finally:
         _clear_lock(lock)

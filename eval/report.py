@@ -572,14 +572,11 @@ def write_scoreboard(rows: list[dict], source) -> Path:
     return target
 
 
-def dsh_usage_lines(rows: list[dict]) -> list[str]:
-    """costs 行里 caller=dsh 的那部分按天汇总：calls / prompt / completion / cache_hit。
-
-    没有 dsh 行返回空列表，调用方整节省略；某天没有读数的那列留空，不填 0。
-    """
+def _usage_lines(rows: list[dict], title: str) -> list[str]:
+    """一组已经筛过的成本行，按天汇总。没有行就返回空列表，缺读数的格子留空。"""
     days: dict[str, dict] = {}
     for row in rows:
-        if not isinstance(row, dict) or str(row.get("caller") or "") != "dsh":
+        if not isinstance(row, dict):
             continue
         day = str(row.get("ts") or "")[:10]
         if not day:
@@ -593,13 +590,51 @@ def dsh_usage_lines(rows: list[dict]) -> list[str]:
         item["cache_hit"] = _sum_usage(item["cache_hit"], row.get("prompt_cache_hit_tokens"))
     if not days:
         return []
-    lines = ["DSH 用量", "day\tcalls\tprompt\tcompletion\tcache_hit"]
+    lines = [title, "day\tcalls\tprompt\tcompletion\tcache_hit"]
     for day in sorted(days):
         item = days[day]
         lines.append(
             f"{day}\t{item['calls']}\t{_cell(item['prompt'])}\t"
             f"{_cell(item['completion'])}\t{_cell(item['cache_hit'])}"
         )
+    return lines
+
+
+def dsh_usage_lines(rows: list[dict]) -> list[str]:
+    """costs 行里 caller=dsh 的那部分按天汇总：calls / prompt / completion / cache_hit。
+
+    没有 dsh 行返回空列表，调用方整节省略；某天没有读数的那列留空，不填 0。
+    """
+    subset = [
+        row for row in rows
+        if isinstance(row, dict) and str(row.get("caller") or "") == "dsh"
+    ]
+    return _usage_lines(subset, "DSH 用量")
+
+
+def caller_usage_lines(rows: list[dict]) -> list[str]:
+    """按 caller 分列。没有行的 caller 不出现，也不填 0。dsh 仍用原来的标题。"""
+    names: list[str] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        name = str(row.get("caller") or "").strip()
+        if name and name not in names:
+            names.append(name)
+    lines: list[str] = []
+    for name in names:
+        subset = [
+            row for row in rows
+            if isinstance(row, dict) and str(row.get("caller") or "").strip() == name
+        ]
+        if not subset:
+            continue
+        section = dsh_usage_lines(subset) if name == "dsh" else _usage_lines(subset, f"{name} 用量")
+        if not section:
+            continue
+        if lines:
+            lines.append("")
+        lines.extend(section)
     return lines
 
 
@@ -621,6 +656,24 @@ def print_dsh_usage() -> bool:
     except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         return False
     lines = dsh_usage_lines(rows)
+    if not lines:
+        return False
+    print("\n".join(lines))
+    return True
+
+
+def print_other_callers() -> bool:
+    """其余 caller 各打一节。没有行的入口不打，也不填 0。dsh 仍由 print_dsh_usage 负责。"""
+    path = _costs_path()
+    try:
+        rows = _load(path)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return False
+    others = [
+        row for row in rows
+        if isinstance(row, dict) and str(row.get("caller") or "").strip() != "dsh"
+    ]
+    lines = caller_usage_lines(others)
     if not lines:
         return False
     print("\n".join(lines))
@@ -650,6 +703,7 @@ def main() -> int:
         stats = summarize_traces(combined, tasks, route_counts(root / "data" / "events"))
         _print_directory_stats(stats)
         print_dsh_usage()
+        print_other_callers()
         html_path = write_observability_html(stats, path, Path(__file__).resolve().parent / "reports")
         print(f"html={html_path}")
         print(f"scoreboard={write_scoreboard(combined, path)}")
@@ -660,6 +714,7 @@ def main() -> int:
         _print_classes(raw)
         print(f"scoreboard={write_scoreboard(raw, path)}")
     print_dsh_usage()
+    print_other_callers()
     return 0
 
 

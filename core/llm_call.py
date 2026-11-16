@@ -3,6 +3,7 @@
 import json
 import os
 import random
+import re
 import time
 from datetime import datetime
 
@@ -112,10 +113,25 @@ def usage_for_trace(record: dict) -> dict:
     return usage
 
 
+_SECRET_KEY = re.compile(
+    r"(?i)(api[_-]?key|secret|password|authorization|credential|access[_-]?token)"
+)
+
+
+def _cost_line(record: dict) -> dict:
+    """落盘前丢掉形如密钥的字段。用量里的 token 计数不在这套名字里。"""
+    line = {
+        key: value
+        for key, value in record.items()
+        if not _SECRET_KEY.search(str(key))
+    }
+    line["ts"] = datetime.now().isoformat(timespec="seconds")
+    return line
+
+
 def append_cost(record: dict) -> None:
     COSTS_PATH.parent.mkdir(parents=True, exist_ok=True)
-    line = dict(record)
-    line["ts"] = datetime.now().isoformat(timespec="seconds")
+    line = _cost_line(record)
     with COSTS_PATH.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(line, ensure_ascii=False) + "\n")
 

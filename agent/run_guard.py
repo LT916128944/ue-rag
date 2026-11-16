@@ -4,7 +4,8 @@
 start.bat 把 UE_RAG_STDIN 重定向给 run_windows。超时转后台的 cmd 若没死干净，
 会拿着同一份输入再起一个真 run。这里用一次原子改名占住文件；run 记录写 pid
 和心跳，REPL 启动时把超 30 分钟无心跳的 running 改判 orphaned，并在 md 留名。
-不杀进程：活心跳只提示，由人决定放不放行。
+不杀进程。有活心跳时入口默认拒绝；带 --force 才放行，并在被越过的 run 的事件里
+写下 run_start.forced_by。
 """
 from __future__ import annotations
 
@@ -23,11 +24,20 @@ def consumed_path(path: Path) -> Path:
     return Path(str(path) + ".consumed")
 
 
-def claim_stdin(raw: str | None = None) -> str:
+def _runs_dir(runs_dir: Path | None) -> Path:
+    if runs_dir is not None:
+        return runs_dir
+    from agent.sequence import RUNS_DIR
+
+    return RUNS_DIR
+
+
+def claim_stdin(raw: str | None = None, *, runs_dir: Path | None = None) -> str:
     """占住 UE_RAG_STDIN 指向的文件。返回 skip / ok / busy。
 
-    文件不存在且已有 .consumed → busy（另一个进程先改名了）。
-    改名失败也当 busy：独占没拿到就不能再读这份输入。
+    目标文件已经不在、只剩 .consumed：没有未过期心跳时把 .consumed 交回这次
+    调用并返回 ok；有未过期心跳时仍返回 busy。
+    两个活进程同时改名，只有一个 os.replace 成功，失败的一方仍是 busy。
     start.bat 会在重定向之前改名并设 UE_RAG_STDIN_CLAIMED=1：文件一旦被
     cmd 打开，Windows 就不许再改名（WinError 32），所以这条路径不再改第二次。
     """
@@ -41,7 +51,11 @@ def claim_stdin(raw: str | None = None) -> str:
     path = Path(text)
     taken = consumed_path(path)
     if not path.is_file():
-        return "busy" if taken.is_file() else "skip"
+        if not taken.is_file():
+            return "skip"
+        if live_run_ids(_runs_dir(runs_dir)):
+            return "busy"
+        return "ok"
     try:
         os.replace(path, taken)
     except OSError:
@@ -154,13 +168,50 @@ def live_run_ids(runs_dir: Path, *, now: datetime | None = None,
 
 
 def warn_live_runs(runs_dir: Path | None = None) -> int:
-    """有活心跳返回 2，没有返回 0。start.bat 看到 2 就问人，不自动杀。"""
-    if runs_dir is None:
-        from agent.sequence import RUNS_DIR
-
-        runs_dir = RUNS_DIR
-    found = live_run_ids(runs_dir)
+    """只负责发现。有活心跳返回 2 并打印 run_id，没有返回 0。不写事件。"""
+    found = live_run_ids(_runs_dir(runs_dir))
     if not found:
         return 0
     print("仍在心跳的 run：" + "、".join(found))
     return 2
+
+
+def _events_dir(runs_dir: Path, events_dir: Path | None) -> Path:
+    if events_dir is not None:
+        return events_dir
+    if runs_dir.name == "runs":
+        return runs_dir.parent / "events"
+    return runs_dir / "events"
+
+
+def admit_live_runs(runs_dir: Path | None = None, *, force: bool = False,
+                    events_dir: Path | None = None) -> int:
+    """菜单入口。没有活心跳返回 0。
+
+    有活心跳且未带 force：返回 2，不写事件。
+    带 force：返回 0，并在被越过的 run 的事件文件写 run_start.forced_by，
+    带上本进程 pid 和该 run_id。
+    """
+    folder = _runs_dir(runs_dir)
+    found = live_run_ids(folder)
+    if not found:
+        return 0
+    if not force:
+        print("仍在心跳的 run：" + "、".join(found))
+        return 2
+    sink = _events_dir(folder, events_dir)
+    sink.mkdir(parents=True, exist_ok=True)
+    pid = os.getpid()
+    moment = datetime.now().isoformat(timespec="seconds")
+    for run_id in found:
+        event = {
+            "ts": moment,
+            "type": "run_start.forced_by",
+            "run_id": run_id,
+            "pid": pid,
+            "forced_by": {"pid": pid, "run_id": run_id},
+        }
+        path = sink / f"{run_id}.jsonl"
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(event, ensure_ascii=False) + "\n")
+    return 0

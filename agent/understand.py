@@ -21,22 +21,18 @@ def _action_cards() -> list[str]:
 
 
 def criteria_guide() -> tuple[str, ...]:
-    """验收口径。过滤器只抄原句或源码声明，不写死测试名。"""
+    """验收口径（20261111 瘦过字，口径一字没动）。过滤器只抄原句或源码声明，不写死测试名。"""
     return (
         "1. 每条一行：id（c- 开头、同任务内不重复）、evidence_kind、text（点名对象和期望值）。",
-        "2. evidence_kind 只能取：",
-        "   - cpp_build：C++ 改完要编译通过。改 .cpp/.h 或说「编译工程」时给。",
-        "   - blueprint_compile：已有蓝图要能编过。只动一张蓝图、不改源码时给。",
-        "   - editor_assert：编辑器里能读出来的状态（位置、bPickable、控件名等）。",
-        "   - automation：跑 Automation 过滤器，失败数必须为 0。必须带 filter，filter 用原句里出现的测试名。",
-        "   - widget_graph：Widget 控件树与事件绑定真的连上了（读控件名不够）。",
-        "   - manual：闭环确实做不到的部分（引擎外的手工美术、音频、手感调参）。"
-        "控件图、C++、关卡摆放都能自动做，不要给它们写 manual。",
-        "3. 常见形状（照抄形状，不要发明新的 evidence_kind，也不要编原句里没有的过滤器）：",
-        "   - 原句点了玩法测试时：c-cpp_build，需要控件图时再加 c-widget_graph，c-automation 的 filter 只抄原句或源码里已声明的那一条。",
-        "   - 只编译工程：c-cpp_build。只改一张蓝图：c-blueprint_compile。",
-        "   - 只放/移 Actor：c-editor_assert。",
-        "4. 条款只写你为这个任务选的内容；原句没提就不要加。全部条款都过，整句才算成功。",
+        "2. evidence_kind 只能取（不发明新 kind）：",
+        "   - cpp_build：改 .cpp/.h 或说「编译工程」。blueprint_compile：只动一张已有蓝图、不改源码。",
+        "   - editor_assert：编辑器里能读出的状态（位置、bPickable、控件名等）。",
+        "   - automation：跑过滤器且失败数为 0，必须带 filter，filter 只抄原句或源码声明的那一条。",
+        "   - widget_graph：Widget 控件树与事件绑定真的连上（读控件名不够）。",
+        "   - manual：闭环确实做不到的（引擎外手工美术、音频、手感）。控件图、C++、关卡摆放不许写 manual。",
+        "3. 常见形状：只编译工程给 c-cpp_build；只改一张蓝图给 c-blueprint_compile；只放/移 Actor 给 c-editor_assert；"
+        "点了玩法测试给 c-cpp_build（有控件图再加 c-widget_graph）加 c-automation。",
+        "4. 条款只写原句点到的内容，没提就不要加；全部条款都过，整句才算成功。",
     )
 
 

@@ -107,5 +107,71 @@
       "profile": "agent",
       "human_compare": false
     }
+  ],
+  "sentences": [
+    {
+      "id": "compile",
+      "text": "编译工程",
+      "offline": true,
+      "entry": "rule"
+    },
+    {
+      "id": "open-level",
+      "text": "打开编辑器，打开关卡 L_NewTest",
+      "offline": false,
+      "entry": "menu3"
+    },
+    {
+      "id": "place-coins",
+      "text": "打开关卡 L_NewTest，按设计图 20261020-coins 批量放置 BP_Coin，然后保存关卡",
+      "offline": false,
+      "entry": "menu3",
+      "live_constraint": "monolith 下已存在实例的属性改动应在拆句成为 unresolved，不得记成 ok"
+    },
+    {
+      "id": "platform-191740",
+      "text": "在当前关卡 L_NewTest 里摆好平台跳跃关卡并验证能玩：金币用 BP_Coin，平台用 BP_Platform，门用 BP_Door，进度中枢用 BP_Progress，每个都要放进当前关卡并保存。金币会旋转发光、前段平台不动、后段平台会动、90 秒倒计时、收齐金币后开门并在 UI 显示通关，这些逻辑已经在 C++ 和 WBP_HUD 里做好了，不用改代码也不用改蓝图。最后进 PIE 验证能玩。",
+      "offline": false,
+      "entry": "menu3"
+    },
+    {
+      "id": "fps-hud",
+      "text": "打开编辑器，在FPS游戏关卡L_NewTest3添加一个UMG到视口，左下角显示血条，满血100，暂时还没有扣血，就占位用。然后右下角显示子弹数量，还有手雷数量。右中部显示载具信息例如名字，是否上车/下车提示按键位E，还有当前车辆时速",
+      "offline": true,
+      "entry": "hud-rules",
+      "note": "离线可断定零模型；视口文本仍算真机"
+    },
+    {
+      "id": "shooter",
+      "text": "在 L_NewTest3 内实现简易 FPS 射击玩法，内容自由发挥",
+      "offline": false,
+      "entry": "menu3"
+    },
+    {
+      "id": "grenade",
+      "text": "给 level3 的 fps 游戏加手榴弹（爆炸表现）",
+      "offline": false,
+      "entry": "menu3"
+    },
+    {
+      "id": "create-level",
+      "text": "打开编辑器，新建一个关卡，名字为L_NewTest2，在这个关卡实现逻辑如下：需要实现简易的FPS射击游戏",
+      "offline": true,
+      "entry": "rule",
+      "note": "离线只验创建关卡的形状；落盘算真机"
+    },
+    {
+      "id": "mi-coin-scalar",
+      "text": "把 MI_Coin 的 Emissive 调到 5，再读回",
+      "offline": false,
+      "entry": "menu3"
+    },
+    {
+      "id": "patrol-presentation",
+      "text": "给 BP_TestEnemy 接上 OnPatrol、OnChase、OnMeleeAttack 的表现",
+      "offline": false,
+      "entry": "menu3",
+      "expect": "partial"
+    }
   ]
 }

@@ -15,6 +15,7 @@
 """
 from __future__ import annotations
 
+import json
 import os
 import re
 import sys
@@ -27,6 +28,15 @@ QUERY = (
     "打开编辑器，在FPS游戏关卡L_NewTest3添加一个UMG到视口，左下角显示血条，满血100，"
     "暂时还没有扣血，就占位用。然后右下角显示子弹数量，还有手雷数量。"
     "右中部显示载具信息例如名字，是否上车/下车提示按键位E，还有当前车辆时速"
+)
+
+# P1 反例（20261111）：HUD 半句 + 玩法半句。这条链只认领得住整句的纯 HUD 需求。
+MIXED = "给 FPS 加血条和子弹显示，同时给玩家加滑铲"
+
+# P2 探针（20261111）：速度、按键、冷却、冷却读数四件事，表内动作一件都接不住。
+SPRINT = (
+    "在 L_NewTest 给玩家加冲刺：按住 Left Shift 时最大行走速度乘 1.8，"
+    "松开恢复，冷却 1.5 秒，屏幕左下角显示剩余冷却。"
 )
 
 
@@ -51,6 +61,75 @@ def check_hud_plan_is_deterministic() -> None:
 
     # 非 HUD 句子不许被这条规则接走
     assert hud_windows("把按钮颜色改成红色") is None, "非 HUD 句子被 hud_windows 接走了"
+
+
+def check_mixed_sentence_not_claimed_by_hud_rules() -> None:
+    """门只认整句（20261111 P1）：HUD + 玩法混句不许被 hud-rules 整句领走。
+
+    纯 HUD 句仍是上面的五扇链；多一句玩法时 `hud_windows` 必须是 None，
+    `plan_windows` 的来源也不许是 hud-rules——玩法半句交回理解器/求解，
+    不能像 20261029 那样 HUD 摆了、滑铲半句静默蒸发。
+    """
+    from agent.fps_hud import hud_windows
+    from agent.plan_windows import plan_windows
+
+    assert hud_windows(MIXED) is None, "混句被 hud_windows 整句领走了"
+
+    # 理解器 stub：只点中表内改码动作，玩法半句进 unresolved。
+    # 求解开着时来源是 solver-fallback，关着时是 understood——都不许是 hud-rules。
+    intent_stub = json.dumps({
+        "goals": [{"action": "edit_cpp", "slots": {"class": "AFpsPawn"}}],
+        "unresolved": ["给玩家加滑铲"],
+    }, ensure_ascii=False)
+    planned = plan_windows(MIXED, complete=lambda _messages: intent_stub)
+    assert planned.get("source") != "hud-rules", f"混句来源不许是 hud-rules：{planned.get('source')}"
+
+
+def check_compile_sentence_stays_zero_model() -> None:
+    """「编译工程」仍是 rules 强命中：理解器、规划者一次都不许叫。"""
+    from agent.plan_windows import plan_windows
+
+    def boom(_messages):
+        raise AssertionError("不该叫模型")
+
+    planned = plan_windows("编译工程", complete=boom)
+    assert planned.get("source") == "rules", planned.get("source")
+    assert planned.get("understand_called") is False
+    assert planned.get("planner_called") is False
+
+
+def check_uncovered_sentence_goes_to_solver() -> None:
+    """P2（20261111）：表内计划盖不住整句时，只问一次。
+
+    - 求解开着：source 进求解兜底（solver-fallback），规划者调用次数是 0，
+      窗口里是一扇受控求解扇；
+    - 求解关着：停在缺口——不把冷却和按键静默丢掉（unresolved 还在），
+      任务书人审门必须拦下，不许只剩一扇「改单个类」的窗就直接执行。
+    """
+    from agent.plan_windows import plan_windows
+    from agent.run_windows import _needs_brief
+    from eval._pin_offline import closed_env
+
+    intent_stub = json.dumps({
+        "goals": [{"action": "edit_cpp", "slots": {"class": "AFpsPawn"}}],
+        "unresolved": ["屏幕左下角显示剩余冷却（冲刺冷却读数）"],
+    }, ensure_ascii=False)
+
+    with closed_env(UE_SOLVER_ENABLED="true"):
+        planned = plan_windows(SPRINT, complete=lambda _messages: intent_stub)
+        assert planned.get("source") == "solver-fallback", planned.get("source")
+        assert planned.get("planner_called") is False, "盖不住时不许再叫规划者"
+        assert any(
+            str(w.get("action") or "") == "solve" for w in planned.get("windows") or []
+        ), planned.get("windows")
+
+    with closed_env():
+        planned = plan_windows(SPRINT, complete=lambda _messages: intent_stub)
+        assert planned.get("source") == "understood", planned.get("source")
+        assert planned.get("planner_called") is False
+        unresolved = (planned.get("intent_full") or {}).get("unresolved") or []
+        assert any("冷却" in str(item) for item in unresolved), unresolved
+        assert _needs_brief(planned, SPRINT) is True, "盖不住且求解关着时必须停在人审门"
 
 
 def check_plan_windows_uses_rules_without_model() -> None:
@@ -124,6 +203,9 @@ def check_contract_names_match_cpp() -> None:
 
 def main() -> None:
     check_hud_plan_is_deterministic()
+    check_mixed_sentence_not_claimed_by_hud_rules()
+    check_compile_sentence_stays_zero_model()
+    check_uncovered_sentence_goes_to_solver()
     check_plan_windows_uses_rules_without_model()
     check_brief_skipped_for_deterministic_plan()
     check_module_entries_callable()

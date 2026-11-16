@@ -9,6 +9,14 @@ from core import editor_exec
 from core.editor_exec import MOCK_ACTORS
 
 _ERROR_C = re.compile(r"error C\d+")
+# 链接错误也是编译失败的一种，且**逐条带符号名**：LNK2019/LNK2001 给出「哪个符号没定义」，
+# LNK1120 只是那句「N 个无法解析的外部命令」的汇总。只收 fatal error 时，修复循环拿到的
+# 永远只有 LNK1120 这一条无信息量的汇总，模型只能盲改（20261104-171622 的 W4 连撞 3 次）。
+_ERROR_LNK = re.compile(r"error LNK\d+")
+# UHT 的报错形状是 `文件.h(59): Error: ...`，既没有 error C，也没有 fatal error。
+# 不收它就只剩 UBT 那句 `Unhandled 1 aggregate exceptions`：重复声明、命名冲突这类
+# 真错因全部丢失，修复循环只能盲改（20261104-193804 的 W1 连撞两次）。
+_UHT_ERROR = re.compile(r"\.(?:h|cpp|hpp|cs)\(\d+\)\s*:\s*error:", re.I)
 _FATAL = re.compile(r"fatal error", re.I)
 _FILE_LINE = re.compile(r"((?:[A-Za-z]:\\)?[^\s()]+\.(?:h|cpp|hpp|cs))\((\d+)")
 
@@ -357,7 +365,8 @@ def cpp_build_argv() -> list[str]:
 def _parse_cpp_errors(log: str) -> list[dict]:
     found = []
     for line in log.splitlines():
-        if not (_ERROR_C.search(line) or _FATAL.search(line)):
+        if not (_ERROR_C.search(line) or _ERROR_LNK.search(line)
+                or _UHT_ERROR.search(line) or _FATAL.search(line)):
             continue
         file_name = ""
         line_no = 0
@@ -390,9 +399,37 @@ def cpp_build_verdict(outcome: dict) -> dict:
     return _result(False, "cpp_build", errors[0]["message"], errors)
 
 
-def _cpp_build() -> dict:
+def _with_source_contract(verdict: dict, spec: dict | None) -> dict:
+    """把源码契约并进编译判词。kind 仍是 cpp_build——harness.EVIDENCE_KINDS 只认那五个，
+    新开一种 kind 会让条款绑不上（契约红、窗口全绿，等于换一种假绿）。
+
+    为什么编译过了还要看源码：20261105-155615 那句「实现 T 键射击圆柱体火箭筒、三发弹药」
+    被拆成五扇 HUD 链，玩法一行没写，编译 exit 0 照样报「全部窗口完成」。编译只证明
+    能编，不证明用户点名的玩法存在。
+    """
+    name = str((spec or {}).get("contract") or "").strip()
+    if not name:
+        return verdict
+    from core.source_contract import check
+
+    contract = check(name)
+    if contract.get("ok"):
+        if verdict.get("ok"):
+            merged = dict(verdict)
+            merged["summary"] = f"{verdict.get('summary') or 'exit 0'}；{contract.get('summary')}"
+            merged["source_contract"] = name
+            return merged
+        return verdict
+    errors = list(verdict.get("errors") or []) + list(contract.get("errors") or [])
+    summary = str(contract.get("summary") or "源码契约未成立")
+    if verdict.get("ok"):
+        summary = f"编译过了，但{summary}"
+    return _result(False, "cpp_build", summary, errors)
+
+
+def _cpp_build(spec: dict | None = None) -> dict:
     if UE_EXEC_MODE == "mock":
-        return _result(True, "cpp_build", "mock")
+        return _with_source_contract(_result(True, "cpp_build", "mock"), spec)
     # 全局编译锁：UBT 并行必崩（20261028-171355：两扇 solve 并行编译 → exit 6
     # Unhandled aggregate exceptions）。同一时刻只许一个编译进程，等锁有上限。
     with _build_lock():
@@ -414,7 +451,7 @@ def _cpp_build() -> dict:
             return verdict
         verdict = cpp_build_verdict(outcome)
         _record_build(verdict)
-        return verdict
+        return _with_source_contract(verdict, spec)
 
 
 @contextlib.contextmanager
@@ -740,7 +777,7 @@ def judge(spec: dict, task: dict | None = None) -> dict:
     if kind == "blueprint_compile":
         return _blueprint_compile(spec, task)
     if kind == "cpp_build":
-        return _cpp_build()
+        return _cpp_build(spec)
     if kind == "automation":
         return _automation(spec, task)
     return _result(False, kind or "unknown", "未知裁判", [{"file": "", "line": 0, "message": f"unknown kind {kind}"}])

@@ -28,7 +28,7 @@ from agent.plan_windows import find_cycle, mark_dangling, plan_windows
 from agent.sequence import RUNS_DIR
 from config import (
     PROJECT_ROOT, UE_PROJECT_DIR, UE_SOURCE_ROOT, default_pie, default_save, project_module,
-    task_flag, task_policy,
+    run_policy, task_flag, task_policy,
 )
 from agent.snapshot import (
     restore_source as _restore_source,
@@ -260,6 +260,7 @@ class _RunState:
     def __init__(self, run_id: str, query: str, source: str, windows: list[dict],
                  *, review: dict | None = None, brief: dict | None = None, scopes=None) -> None:
         self.run_id = run_id
+        os.environ["UE_RAG_RUN_ID"] = str(run_id)
         self.path = runs_json_path(run_id)
         self.data = {
             "run_id": run_id, "query": query, "source": source,
@@ -302,6 +303,7 @@ class _RunState:
         r 也填不活，重拆那句话才会走新路由。"""
         state = cls.__new__(cls)
         state.run_id = str(data.get("run_id") or datetime.now().strftime("%Y%m%d-%H%M%S"))
+        os.environ["UE_RAG_RUN_ID"] = state.run_id
         state.path = runs_json_path(state.run_id)
         fresh = dict(data)
         fresh["status"] = "running"
@@ -581,6 +583,10 @@ def _prepare_task(window: dict, origin: str, artifacts: dict, run_id: str = "") 
         note = ""
     if note:
         task["query"] = note + "\n" + str(task.get("query") or window.get("title") or origin)
+    policy = run_policy("menu", task)
+    task["allow_writes"] = policy["allow_writes"]
+    task["save"] = policy["save"]
+    task["pie"] = policy["pie"]
     return task
 
 
@@ -920,6 +926,8 @@ def _absorb_result(state: _RunState, events: _EventBus, echo, wid: str, summary:
                 owners = target.get("windows")
                 if isinstance(owners, list) and wid not in [str(one) for one in owners]:
                     continue  # 这扇不在条款的证明窗口里，图内说通过也不算
+                if item.get("evidence_sha1"):
+                    target["evidence_sha1"] = item["evidence_sha1"]
                 target["passed"] = True
             criteria = list(by_id.values())
         else:
@@ -1972,6 +1980,15 @@ def execute_windows(query: str, complete=None, echo=print, emit=None, planned=No
     if resume_state is None:
         _emit_action_candidates(events, planned if isinstance(planned, dict) else {}, windows)
     entries = state.entries()
+    # 20261111 P4：真实来源看最终窗口，不看规划层的名字。快路径把一扇暂停窗换成求解扇时
+    # 只改了 planned，这里必须跟着改——否则事件流写「planner」、窗口是 solve，等于来源撒谎
+    # （离线/在线双路径一致性检查读的就是这条 run_start.source）。
+    from agent.plan_windows import source_of_windows
+
+    actual_source = source_of_windows(source, entries)
+    if actual_source != source:
+        source = actual_source
+        state.data["source"] = source
 
     # 环依赖前置诊断：不拖到集成段
     cycle = find_cycle([
@@ -1988,8 +2005,10 @@ def execute_windows(query: str, complete=None, echo=print, emit=None, planned=No
         for entry in entries:
             if entry["id"] in members:
                 events.emit("window_state", window=entry["id"], state="paused")
-        integrated = {"ok": False, "status": "失败", "summary": note + "。环上的窗口暂停，依赖它们的窗口不跑。"}
+        integrated = {"ok": False, "status": "失败", "sentence": "failed",
+                      "summary": note + "。环上的窗口暂停，依赖它们的窗口不跑。"}
         state.data["integration"] = integrated
+        state.data["sentence"] = "failed"
         state.data["status"] = "失败"
         state.save()
         _write(path, query, source, _rows(state), integrated, pie=False)
@@ -2221,6 +2240,14 @@ def execute_windows(query: str, complete=None, echo=print, emit=None, planned=No
         note += "。集成不调用模型。"
     else:
         status, note = "失败", "有窗口没完成。集成不调用模型。"
+    from agent.manual_attest import apply_manual_attest
+    from config import DATA_DIR
+
+    # 人签只翻 manual。无文件就保持 false，模型文本到不了这里。
+    state.data["criteria"] = apply_manual_attest(
+        list(state.data.get("criteria") or []),
+        DATA_DIR / "attestations",
+    )
     try:
         from agent.harness import contract_status, scope_marks
 
@@ -2408,6 +2435,28 @@ def execute_windows(query: str, complete=None, echo=print, emit=None, planned=No
     if stale_hint:
         extra.append("- " + stale_hint)
         state.data["index_hint"] = stale_hint
+    from agent.harness import sentence_outcome
+
+    sentence = sentence_outcome(entries, state.data.get("criteria") or [])
+    state.data["sentence"] = sentence
+    integrated["sentence"] = sentence
+    if sentence == "failed" and status == "成功":
+        status = "失败"
+        ok = False
+        rows = [item for item in (state.data.get("criteria") or []) if isinstance(item, dict)]
+        window_failed = any(str(entry.get("state") or "") == "failed" for entry in entries)
+        clauses_passed = bool(rows) and all(item.get("passed") is True for item in rows)
+        if window_failed and clauses_passed:
+            note = "有窗口失败，条款却全过。不记成功。"
+        else:
+            note = "条款没有被判词证明"
+        integrated.update(ok=False, status=status, summary=note)
+    elif sentence == "partial" and status == "成功":
+        status = "部分完成"
+        ok = False
+        note = "有未签的人工条款。不记成功。"
+        integrated.update(ok=False, status=status, summary=note)
+    extra.append(f"- 整句：{sentence}")
     entered_pie = any((entry.get("window") or {}).get("pie") for entry in entries) or "PIE" in query.upper()
     _write(path, query, source, _rows(state), integrated, pie=entered_pie, extra=extra)
     events.emit("integration", ok=ok, status=status, summary=note, scopes=extra or None)
@@ -2475,7 +2524,7 @@ def execute_windows(query: str, complete=None, echo=print, emit=None, planned=No
         stop = run_stop(reasons, ok)
     except Exception:
         stop = "ok" if ok else "judge_failed"
-    events.emit("run_end", status=status, ok=ok, stop_reason=stop)
+    events.emit("run_end", status=status, ok=ok, stop_reason=stop, sentence=state.data.get("sentence"))
     if ok:
         # U6：每次成功 run 收尾做一次零模型蒸馏计数（dry_run 只统计、不落盘、不调教师），
         # distill_candidate 事件让统计页看得到候选池在随真实 run 增长。失败不追尾。
@@ -2501,6 +2550,11 @@ def execute_windows(query: str, complete=None, echo=print, emit=None, planned=No
     echo(f"\n集成：{note}")
     if interrupted:
         return 130, path
+    from agent.harness import sentence_exit
+
+    sentence = str(state.data.get("sentence") or "")
+    if sentence in ("partial", "failed"):
+        return sentence_exit(sentence), path
     return (0 if ok else 1), path
 
 
@@ -2572,6 +2626,7 @@ def _parse_args(argv=None):
     parser.add_argument("--plain", action="store_true", help="纯文本模式，不开面板")
     parser.add_argument("--board", action="store_true", help="终端面板（默认）")
     parser.add_argument("--resume", default="", help="续接的 run id，或 latest")
+    parser.add_argument("--force", action="store_true", help="有活心跳时仍启动，并写下 forced_by")
     return parser.parse_args(argv)
 
 
@@ -2682,6 +2737,13 @@ def _resume_command(query: str) -> str | None:
 
 def _do_resume(data: dict, board, echo, emit) -> None:
     print(f"续接 {data.get('run_id')}：{data.get('query')}")
+    if str(data.get("status") or "") == "orphaned":
+        from agent.prop_snapshot import resume_orphaned
+
+        outcome = resume_orphaned(str(data.get("run_id") or ""))
+        if not outcome.get("ok"):
+            echo("快照恢复失败，已写 manual_intervention，停止续接。")
+            return
     if board is not None:
         board.reset(str(data.get("query") or ""))
         board.start()
@@ -2830,8 +2892,20 @@ def _needs_brief(planned: dict, query: str) -> bool:
         windows = (planned or {}).get("windows") or []
         # 只有每扇都真实可跑才跳过；有暂停/不可实现的扇仍走人审门。
         if windows and all(w.get("realizable") and not w.get("waiting_external") for w in windows):
-            print("确定性拆句（" + source + "）：窗口是固定因果链，跳过任务书人审门。", flush=True)
-            return False
+            # 门只认整句（20261111）：返回的窗口盖不住整句时不许标确定性来源跳过人审。
+            from agent.plan_windows import _clauses_accounted
+
+            if _clauses_accounted(query, windows):
+                print("确定性拆句（" + source + "）：窗口是固定因果链且盖住整句，跳过任务书人审门。", flush=True)
+                return False
+    if source == "solver-fallback":
+        # 人审留一次（20261111 P2）：预演方案里有写 C++ 或改关卡才出任务书，
+        # 任务书引用这份方案；纯只读方案直接跑求解扇，预演不成也不挡路。
+        preview = _solver_plan_preview(query)
+        if preview and preview.get("writes"):
+            planned["solver_plan_preview"] = preview
+            return True
+        return False
     from agent.brief import needs_brief
 
     return needs_brief(query, (planned or {}).get("windows") or [], (planned or {}).get("intent_full"))
@@ -2859,6 +2933,12 @@ def _run_query(query: str, board, echo, emit) -> tuple[int, Path | None]:
                 board.set_phase("正在写任务书")
                 board.set_review("审阅 1：任务书生成中")
             print("这句话像大任务：先出任务书，人审通过后才执行。", flush=True)
+
+            # 求解兜底（20261111 P2）：任务书引用预演方案——人审看的是这份方案，
+            # 不再要求生成器「只能用动作表重写一遍」（生成器那边按候选窗口引用它）。
+            preview = planned.get("solver_plan_preview") if isinstance(planned, dict) else None
+            if isinstance(preview, dict) and windows and isinstance(windows[0], dict):
+                windows[0]["solver_plan"] = str(preview.get("text") or "")[:800]
 
             def _show(text) -> None:
                 if board is not None and board.running():
@@ -2985,6 +3065,71 @@ def _fast_path_solve_windows(query: str) -> list[dict]:
         return []
 
 
+# 只读原语名前缀：求解方案里以这些开头的工具步不算「写 C++ 或改关卡」。
+_READONLY_TOOL_PREFIXES = ("get", "list", "find", "query", "read", "describe", "check", "search")
+
+
+def _solver_steps_write(steps: list) -> bool:
+    """方案里有没有写 C++（apply_spec / patch）或改关卡 / 编辑器状态的步骤。只读原语不算。"""
+    for step in steps or []:
+        if not isinstance(step, dict):
+            continue
+        if "apply_spec" in step or "patch" in step:
+            return True
+        name = str(step.get("action") or step.get("tool") or "").rsplit(".", 1)[-1].strip().lower()
+        if name and not name.startswith(_READONLY_TOOL_PREFIXES):
+            return True
+    return False
+
+
+def _solver_plan_text(steps: list, automation: str) -> str:
+    """方案的一句话清单：贴进任务书候选窗口，人审看得到要求解扇做什么。"""
+    lines: list[str] = []
+    for step in (steps or [])[:8]:
+        if not isinstance(step, dict):
+            continue
+        if isinstance(step.get("apply_spec"), dict):
+            files = (step["apply_spec"] or {}).get("files") or []
+            names = "、".join(str((f or {}).get("path") or "") for f in files[:4] if isinstance(f, dict))
+            lines.append(f"- 写源码（apply_spec）：{names or '见方案'}")
+        elif isinstance(step.get("patch"), dict):
+            lines.append(f"- 改源码（patch）：{str((step['patch'] or {}).get('path') or '')}")
+        elif str(step.get("tool") or "").strip():
+            lines.append(f"- 原语 {str(step['tool']).strip()}")
+    if str(automation or "").strip():
+        lines.append(f"- 收口 Automation：{str(automation).strip()}")
+    return "\n".join(lines)
+
+
+def _solver_plan_preview(query: str) -> dict:
+    """只读预演求解方案（人审门用，20261111 P2）：盘点名 + 源码定位 + 一次方案生成。
+    不执行、不编译；预算独立一份，不烧求解扇执行额度。预演不成返回 {}，不挡路——
+    求解扇执行时按自己的闸门诚实失败（read_only_plan / write_skipped 照旧）。"""
+    try:
+        from agent import solver
+
+        text = str(query or "")
+        budget = solver.Budget()
+        inv = solver.inventory(text, budget)
+        if inv.get("error") and not inv.get("namespaces"):
+            return {}
+        inv["code_hits"] = solver.locate_code(text)
+        paradigm = solver.retrieve_paradigm(text, None)
+        from core.llm_call import complete as live_complete
+
+        steps, automation, error = solver.plan_steps(text, inv, paradigm, live_complete, budget)
+        if error or not steps:
+            return {}
+        return {
+            "steps": steps,
+            "automation": automation,
+            "writes": _solver_steps_write(steps),
+            "text": _solver_plan_text(steps, automation),
+        }
+    except Exception:
+        return {}
+
+
 def _record_declined_gaps(query: str, md, brief: dict, scopes, gaps: list[dict], emit) -> None:
     """缺口被拒绝执行时的落盘：事件 + 一行给人看的话。不伪造 status=成功，也不留空。
 
@@ -3019,12 +3164,15 @@ def _record_declined_gaps(query: str, md, brief: dict, scopes, gaps: list[dict],
 
 def main(argv=None) -> None:
     sys.stdout.reconfigure(encoding="utf-8")
-    from agent.run_guard import attach_claimed_stdin, sweep_orphan_runs
+    from agent.run_guard import admit_live_runs, attach_claimed_stdin, sweep_orphan_runs
 
+    args = _parse_args(argv)
+    code = admit_live_runs(force=args.force)
+    if code:
+        raise SystemExit(code)
     if attach_claimed_stdin() == "busy":
         print("输入已被另一个进程占用")
         raise SystemExit(1)
-    args = _parse_args(argv)
     print("多窗口。规划者只在快路径拆不开时开口。每扇单独跑，最后集成。")
     print("记录在 data/runs（含 .cli.jsonl 子窗口日志），事件在 data/events。"
           "保存关卡与 PIE 跟随 UE_DEFAULT_SAVE / UE_DEFAULT_PIE（现缺省开）。")

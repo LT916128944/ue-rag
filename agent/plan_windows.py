@@ -725,6 +725,13 @@ def resolve_slots(action: str, slots: dict, text: str = "") -> dict:
         found = _widget_slot_fields(slots)
         if found.get("asset_name") or found.get("ref_path"):
             return found
+        # 槽位空，但句子可能点名了 /Game/UI/WBP_x：点名的优先级必须高于代码默认名，
+        # 否则默认名会和句子里的名字同时进执行层，被判「蓝图路径不是唯一的一条」。
+        named = _widget_named_in_text(text)
+        if named:
+            found.update({"ok": True})
+            found.update(named)
+            return found
         # 句子里没点名任何 WBP_：不许把窗口留在「没有唯一的蓝图路径」上判死。
         # 给一个代码决定的确定名字（/Game/UI/WBP_HUD 或 WBP_UI），执行层照它建/改。
         asset = default_widget_name(text)
@@ -739,7 +746,17 @@ def resolve_slots(action: str, slots: dict, text: str = "") -> dict:
         return found
 
     if action == "edit_cpp":
-        found = resolve_name(str(slots.get("class") or ""))
+        token = str(slots.get("class") or "").strip()
+        # 裸类名（FpsPawn）必须是 C++ 类，不是 Actor：`resolve_name` 只在带 A/U/F 前缀时
+        # 才走 `_resolve_cpp`，于是「改 FpsPawn」掉进 Actor 解析，以「没有唯一的 Actor」暂停
+        # （20261104-165707 的 W4）。先按类解析，解析不出才回退老的别名链。
+        found = (
+            _resolve_cpp(token)
+            if token and not token.startswith(("/Game/", "BP_", "WBP_"))
+            else {}
+        )
+        if not (isinstance(found, dict) and found.get("ok")):
+            found = resolve_name(token)
         if not found.get("ok"):
             return found
         if found.get("kind") != "class":
@@ -797,6 +814,48 @@ def _widget_parent(raw: str) -> str:
 
 _DEFAULT_HUD_NAME = "WBP_HUD"
 _FPS_HUD_TOKENS = ("血条", "子弹", "弹药", "手雷", "载具", "FPS", "射击", "准星")
+_WBP_NAME_RE = re.compile(r"(?<![A-Za-z0-9_])(WBP_[A-Za-z0-9_]+)(?![A-Za-z0-9_])")
+_GAME_PATH_RE = re.compile(r"/Game(?:/[A-Za-z0-9_]+)+")
+
+
+def _widget_named_in_text(text: str) -> dict:
+    """句子点名的控件蓝图：唯一一个 WBP_ 名，或 /Game 下以 WBP_ 结尾的唯一路径。
+
+    为什么要排在 `default_widget_name` 之前：默认名只看「句子像不像 FPS 表现」，
+    句子里明明写了 /Game/UI/WBP_FpsHUD、却没有一个 FPS 词（弹药/子弹/血条）时，
+    默认名会落到 WBP_HUD；执行层随后同时看见 WBP_HUD 与 WBP_FpsHUD 两个名字，
+    直接判「蓝图路径不是唯一的一条」（20261104-194258 的 W3）。点名的优先级必须更高，
+    多个名字或名与路径对不上时返回空，交回原来的默认名，不猜。
+    """
+    blob = str(text or "")
+    names = list(dict.fromkeys(_WBP_NAME_RE.findall(blob)))
+    paths = []
+    for path in dict.fromkeys(_GAME_PATH_RE.findall(blob)):
+        clean = path.split(".", 1)[0]
+        if clean.rsplit("/", 1)[-1].startswith("WBP_"):
+            paths.append(clean)
+    if len(names) > 1 or len(paths) > 1:
+        return {}
+    if names and paths and paths[0].rsplit("/", 1)[-1] != names[0]:
+        return {}
+    if paths:
+        path = paths[0]
+        leaf = path.rsplit("/", 1)[-1]
+        return {
+            "folder_path": path.rsplit("/", 1)[0],
+            "asset_name": leaf,
+            "ref_path": f"{path}.{leaf}",
+            "name_source": "sentence",
+        }
+    if names:
+        folder = "/Game/UI"
+        return {
+            "folder_path": folder,
+            "asset_name": names[0],
+            "ref_path": f"{folder}/{names[0]}.{names[0]}",
+            "name_source": "sentence",
+        }
+    return {}
 
 
 def is_hud_sentence(text: str) -> bool:
@@ -1536,6 +1595,9 @@ def windows_from_rules(steps: list[dict]) -> list[dict]:
         if action == "launch_editor":
             # 只启动编辑器：不保存、不进 PIE，别让 run 记录写成「PIE=进入」
             window.update(save=False, pie=False)
+        if action == "open_level":
+            window["slots"] = dict(step.get("slots") or {})
+            window.update(save=False, pie=False)
         if action == "compile_project":
             # 编译本身不进 PIE。窗口 pie 为真会让记录写成「PIE=进入」，哪怕测试被跳过。
             window["pie"] = False
@@ -1566,7 +1628,8 @@ def _residue_blank(text: str) -> bool:
 def _strip_owned_spans(clause: str, steps: list[dict]) -> str:
     """抹掉这条半句里、已经被拆出的基础动作接住的那一段。剩下的字另算。"""
     from agent.supervise import (
-        _LAUNCH_EDITOR_RE, _LEVEL_CREATE_RE, _PROJECT_COMPILE_RE, _wants_create_level,
+        _LAUNCH_EDITOR_RE, _LEVEL_CREATE_RE, _OPEN_LEVEL_RE, _PROJECT_COMPILE_RE,
+        _wants_create_level, _wants_open_level,
     )
 
     text = clause or ""
@@ -1578,7 +1641,10 @@ def _strip_owned_spans(clause: str, steps: list[dict]) -> str:
         text = re.sub(r"编译(?:一下)?(?:工程|项目|代码)?|error\s*C\d*|构建", " ", text, flags=re.I)
     if "compile_blueprint" in actions:
         text = re.sub(r"编译|蓝图|BP_[A-Za-z0-9_]+", " ", text)
-    if launches and not re.search(r"关卡|地图", clause or ""):
+    if "open_level" in actions and _wants_open_level(clause):
+        text = _OPEN_LEVEL_RE.sub(" ", text)
+        text = re.sub(r"已有|现有|名字为|名为|叫做|叫|L_[A-Za-z0-9_]+|/Game(?:/[A-Za-z0-9_]+)+", " ", text)
+    if launches and not re.search(r"关卡|地图", text):
         text = _LAUNCH_EDITOR_RE.sub(" ", text)
     if "create_level" in actions and _wants_create_level(clause):
         text = _LEVEL_CREATE_RE.sub(" ", text)
@@ -1586,14 +1652,50 @@ def _strip_owned_spans(clause: str, steps: list[dict]) -> str:
     return text
 
 
+def _clause_rows(query: str, steps: list[dict]) -> list[dict]:
+    """半句账本。constraint 是限制，covered 是规则已经认领，uncovered 交给模型。"""
+    clauses = [part.strip() for part in re.split(r"[，,；;。]", query or "") if part.strip()]
+    if not clauses and str(query or "").strip():
+        clauses = [str(query).strip()]
+    rows = []
+    for clause in clauses:
+        if re.search(r"别|不要|无需|不用", clause) and not re.search(r"关卡|地图|蓝图|编译|测试", clause):
+            rows.append({"clause": clause, "status": "constraint"})
+            continue
+        if not steps or not _clause_accounted(clause, steps):
+            rows.append({"clause": clause, "status": "uncovered"})
+            continue
+        from agent.supervise import _level_token, _wants_create_level, _wants_open_level
+
+        # 只看「打开/新建」那一种写法。建关卡的那一半句（「新建一个关卡」）本身没有 L_ 名，
+        # 名字在下一半句里；按它拦住会把整句判成没盖住（20261111 回归：create-level 掉进规划者、
+        # 规则物化与代码补窗各补一扇 create_level）。所以这一条只管「打开关卡」那种句子。
+        if _wants_open_level(clause) and not _wants_create_level(clause) and not _level_token(clause):
+            rows.append({"clause": clause, "status": "uncovered"})
+            continue
+        rows.append({"clause": clause, "status": "covered"})
+    return rows
+
+
 def _clauses_accounted(query: str, steps: list[dict]) -> bool:
     """每一半句都要被已经拆出的规则动作接住。没逗号的单句也看剩下的字。
 
     判别盖不住的剩余文字交给理解器，不在这里按玩法词补动作。"""
-    clauses = [part.strip() for part in re.split(r"[，,；;。]", query or "") if part.strip()]
-    if not clauses:
+    rows = _clause_rows(query, steps)
+    if not rows:
         return True
-    return all(_clause_accounted(clause, steps) for clause in clauses)
+    return all(row["status"] in ("covered", "constraint") for row in rows)
+
+
+# HUD 窗口链自己接得住的半句用词（血条/子弹/手雷/载具/控件这条链的话）。
+# 只用于「这条路径声明了 HUD 动作时，对应半句算不算被接住」；不是玩法词典，
+# 玩法半句（滑铲/冲刺/改速度）这里一个词都不收，盖不住就交回模型。
+_HUD_WINDOW_ACTIONS = frozenset({
+    "create_widget_blueprint", "edit_widget_blueprint", "check_fps_hud", "check_platform_hud",
+})
+_HUD_CLAUSE_RE = re.compile(
+    r"血条|血量|子弹|弹药|手雷|载具|时速|上下车|上车|下车|HUD|UMG|视口|控件|满血|扣血|占位|准星"
+)
 
 
 def _clause_accounted(clause: str, steps: list[dict]) -> bool:
@@ -1603,6 +1705,8 @@ def _clause_accounted(clause: str, steps: list[dict]) -> bool:
         return True
     actions = {_action_of(step) for step in steps}
     if "edit_cpp" in actions and (_is_cpp_edit(clause) or _is_source_fix(clause)):
+        return True
+    if _HUD_WINDOW_ACTIONS & actions and _HUD_CLAUSE_RE.search(clause):
         return True
     if "move_actor" in actions and _wants_scene_move(clause):
         return True
@@ -1727,16 +1831,64 @@ def _fresh_window_id(windows: list) -> str:
     return f"W{highest + 1}"
 
 
+def _has_window_action(windows: list, action: str, depth: int = 1) -> bool:
+    """清单里（含 `depends_on` 一层）有没有这个动作的窗口。
+
+    只看顶层会不会漏：理解器给出的建关卡可能挂成「W1 goal → W2 依赖 W1」的链，
+    顶层那扇是壳、真正要跑的是它挂着的 goal。多探一层就够，不为这个改窗口结构。
+    """
+    frontier = [window for window in (windows or []) if isinstance(window, dict)]
+    for level in range(depth + 1):
+        if not frontier:
+            return False
+        for window in frontier:
+            if str(window.get("action") or "") == action:
+                return True
+        if level == depth:
+            break
+        nested: list = []
+        for window in frontier:
+            for dep in window.get("depends_on") or []:
+                nested.extend(item for item in (window.get("windows") or []) if isinstance(item, dict))
+            if isinstance(window.get("task"), dict) and str(window["task"].get("action") or "") == action:
+                return True
+        frontier = nested
+    return False
+
+
 def _ensure_requested_create_level(query: str, windows: list[dict]) -> list[dict]:
     """句子里要求新建关卡、但清单里没有 create_level 扇时，由代码按同一 materialize 路径补一扇。
     补在各路径的 _ensure_requested_launch 之后：launch_editor 先起来，建关卡才有地方落。
     （20261024-192858：整句只拆出 launch_editor，「新建关卡 L_NewTest2」那半句静默蒸发。）"""
     from agent.supervise import _level_token, _wants_create_level
 
+    def _says_create(window: dict) -> bool:
+        """这扇算不算「已经要建关卡」：动作是 create_level，或标题里就写着新建关卡
+        （`materialize_goal` 的壳扇标题是「新建关卡并切过去」，动作却是空串）。"""
+        if str(window.get("action") or "") == "create_level":
+            return True
+        return "新建关卡" in str(window.get("title") or "") or "创建关卡" in str(window.get("title") or "")
+
+    def _as_goal(window: dict) -> dict:
+        """补窗和规则拆出来的扇必须是同一种东西（动作接口真可跑、`goal=True`）。
+
+        两处差距：`materialize_goal` 交回来的那张小表没带 `slots`（`{"level": …}` 只在
+        `task.slots` 里），`goal` 也没标。调用方按 `goal is True` 认它、执行层按 `slots`
+        说它要建哪个关卡，所以这里补齐这两个字段——只补字段，不改物化口径。"""
+        if not isinstance(window.get("slots"), dict) or not window.get("slots"):
+            if isinstance(window.get("task"), dict) and window["task"].get("slots"):
+                window["slots"] = dict(window["task"]["slots"])
+        if window.get("goal") is None:
+            window["goal"] = True
+        return window
+
     if not _wants_create_level(query):
         return windows
     current = [window for window in (windows or []) if isinstance(window, dict)]
-    if any(str(window.get("action") or "") == "create_level" for window in current):
+    # 去重口径（20261111）：判断「已经有一扇」要连 `depends_on` 那一层挂着的 goal 一起看，
+    # 也要认标题写着新建关卡的壳扇。只看顶层动作会再补一扇，执行时同一句建两次关卡
+    # （check_create_level 的 `len(created)==1` 就是这条）。
+    if any(_says_create(window) for window in current) or _has_window_action(current, "create_level"):
         return windows
     # 「一个动作都没拆出来」的占位窗（blocked、action 为空）不挡住补窗
     current = [window for window in current if str(window.get("action") or "").strip()]
@@ -1750,14 +1902,45 @@ def _ensure_requested_create_level(query: str, windows: list[dict]) -> list[dict
         depends=[dep] if dep else [],
         retries=1,
     )
+    if not any(_says_create(window) for window in made):
+        # 补不出真会建关卡的那一扇（比如原句里没有关卡名）：不往执行队列里塞空壳。
+        return current
+    return current + [_as_goal(window) for window in made]
+
+
+def _ensure_requested_open_level(query: str, windows: list[dict]) -> list[dict]:
+    """句子要求打开已有关卡、清单里却没有 open_level 时补一扇。不新建。"""
+    from agent.supervise import _level_token, _wants_create_level, _wants_open_level
+
+    if _wants_create_level(query) or not _wants_open_level(query):
+        return windows
+    current = [window for window in (windows or []) if isinstance(window, dict)]
+    if any(str(window.get("action") or "") == "open_level" for window in current):
+        return windows
+    current = [window for window in current if str(window.get("action") or "").strip()]
+    token = _level_token(query)
+    if not token:
+        return windows
+    dep = str(current[-1]["id"]) if current else ""
+    made = materialize_goal(
+        "open_level",
+        {"level": token},
+        title="",
+        wid=_fresh_window_id(current),
+        depends=[dep] if dep else [],
+        retries=0,
+    )
+    for window in made:
+        window.update(save=False, pie=False)
     return current + made
 
 
 def _ensure_requested(query: str, windows: list[dict]) -> list[dict]:
-    """句子里点名的启动、建关卡，在规划之后由代码补上。
+    """句子里点名的启动、建关卡、打开已有关卡，在规划之后由代码补上。
     测试和其余半句不在这里按词补动作，交给理解器分配。"""
     windows = _ensure_requested_launch(query, windows)
-    return _ensure_requested_create_level(query, windows)
+    windows = _ensure_requested_create_level(query, windows)
+    return _ensure_requested_open_level(query, windows)
 
 
 def _scope_text(scope: dict) -> str:
@@ -1919,6 +2102,88 @@ def _gate_scene(query: str, windows: list[dict], criteria: list | None,
         return empty
 
 
+def _covers_after_gate(query: str, intent: dict, windows: list[dict]) -> bool:
+    """闸门对账之后，整句还有没有人接：unresolved 为空，且每半句都能被最终窗口的动作接住。
+
+    代码补上的扇（建关卡 / 启动编辑器 / 场景放置）算覆盖，不算残缺；盖不住时不许用
+    残缺 goals 直接执行（20261111 P2）：求解开着进求解兜底，关着停在缺口
+    （unresolved 进任务书，不静默丢半句）。"""
+    if not isinstance(intent, dict):
+        return False
+    if [item for item in (intent.get("unresolved") or []) if str(item).strip()]:
+        return False
+    return _clauses_accounted(query, windows)
+
+
+def _solve_fallback_windows(query: str) -> list[dict]:
+    """求解兜底扇（20261111 P4）：规则已经能盖住整句时不许补。
+
+    先看手写规则：`_plan_rules(query)` 过了 `_rules_cover` 就说明这句话的每一半句
+    都有能落地的规则步骤，求解扇只会把 `rules`（launch_editor → open_level）换成
+    一次 `solve`。20261111-180838 / 180925 / 181847 三次 open-level 全败就是这条：
+    离线是 rules 两扇，在线被求解扇顶掉。规则盖住整句时返回 []，调用方原样走 rules
+    （`_plan_windows_body` 的 L0 快路径本来就已经返回过了，这里是再兜一次，免得别的
+    caller 从兜底口重新拿回求解扇）。
+
+    规则盖不住时维持 P2 的行为：理解器接不住整句不再叫规划者重点一遍动作表，
+    直接给一扇受控求解（盘点 → 源码定位 → 步骤规格 → 编译回灌 → Automation，预算照旧）。
+    求解开关关着返回 []，调用方走原路径（停在缺口 / 回规划者）。"""
+
+    try:
+        from agent.supervise import _plan_rules
+
+        ruled = _plan_rules(query)
+        if ruled and _rules_cover(query, ruled):
+            return []
+    except Exception:
+        pass
+    try:
+        from agent.solver import solve_window, solver_enabled
+    except Exception:
+        return []
+    if not solver_enabled():
+        return []
+    scope = {
+        "id": "A",
+        "title": str(query or "").strip()[:80],
+        "deliverables": [],
+        "pending_note": "",
+        "depends_on": [],
+        "external_dep": "",
+        "windows": [],
+    }
+    try:
+        return [item for item in (solve_window(scope, query) or []) if isinstance(item, dict)]
+    except Exception:
+        return []
+
+
+def _solver_fallback_plan(query: str, intent: dict | None, *, understood: bool,
+                          fan: list[dict]) -> dict:
+    """求解兜底这份 planned（20261111 P2）：source=solver-fallback，规划者一次没叫。
+    理解器产出过意图时把 unresolved 一并带上，人审与事件流看得见缺口在哪。"""
+    result = {
+        "source": "solver-fallback",
+        "planner_called": False,
+        "understand_called": understood,
+        "route_hit": False,
+        "messages": None,
+        "windows": fan,
+        "wrote_route": False,
+    }
+    if intent is not None:
+        from agent.intent import intent_decision
+
+        decision = intent_decision(intent)
+        decision.update({"understand_called": True, "route_hit": False, "wrote_route": None})
+        if intent.get("tokens"):
+            decision.update(intent["tokens"])
+        result["intent"] = decision
+        result["intent_full"] = intent
+        result["action_candidates"] = list(intent.get("candidates") or [])
+    return result
+
+
 def _try_understand(query: str, complete) -> dict | None:
     """L1 理解器，含一次重试上限。说不出合法意图（表外动作、解析失败、没 key）返回 None。
     失败原因要可见：静默回退规划者会让人查不到为什么（20261027-191303 三连败的教训）。"""
@@ -2025,6 +2290,112 @@ def widget_edit_task(query: str, wid: str = "W2") -> dict:
     return task
 
 
+def _rule_window_key(window: dict) -> tuple[str, str]:
+    """同一件事的签名：动作 + 真正定死的槽位，不比标题。
+
+    槽位从两处取：窗口自己的 `slots`，以及 `task.slots`（规则物化出来的建关卡扇
+    外壳 `slots` 是空字典，关卡名在 `task.slots` 里）。先 `slots` 后 `task` 补缺，
+    两边任一处写了就算定死。不这么比，同一句「新建关卡 L_X」会一边是 `{}`、
+    一边是 `{"level": "L_X"}`，签名对不上，合并时两扇都留下、执行时建两次关卡。
+    """
+    action = str(window.get("action") or "")
+    slots = dict(window.get("slots") or {})
+    if isinstance(window.get("task"), dict):
+        for key, value in (window["task"].get("slots") or {}).items():
+            slots.setdefault(str(key), value)
+    raw = json.dumps(slots, ensure_ascii=False, sort_keys=True)
+    return action, raw
+
+
+def _merge_rule_windows(kept: list[dict], extra: list[dict]) -> list[dict]:
+    """规则已经认领的窗口留在前面。模型给的同动作不重复（同一件事只排一次）。
+    缺口的第一扇接在规则最后一扇后面。"""
+    seen = {_rule_window_key(window) for window in kept
+            if isinstance(window, dict) and window.get("action")}
+    fresh = []
+    for window in extra or []:
+        if not isinstance(window, dict):
+            continue
+        signature = _rule_window_key(window)
+        if window.get("action") and signature in seen:
+            # 同一件事已经在规则那边了：只吸收规则扇缺的槽位字段（关卡名、路径那些
+            # 规则扇只放在 `task` 里），不要再排一扇。
+            for ruled in kept:
+                if _rule_window_key(ruled) != signature:
+                    continue
+                for key, value in window.items():
+                    ruled.setdefault(key, value)
+                break
+            continue
+        if window.get("action"):
+            seen.add(signature)
+        fresh.append(dict(window))
+    merged = [dict(window) for window in kept] + fresh
+    old_ids = [str(window.get("id") or "") for window in merged]
+    for index, window in enumerate(merged, 1):
+        window["id"] = f"W{index}"
+    # 旧 id → 新 id。规则与模型都从 W1 数起会重名，所以同一 id 只认第一次出现
+    # （规则那一段排在前面）；原链里指向后出现的那一扇的依赖会落到规则扇上，
+    # 那是它们本来就在前面执行的那一扇，不断链。
+    id_map: dict[str, str] = {}
+    for old, window in zip(old_ids, merged):
+        if old and old not in id_map:
+            id_map[old] = str(window["id"])
+    for window in merged:
+        deps = []
+        for dep in window.get("depends_on") or []:
+            key = id_map.get(str(dep))
+            if key and key not in deps:
+                deps.append(key)
+        window["depends_on"] = deps
+    for index in range(1, len(merged)):
+        # 合并后按执行顺序重接：不依赖别人的那一扇接前一扇（`depends_on` 里的旧 id
+        # 在合并后指向别的扇——规则与模型都从 W1 数起）。
+        if not merged[index].get("depends_on"):
+            merged[index]["depends_on"] = [f"W{index}"]
+    for window in merged:
+        # 合并出来的都是「真窗口」：补窗那一扇与规则拆出来的扇一样带 goal，
+        # 执行层与检查都按这个字段认它（不标的话 check_create_level 的
+        # `created[0]["goal"] is True` 直接 KeyError）。
+        window["goal"] = True
+        # 规则扇只把关卡名/路径写进 `task`，窗口级一个字段都没有；调用方与检查按
+        # 窗口级字段读（`level_path`），这里把 `task` 里的同名切片提到窗口上。
+        if isinstance(window.get("task"), dict):
+            for key in ("level_path", "level_name", "asset_name", "ref_path", "package_path"):
+                if window["task"].get(key) and not window.get(key):
+                    window[key] = window["task"][key]
+            if not window.get("slots") and isinstance(window["task"].get("slots"), dict):
+                window["slots"] = dict(window["task"]["slots"])
+    return merged
+
+
+def _reattach_after_rules(kept: list[dict], windows: list[dict]) -> list[dict]:
+    """合并前先把「模型那一路」的依赖接回规则窗口（20261111）。
+
+    规则已经认领了整句的一部分时，模型的窗口要排在规则窗口后面。但模型/补窗那边的
+    `depends_on` 指的是**它自己那条链**的上一扇；那条链上有的扇合并时会被去重掉
+    （规则已经认领了 launch_editor、create_level 之类），留下指向不存在 id 的依赖。
+
+    口径：模型链里被去重掉的扇不参与；接在它后面的那一扇重新接回「规则最后一扇」，
+    再往后按顺序接前一个留下来的扇。模型链里本来就合法的依赖原样保留。
+    """
+    if not kept or not windows:
+        return windows
+    ruled = {_rule_window_key(window) for window in kept}
+    out: list[dict] = []
+    previous = [str(kept[-1].get("id") or "")]
+    for window in windows:
+        window = dict(window)
+        if _rule_window_key(window) in ruled:
+            continue  # 合并时会被去重，别让它当别人的前驱
+        deps = [str(dep) for dep in (window.get("depends_on") or [])]
+        if not deps:
+            window["depends_on"] = list(previous)
+        out.append(window)
+        previous = [str(window.get("id") or "")]
+    return out
+
+
 def _plan_windows_body(query: str, complete=None) -> dict:
     """拆窗口主链（20261015-1705 P1）：
     L0 快路径（离线零成本）：手写规则强命中（每一步都能落地）、learned_routes 已学句式；
@@ -2070,6 +2441,10 @@ def _plan_windows_body(query: str, complete=None) -> dict:
         learned_actions = {str(window.get("action") or "") for window in learned}
         if _unbound_demand(query, learned_actions):
             learned = None
+        elif not _clauses_accounted(query, learned):
+            # 门只认整句（20261111）：模板接不住的半句不能跟着模板一起被领走，
+            # 弱命中交 L1 理解器；理解器也盖不住时按 P2 进求解兜底或停在缺口。
+            learned = None
     if learned is not None:
         windows = _ensure_requested(query, _gate_scene(query, learned, None)["windows"])
         mark_dangling(windows)
@@ -2083,12 +2458,39 @@ def _plan_windows_body(query: str, complete=None) -> dict:
             "wrote_route": False,
             "skill": dict(learned_meta),
         }
-    intent = _try_understand(query, complete)
+    rows = _clause_rows(query, ruled or [])
+    uncovered = [row["clause"] for row in rows if row["status"] == "uncovered"]
+    covered = [row for row in rows if row["status"] == "covered"]
+    kept: list[dict] = []
+    ask = query
+    if ruled and covered and uncovered:
+        kept_steps = [
+            step for step in ruled
+            if step.get("ok") is not False and not step.get("blocked") and _action_of(step)
+            and any(
+                row["status"] == "covered" and _clause_accounted(row["clause"], [step])
+                for row in rows
+            )
+        ]
+        kept = windows_from_rules(kept_steps)
+        ask = query
+    # 规则已认领的窗口在模型跑完后再 `_merge_rule_windows(kept, ...)` 并回来——规则窗口永远排在
+    # 前面，`_ensure_requested` 补出来的「上一扇」也就落在正确的窗口上。
+    # 这里不清空 `kept`：模型跑失败时还要拿它去决定「求解兜底还是回规划者」。
+    intent = _try_understand(ask, complete)
     understood = intent is not None
+    if intent is None and not kept:
+        # P2（20261111）：理解器失败不再叫规划者重点一遍动作表——
+        # 那是「理解器失败 → 规划者再点一遍 → 暂停牌」的死胡同。求解开着直接进
+        # 求解兜底；关着才回老规划者，求解开关维持现状，一个字不改关着时的行为。
+        # 规则已经认领了一部分时不走这里：剩下的半句继续交给规划者，认领过的窗口保留。
+        fan = _solve_fallback_windows(query)
+        if fan:
+            return _solver_fallback_plan(query, None, understood=False, fan=fan)
     if intent is not None:
         from agent.intent import intent_decision
 
-        windows = _materialize_goals(intent, query)
+        windows = _materialize_goals(intent, ask)
         windows = _without_unasked_project_compile(query, windows)
         # 句子里点名要摆进关卡的东西，理解器扔进 unresolved 时由代码补放置扇（不静默丢需求）
         gated = _gate_scene(query, windows, intent.get("criteria"), intent.get("unresolved"))
@@ -2102,7 +2504,18 @@ def _plan_windows_body(query: str, complete=None) -> dict:
         intent["unresolved"] = unresolved[:4]
         # 句尾说了测试、打开关卡或看结果，模型没写进窗口时由代码补上
         windows = _ensure_requested(query, windows)
+        if kept:
+            windows = _reattach_after_rules(kept, windows)
+        windows = _merge_rule_windows(kept, windows)
         mark_dangling(windows)
+        # P2（20261111）：闸门对账后仍有半句没人接（代码补上的建关卡/启动/场景放置扇
+        # 算覆盖）。盖不住时求解开着进求解兜底，不再叫规划者、不拿残缺 goals 直接执行；
+        # 关着停在缺口，unresolved 进任务书等人表态。
+        # 规则已经留下窗口时，缺口交给模型的结果要继续跑，不用求解扇把整句换掉。
+        if not kept and not _covers_after_gate(query, intent, windows):
+            fan = _solve_fallback_windows(query)
+            if fan:
+                return _solver_fallback_plan(query, intent, understood=True, fan=fan)
         decision = intent_decision(intent)
         decision.update({
             "understand_called": True,
@@ -2125,7 +2538,7 @@ def _plan_windows_body(query: str, complete=None) -> dict:
         }
     messages = [
         {"role": "system", "content": system_prompt()},
-        {"role": "user", "content": query},
+        {"role": "user", "content": ask},
     ]
     try:
         from agent.cli_log import status
@@ -2143,7 +2556,7 @@ def _plan_windows_body(query: str, complete=None) -> dict:
             "route_hit": False,
             "messages": messages,
             "planner_text": "",
-            "windows": [_paused(f"规划者没有写出窗口清单：{exc}")],
+            "windows": _merge_rule_windows(kept, [_paused(f"规划者没有写出窗口清单：{exc}")]),
             "wrote_route": False,
         }
     parsed = parse_planner(text)
@@ -2155,7 +2568,7 @@ def _plan_windows_body(query: str, complete=None) -> dict:
             "route_hit": False,
             "messages": messages,
             "planner_text": text or "",
-            "windows": [_paused("规划者没有写出窗口清单。")],
+            "windows": _merge_rule_windows(kept, [_paused("规划者没有写出窗口清单。")]),
             "wrote_route": False,
         }
     windows = []
@@ -2168,10 +2581,13 @@ def _plan_windows_body(query: str, complete=None) -> dict:
             wid=item["id"],
             depends=item["depends_on"],
             retries=item["max_retries"],
-            text=query,
+            text=ask,
         ))
     windows = _gate_scene(query, windows, None)["windows"]
     windows = _ensure_requested(query, _without_unasked_project_compile(query, windows))
+    if kept:
+        windows = _reattach_after_rules(kept, windows)
+    windows = _merge_rule_windows(kept, windows)
     mark_dangling(windows)
     wrote = False
     if windows and all(window.get("realizable") for window in windows):
@@ -2238,9 +2654,121 @@ def _finish_plan(planned: dict) -> dict:
     return planned
 
 
+def _partial_clauses(query: str, actions: set[str]) -> list[str]:
+    """丢掉的窗口对应原句里的半句。对不上时整句留下，不把半句静默丢掉。"""
+    patterns = []
+    if "set_pickable" in actions:
+        patterns.append(re.compile(r"可交互|标签"))
+    if actions & {"judge_pickup", "check_pickup"}:
+        patterns.append(re.compile(r"拾取|交互"))
+    parts = [part.strip() for part in re.split(r"[，,；;。]", query or "") if part.strip()]
+    if not parts and str(query or "").strip():
+        parts = [str(query).strip()]
+    kept = [part for part in parts if any(pattern.search(part) for pattern in patterns)]
+    return kept or parts
+
+
+def _note_instance_prop_gap(clauses: list[str]) -> None:
+    """当次 Plan 写一行：monolith 读不到或写不了已存在实例的属性。"""
+    from datetime import datetime
+
+    from config import UE_PROJECT_DIR
+
+    folder = UE_PROJECT_DIR / "Plan"
+    folder.mkdir(parents=True, exist_ok=True)
+    line = "monolith 读不到或写不了实例属性，人要先清实例再放置，或者改走官方后端。"
+    if clauses:
+        line += "半句：" + "；".join(clauses)
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S%f")
+    (folder / f"{stamp}-实例属性缺口.md").write_text(line + "\n", encoding="utf-8")
+
+
+def _hold_existing_instance_props(query: str, planned: dict) -> dict:
+    """monolith 下，依赖 get_properties / set_properties 的已存在实例窗口不进执行列表。
+
+    place_batch 生成时写 props 的窗口留着。命中的半句进 unresolved，并在 Plan/ 留一行。
+    官方后端原样返回。"""
+    if not isinstance(planned, dict):
+        return planned
+    from config import editor_backend
+    from core.monolith_bridge import EXISTING_INSTANCE_PROP_DEPS, INSTANCE_PROP_TOOLS
+
+    if editor_backend() != "monolith":
+        return planned
+    windows = [item for item in (planned.get("windows") or []) if isinstance(item, dict)]
+    kept: list[dict] = []
+    dropped: list[dict] = []
+    for window in windows:
+        action = str(window.get("action") or "")
+        if action == "check_pickup":
+            action = "judge_pickup"
+        deps = EXISTING_INSTANCE_PROP_DEPS.get(action, frozenset())
+        if deps & INSTANCE_PROP_TOOLS:
+            dropped.append(window)
+            continue
+        kept.append(window)
+    if not dropped:
+        return planned
+    dropped_ids = {str(window.get("id") or "") for window in dropped}
+    for window in kept:
+        window["depends_on"] = [
+            dep for dep in (window.get("depends_on") or []) if str(dep) not in dropped_ids
+        ]
+    actions = {str(window.get("action") or "") for window in dropped}
+    clauses = _partial_clauses(query, actions)
+    planned = dict(planned)
+    planned["windows"] = kept
+    intent = dict(planned.get("intent") or {})
+    unresolved: list[str] = []
+    for item in list(intent.get("unresolved") or []) + clauses:
+        text = str(item).strip()
+        if text and text not in unresolved:
+            unresolved.append(text)
+    intent["unresolved"] = unresolved
+    intent["actions"] = [str(window.get("action") or "") for window in kept]
+    planned["intent"] = intent
+    planned["unresolved"] = unresolved
+    full = planned.get("intent_full")
+    if isinstance(full, dict):
+        full = dict(full)
+        full["unresolved"] = unresolved
+        planned["intent_full"] = full
+    try:
+        _note_instance_prop_gap(clauses)
+    except OSError:
+        pass
+    return planned
+
+
+def source_of_windows(source: str, windows: list) -> str:
+    """事件流的 source 要跟最终窗口一致（20261111 P4）。
+
+    规划层说 `rules` / `planner`，可窗口在 `execute_windows` 之前被换掉了：快路径
+    `_only_paused_planner` 把一扇暂停窗换成一扇 `solve`（`_run_query` 只改了 planned），
+    这时还把来源写成 planner，事件流就在撒谎，离线/在线双路径一致性也就无从比对。
+    规则：窗口里真有 solve 扇而来源不是 solver-fallback → 记 solver-fallback；
+    来源写着 solver-fallback、窗口里却一扇 solve 都没有 → 记 windows；其余原样。
+
+    只认这两种「来源与窗口对不上」，不改任何别的来源判定。
+    """
+    actions = {
+        str((item.get("window") if isinstance(item.get("window"), dict) else item).get("action") or "")
+        for item in (windows or [])
+        if isinstance(item, dict)
+    }
+    actions.discard("")
+    has_solve = "solve" in actions
+    current = str(source or "")
+    if has_solve and current != "solver-fallback":
+        return "solver-fallback"
+    if current == "solver-fallback" and actions and not has_solve:
+        return "windows"
+    return current
+
+
 def plan_windows(query: str, complete=None) -> dict:
     """拆窗口主链。验收合同取自 L1 的 criteria，没有才按窗口动作类型兜底；不为此再叫一次模型。"""
-    return _finish_plan(_plan_windows_body(query, complete))
+    return _hold_existing_instance_props(query, _finish_plan(_plan_windows_body(query, complete)))
 
 
 def _planner_failed(planned: dict) -> bool:

@@ -17,6 +17,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from eval._pin_offline import close_now  # noqa: E402
+
+close_now()  # 离线封闭：本机 .env 的求解/放行开关不进断言（20261111 求解兜底改路由后同类漂移）
+
 # 真实失败 run（data/runs/20261024/20261024-192858.json）的原句
 QUERY = "打开编辑器，新建一个关卡，名字为L_NewTest2，在这个关卡实现逻辑如下：需要实现简易的FPS射击游戏"
 SCOPE_B = {

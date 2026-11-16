@@ -96,6 +96,39 @@
       "version": 1,
       "lru": 2,
       "status": "shadow"
+    },
+    {
+      "id": "solver-809bda23",
+      "when": "打开关卡 L_NewTest，按设计图 20261020-coins 批量放置 BP_Coin，然后保存关卡",
+      "roles": [],
+      "goals": [
+        "editor.load_level",
+        "editor.run_python",
+        "apply_spec+build"
+      ],
+      "preconditions": [
+        "动作原语经 monolith 盘点确认存在"
+      ],
+      "action_sequence": [
+        "editor.load_level",
+        "editor.run_python",
+        "apply_spec+build"
+      ],
+      "verification": [
+        "automation 收口：失败数 0（1 个测试） tests=AIAgent.Platform.Run"
+      ],
+      "failure_recovery": [
+        "预算烧尽降级为能力缺口",
+        "编译错误原文进下一轮，最多 3 轮"
+      ],
+      "confidence": 0.5,
+      "source_runs": [
+        "W1"
+      ],
+      "conflicts": [],
+      "version": 1,
+      "lru": 3,
+      "status": "shadow"
     }
   ]
 }

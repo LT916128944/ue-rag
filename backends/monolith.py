@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 
-from backends.policy import unfiltered_graph, write_block
+from backends.policy import is_read, unfiltered_graph, write_block
 from backends.select import monolith_refusal
 
 _PCG = "Monolith 无此命名空间"
@@ -209,7 +209,13 @@ def exec(namespace: str, action: str, params: dict | None = None, task: dict | N
         return {"ok": False, "error": blocked}
     tool_name, arguments = _dispatch(namespace, action, body)
     send = transport or _call
-    raw = _send_with_retry(tool_name, arguments, send)
+    if is_read(action):
+        raw = _send_with_retry(tool_name, arguments, send)
+    else:
+        from core.editor_lock import editor_lock
+
+        with editor_lock():
+            raw = _send_with_retry(tool_name, arguments, send)
     if not raw.get("ok"):
         return {"ok": False, "error": raw.get("error") or f"{tool_name} 失败"}
     return {"ok": True, "data": raw.get("data")}

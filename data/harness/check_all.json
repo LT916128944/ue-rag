@@ -1,0 +1,304 @@
+{
+  "checks": [
+    {
+      "name": "check_routes",
+      "script": "eval/check_routes.py",
+      "exit": 0,
+      "seconds": 503.386
+    },
+    {
+      "name": "check_backend",
+      "script": "eval/check_backend.py",
+      "exit": 0,
+      "seconds": 1.433
+    },
+    {
+      "name": "check_backend_health",
+      "script": "eval/check_backend_health.py",
+      "exit": 0,
+      "seconds": 4.832
+    },
+    {
+      "name": "check_producer_judges",
+      "script": "eval/check_producer_judges.py",
+      "exit": 0,
+      "seconds": 0.202
+    },
+    {
+      "name": "check_write_rollback",
+      "script": "eval/check_write_rollback.py",
+      "exit": 0,
+      "seconds": 0.342
+    },
+    {
+      "name": "check_criteria_binding",
+      "script": "eval/check_criteria_binding.py",
+      "exit": 0,
+      "seconds": 0.128
+    },
+    {
+      "name": "check_backend_coverage",
+      "script": "eval/check_backend_coverage.py",
+      "exit": 0,
+      "seconds": 1.132
+    },
+    {
+      "name": "check_fps_hud",
+      "script": "eval/check_fps_hud.py",
+      "exit": 0,
+      "seconds": 17.11
+    },
+    {
+      "name": "check_widget_event_binding",
+      "script": "eval/check_widget_event_binding.py",
+      "exit": 0,
+      "seconds": 0.1
+    },
+    {
+      "name": "check_widget_slot_gaps",
+      "script": "eval/check_widget_slot_gaps.py",
+      "exit": 0,
+      "seconds": 0.096
+    },
+    {
+      "name": "check_solver_plan_retry",
+      "script": "eval/check_solver_plan_retry.py",
+      "exit": 0,
+      "seconds": 0.211
+    },
+    {
+      "name": "check_llm_backoff",
+      "script": "eval/check_llm_backoff.py",
+      "exit": 0,
+      "seconds": 0.718
+    },
+    {
+      "name": "check_info_layer",
+      "script": "eval/check_info_layer.py",
+      "exit": 0,
+      "seconds": 0.16
+    },
+    {
+      "name": "check_architecture",
+      "script": "eval/check_architecture.py",
+      "exit": 0,
+      "seconds": 1.02
+    },
+    {
+      "name": "check_schema",
+      "script": "eval/check_schema.py",
+      "exit": 0,
+      "seconds": 0.097
+    },
+    {
+      "name": "check_risk",
+      "script": "eval/check_risk.py",
+      "exit": 0,
+      "seconds": 0.308
+    },
+    {
+      "name": "check_automation",
+      "script": "eval/check_automation.py",
+      "exit": 0,
+      "seconds": 0.261
+    },
+    {
+      "name": "check_harness",
+      "script": "eval/check_harness.py",
+      "exit": 0,
+      "seconds": 699.578
+    },
+    {
+      "name": "check_stitch",
+      "script": "eval/check_stitch.py",
+      "exit": 0,
+      "seconds": 0.11
+    },
+    {
+      "name": "check_upgrade",
+      "script": "eval/check_upgrade.py",
+      "exit": 0,
+      "seconds": 64.439
+    },
+    {
+      "name": "check_create_level",
+      "script": "eval/check_create_level.py",
+      "exit": 0,
+      "seconds": 0.842
+    },
+    {
+      "name": "check_implement_grenade",
+      "script": "eval/check_implement_grenade.py",
+      "exit": 0,
+      "seconds": 0.097
+    },
+    {
+      "name": "check_build_error_loop",
+      "script": "eval/check_build_error_loop.py",
+      "exit": 0,
+      "seconds": 0.179
+    },
+    {
+      "name": "check_solver_budget",
+      "script": "eval/check_solver_budget.py",
+      "exit": 0,
+      "seconds": 0.113
+    },
+    {
+      "name": "check_solve_gap_fallback",
+      "script": "eval/check_solve_gap_fallback.py",
+      "exit": 0,
+      "seconds": 0.093
+    },
+    {
+      "name": "check_solver_distill",
+      "script": "eval/check_solver_distill.py",
+      "exit": 0,
+      "seconds": 0.126
+    },
+    {
+      "name": "check_solver_patch",
+      "script": "eval/check_solver_patch.py",
+      "exit": 0,
+      "seconds": 0.161
+    },
+    {
+      "name": "check_orphan_run",
+      "script": "eval/check_orphan_run.py",
+      "exit": 0,
+      "seconds": 0.121
+    },
+    {
+      "name": "check_capability_surface",
+      "script": "eval/check_capability_surface.py",
+      "exit": 0,
+      "seconds": 0.089
+    },
+    {
+      "name": "check_capability_gap",
+      "script": "eval/check_capability_gap.py",
+      "exit": 0,
+      "seconds": 1.513
+    },
+    {
+      "name": "check_archive_fidelity",
+      "script": "eval/check_archive_fidelity.py",
+      "exit": 0,
+      "seconds": 1.262
+    },
+    {
+      "name": "check_integrate_verdict",
+      "script": "eval/check_integrate_verdict.py",
+      "exit": 0,
+      "seconds": 41.619
+    },
+    {
+      "name": "check_failure_192858",
+      "script": "eval/check_failure_192858.py",
+      "exit": 0,
+      "seconds": 2.873
+    },
+    {
+      "name": "check_dsh_contract",
+      "script": "eval/check_dsh_contract.py",
+      "exit": 0,
+      "seconds": 0.242
+    },
+    {
+      "name": "check_verify_spec",
+      "script": "eval/check_verify_spec.py",
+      "exit": 0,
+      "seconds": 0.256
+    },
+    {
+      "name": "check_dsh_lock",
+      "script": "eval/check_dsh_lock.py",
+      "exit": 0,
+      "seconds": 7.639
+    },
+    {
+      "name": "check_dsh_costs",
+      "script": "eval/check_dsh_costs.py",
+      "exit": 0,
+      "seconds": 0.112
+    },
+    {
+      "name": "check_catalog_parity",
+      "script": "eval/check_catalog_parity.py",
+      "exit": 0,
+      "seconds": 0.471
+    },
+    {
+      "name": "check_evidence_attribution",
+      "script": "eval/check_evidence_attribution.py",
+      "exit": 0,
+      "seconds": 2.402
+    },
+    {
+      "name": "check_escalation",
+      "script": "eval/check_escalation.py",
+      "exit": 0,
+      "seconds": 0.098
+    },
+    {
+      "name": "check_review_coverage",
+      "script": "eval/check_review_coverage.py",
+      "exit": 0,
+      "seconds": 0.223
+    },
+    {
+      "name": "check_candidate_aging",
+      "script": "eval/check_candidate_aging.py",
+      "exit": 0,
+      "seconds": 0.12
+    },
+    {
+      "name": "check_lexicon",
+      "script": "eval/check_lexicon.py",
+      "exit": 0,
+      "seconds": 0.099
+    },
+    {
+      "name": "check_plan_parity",
+      "script": "eval/check_plan_parity.py",
+      "exit": 1,
+      "seconds": 15.44
+    },
+    {
+      "name": "check_bench_provenance",
+      "script": "eval/check_bench_provenance.py",
+      "exit": 0,
+      "seconds": 0.129
+    },
+    {
+      "name": "check_distill",
+      "script": "eval/check_distill.py",
+      "exit": 0,
+      "seconds": 14.485
+    },
+    {
+      "name": "check_scoring_integrity",
+      "script": "eval/check_scoring_integrity.py",
+      "exit": 0,
+      "seconds": 176.109
+    },
+    {
+      "name": "check_statuses",
+      "script": "eval/check_statuses.py",
+      "exit": 0,
+      "seconds": 0.68
+    },
+    {
+      "name": "check_bench_audit",
+      "script": "eval/check_bench_audit.py",
+      "exit": 0,
+      "seconds": 0.078
+    },
+    {
+      "name": "check_scorecard",
+      "script": "eval/check_scorecard.py",
+      "exit": 0,
+      "seconds": 68.709
+    }
+  ]
+}

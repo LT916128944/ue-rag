@@ -44,6 +44,15 @@ def is_write_tool(tool: str) -> bool:
     return any(hint in tool for hint in WRITE_HINTS)
 
 
+def is_editor_write(toolset: str, tool: str) -> bool:
+    """写才占编辑器锁。保存、PIE、改图、写前缀，以及风险矩阵的 mid/high。"""
+    if tool in SAVE_TOOLS or tool in PIE_TOOLS or tool in BLUEPRINT_EDIT_TOOLS:
+        return True
+    if is_write_tool(tool):
+        return True
+    return risk.tier(tool) in ("mid", "high")
+
+
 _READ_PREFIXES = ("get", "list", "find", "read", "search", "discover")
 _DOMAIN_SWITCHES = (
     ("material", "UE_ALLOW_MATERIAL", allow_material),
@@ -221,6 +230,15 @@ def exec_tool(toolset: str, tool: str, args: dict | None, *, task: dict | None =
         return _refused(task, "write refused")
     if is_write_tool(tool) and tool not in allow:
         return _refused(task, "write refused")
+    if is_editor_write(toolset, tool):
+        from core.editor_lock import editor_lock
+
+        with editor_lock():
+            return _dispatch_editor(toolset, tool, args, timeout)
+    return _dispatch_editor(toolset, tool, args, timeout)
+
+
+def _dispatch_editor(toolset: str, tool: str, args: dict, timeout: float | None) -> dict:
     if UE_EXEC_MODE == "mock":
         return _mock_tool(tool, args)
 

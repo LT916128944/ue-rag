@@ -10,6 +10,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from eval._pin_offline import close_now  # noqa: E402
+
+close_now()  # 离线封闭：本机 .env 的求解/放行开关不进断言（20261111 求解兜底改路由后同类漂移）
+
 QUERY = "编译代码，打开编辑器，打开level3关卡，看看射击游戏是否有问题"
 
 
@@ -102,6 +106,23 @@ def check_plain_compile_stays_rules() -> None:
     created = plan_windows("打开编辑器，新建一个关卡 L_NewTest2", complete=boom)
     assert created["source"] == "rules"
     assert [window.get("action") for window in created["windows"]] == ["launch_editor", "create_level"]
+
+    partial_seen = {"text": ""}
+
+    def partial_model(messages):
+        partial_seen["text"] = json.dumps(messages, ensure_ascii=False)
+        return json.dumps({
+            "query": "把今天的笔记整理一下",
+            "goals": [{"action": "set_pickable", "slots": {"target": "BP_TestActor"}}],
+            "criteria": [],
+            "constraints": {},
+            "unresolved": [],
+        }, ensure_ascii=False)
+
+    partial = plan_windows("打开关卡 L_NewTest，把今天的笔记整理一下", complete=partial_model)
+    assert partial["source"] == "understood", partial.get("source")
+    assert [window.get("action") for window in partial["windows"]] == ["open_level", "set_pickable"], partial["windows"]
+    assert "笔记" in partial_seen["text"]
 
 
 if __name__ == "__main__":

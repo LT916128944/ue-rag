@@ -1,0 +1,98 @@
+{
+  "total": 81,
+  "unverified_total": 9,
+  "unverified": [
+    "A",
+    "I"
+  ],
+  "dimensions": {
+    "A": {
+      "score": 7,
+      "verified": false,
+      "gap": "没有哈希相符的人签",
+      "evidence": "data/attestations",
+      "basis": "baseline",
+      "counted": 0
+    },
+    "B": {
+      "score": 16,
+      "verified": true,
+      "gap": "档案不足 10 句×3 轮",
+      "evidence": "data/archive",
+      "basis": "evidence",
+      "counted": 16
+    },
+    "C": {
+      "score": 15,
+      "verified": true,
+      "gap": "",
+      "evidence": [
+        "eval/check_criteria_binding.py（重跑）",
+        "eval/check_harness.py（重跑）"
+      ],
+      "basis": "evidence",
+      "counted": 15
+    },
+    "D": {
+      "score": 12,
+      "verified": true,
+      "gap": "",
+      "evidence": [
+        "eval/check_orphan_run.py（重跑）",
+        "eval/check_dsh_lock.py（重跑）"
+      ],
+      "basis": "evidence",
+      "counted": 12
+    },
+    "E": {
+      "score": 12,
+      "verified": true,
+      "gap": "",
+      "evidence": [
+        "eval/check_backend_coverage.py（重跑）",
+        "eval/check_write_rollback.py（重跑）"
+      ],
+      "basis": "evidence",
+      "counted": 12
+    },
+    "F": {
+      "score": 10,
+      "verified": true,
+      "gap": "",
+      "evidence": "data/costs.jsonl（111 行）；eval/report.py",
+      "basis": "evidence",
+      "counted": 10
+    },
+    "G": {
+      "score": 9,
+      "verified": true,
+      "gap": "",
+      "evidence": [
+        "eval/check_distill.py（重跑）"
+      ],
+      "basis": "evidence",
+      "counted": 9
+    },
+    "H": {
+      "score": 7,
+      "verified": true,
+      "gap": "",
+      "evidence": [
+        "eval/check_risk.py（重跑）"
+      ],
+      "basis": "evidence",
+      "counted": 7
+    },
+    "I": {
+      "score": 2,
+      "verified": false,
+      "gap": "回执哈希与现在的 check_all.json 不一致",
+      "evidence": [
+        "server/gateway.py#/api/health（127.0.0.1:8010 真 HTTP）",
+        "data/harness/setup_receipt.json"
+      ],
+      "basis": "baseline",
+      "counted": 0
+    }
+  }
+}
