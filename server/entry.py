@@ -687,7 +687,17 @@ def index() -> FileResponse:
     page = _page()
     if not page.is_file():
         raise HTTPException(status_code=500, detail=f"缺入口页：{page}")
-    return FileResponse(page, media_type="text/html; charset=utf-8")
+    # 入口页是「每次改都可能重发」的活跃文件：显式禁缓存，避免浏览器复用旧 JS
+    # （曾出现：改了页面但新开标签页仍跑旧脚本——下拉还是旧的、拖 run 文件没反应）。
+    return FileResponse(
+        page,
+        media_type="text/html; charset=utf-8",
+        headers={
+            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+            "Pragma": "no-cache",
+            "Expires": "0",
+        },
+    )
 
 
 def _probe_existing(host: str, port: int, timeout: float = 1.0) -> bool:

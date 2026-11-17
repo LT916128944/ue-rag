@@ -65,6 +65,7 @@
   .brand h1 { margin: 0; font-size: 14px; font-weight: 600; letter-spacing: .2px; }
   .brand .sub { color: var(--text-mute); font-size: 11px; font-family: var(--mono); }
   .runpick { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--text-dim); flex: 0 0 auto; }
+  .runpick .hint { color: var(--text-mute); font-size: 10px; white-space: nowrap; }
   .runpick select {
     background: var(--bg-panel); color: var(--text); border: 1px solid var(--line);
     border-radius: 6px; padding: 2px 6px; font-family: var(--mono); font-size: 11px;
@@ -426,7 +427,8 @@
   </div>
   <div class="runpick">
     <label for="runsel">run</label>
-    <select id="runsel"><option value="">（无）</option></select>
+    <select id="runsel" title="下拉只列最近 5 条；更早的 run：把 <run_id>.json / .md 文件拖进页面任意位置即可打开"><option value="">（无）</option></select>
+    <span class="hint" title="把 data/runs 下的 <run_id>.json 或 .md 文件拖到页面任意位置，就能打开那条历史 run">拖 run 文件进来</span>
   </div>
   <div class="gauge">
     <span class="chip" id="g-par">并发 <b>0/3</b></span>
@@ -886,9 +888,15 @@
     if (type === "handoff") {
       const win = ensureWindow(run, ev);
       if (!win) return touched;
-      win.unmet = (ev.unmet || []).slice();
+      // unmet 正常是数组；万一外部写成字符串也收下，别让一处类型问题炸掉整条 run 的渲染。
+      win.unmet = Array.isArray(ev.unmet) ? ev.unmet.slice()
+        : (ev.unmet == null || ev.unmet === "" ? [] : [String(ev.unmet)]);
       win.unmetTotal = ev.unmet_total == null ? win.unmet.length : Number(ev.unmet_total);
-      win.next = (ev.next || []).join("、") || win.next;
+      // next 落盘是字符串（handoff JSON 里是「；」拼好的串，见 agent/harness.build_handoff），
+      // 历史/兼容也接受数组。以前这里无条件 .join()，遇到字符串就抛
+      // 「(ev.next || []).join is not a function」，整条 run 因此渲染失败、顶栏显示「读不到 run」。
+      const nxt = Array.isArray(ev.next) ? ev.next.join("、") : String(ev.next == null ? "" : ev.next);
+      win.next = nxt || win.next;
       touched.push(win.id);
       return touched;
     }
@@ -1046,8 +1054,40 @@
     });
   }
 
-  function loadRuns() {
-    return getJSON("/api/runs?limit=30").then(function (data) {
+  // `<run_id>.json` / `<run_id>.md`（也接受裸 run_id）——拖进来就按这条 run 打开。
+  const RUN_FILE_RE = /^(\d{8}-\d{6})(?:\.(?:json|md))?$/i;
+
+  /** 从拖进来的文件名里取 run_id；不是 run 记录文件名就返回 ""。 */
+  function runIdFromName(name) {
+    const base = String(name || "").split(/[\\/]/).pop();
+    const m = RUN_FILE_RE.exec(base);
+    return m ? m[1] : "";
+  }
+
+  /** 确保下拉里有这条 run 的选项并选中（拖入的更早 run 可能不在最近 5 条里）。 */
+  function ensureRunOption(runId) {
+    const sel = $("runsel");
+    if (!sel || !runId) return;
+    if (!Array.prototype.some.call(sel.options, function (o) { return o.value === runId; })) {
+      const o = document.createElement("option");
+      o.value = runId;
+      o.textContent = runId + " · 拖入查看";
+      sel.appendChild(o);
+    }
+    sel.value = runId;
+  }
+
+  /**
+   * 刷新 run 下拉：**只列最近 5 条**（接口已按时间倒序，`limit=5` 即最新五条）。
+   * 更早的 run 不再塞进下拉，改成「把 <run_id>.json / .md 文件拖进页面」来打开。
+   * 默认不自动选中任何历史 run：新开页面停在「就绪」空画面。
+   *   - opts.pickId：明确要查看的新 run（起 run 后 waitNewRun 用）；
+   *   - opts.autoPick：显式要求才落到最新一条；
+   *   - 若当前正看着一条更早的 run（拖文件打开的），下拉里保留它，不被顶掉。
+   */
+  function loadRuns(opts) {
+    opts = opts || {};
+    return getJSON("/api/runs?limit=5").then(function (data) {
       const sel = $("runsel");
       const keep = sel.value;
       sel.innerHTML = "";
@@ -1056,6 +1096,11 @@
         sel.innerHTML = '<option value="">（还没有 run 记录）</option>';
         return;
       }
+      // 首项固定为「就绪」占位：默认停在这里，选别的 id 才去看历史 run。
+      const head = document.createElement("option");
+      head.value = "";
+      head.textContent = "（就绪 · 最近 5 条 · 拖入 run 文件看更早）";
+      sel.appendChild(head);
       rows.forEach(function (row) {
         const opt = document.createElement("option");
         opt.value = row.run_id;
@@ -1063,13 +1108,50 @@
         opt.textContent = row.run_id + " · " + st + " · " + (row.windows || 0) + " 扇";
         sel.appendChild(opt);
       });
-      sel.value = rows.some(function (r) { return r.run_id === keep; }) ? keep : rows[0].run_id;
-      pickRun(sel.value);
+      const has = function (id) { return !!id && rows.some(function (r) { return r.run_id === id; }); };
+      let target = "";
+      if (has(opts.pickId)) target = opts.pickId;            // 明确要看的新 run
+      else if (has(keep)) target = keep;                     // 保持当前查看，不打断
+      else if (keep && runIdFromName(keep)) {                // 正看着更早的历史 run：保留下拉项
+        target = keep;
+        const o = document.createElement("option");
+        o.value = keep;
+        o.textContent = keep + " · 拖入查看";
+        sel.appendChild(o);
+      } else if (opts.autoPick) target = rows[0].run_id;     // 显式要求才落到最新
+      sel.value = target;                                    // 其余 = ""（就绪，不翻旧账）
+      if (opts.pickId && target === opts.pickId) pickRun(target);
     });
+  }
+
+  /** 拖入 run 文件后打开这条 run。 */
+  function openRunFromDrop(runId) {
+    if (!runId) return;
+    sysmsg("打开历史 run：" + runId + "（拖入文件）");
+    pickRun(runId);
+  }
+
+  /** 回到「就绪」空画面：关掉 SSE、清掉当前 run / 日志 / 决策面板（新开页面与选「就绪」用）。 */
+  function resetRunView() {
+    if (state.es) { try { state.es.close(); } catch (err) { /* 已关 */ } state.es = null; }
+    state.runId = "";
+    state.events = [];
+    state.loglines = [];
+    state.startMs = 0;
+    state.run = blankRun("", "");
+    renderQuestion(null);
+    const panel = $("logpanel");
+    if (panel) panel.hidden = true;
+    const ph = $("logphase");
+    if (ph) ph.textContent = "—";
+    renderRun();
+    renderGauge();
+    updateClock();
   }
 
   function pickRun(runId) {
     if (!runId) return;
+    ensureRunOption(runId);          // 拖入的更早 run 不在最近 5 条里时，补一个下拉项并选中
     state.runId = runId;
     state.loglines = [];
     state.startMs = 0;
@@ -1413,10 +1495,7 @@
         if (!fresh.length) { waitNewRun(before, tries + 1); return; }
         const top = fresh[0].run_id;
         sysmsg("新 run：" + top + "（" + (RUN_STATUS_TEXT[fresh[0].status] || fresh[0].status) + "）");
-        loadRuns();
-        const sel = $("runsel");
-        if (sel) { sel.value = top; }
-        pickRun(top);
+        loadRuns({ pickId: top });
       }).catch(function () { waitNewRun(before, tries + 1); });
     }, 900);
   }
@@ -1538,12 +1617,44 @@
       }
       const files = e.dataTransfer.files;
       if (files && files.length) {
+        let openId = "";
         Array.prototype.forEach.call(files, function (f) {
+          const rid = runIdFromName(f.name);
+          if (rid) { if (!openId) openId = rid; return; }   // run 记录文件：打开该 run（不收成附件）
           addAttachment({ path: f.name, name: f.name, external: true });
         });
+        if (openId) { openRunFromDrop(openId); return; }
         return;
       }
       if (plain) addAttachment({ path: plain, name: plain.split("/").pop(), external: true });
+    });
+  }
+
+  /**
+   * 允许把历史 run 文件（`<run_id>.json` / `.md`）拖到**页面任意位置**就打开该 run——
+   * 下拉只留最近 5 条，更早的 run 靠这个入口看，既不冗长也不会看不到历史。
+   * 只接管「拖的是文件（Files）」的情况，不影响侧边栏节点/文本的页内拖拽；
+   * 非 run 文件落到空白处只阻止浏览器把文件当页面打开，落到输入框仍走附件逻辑。
+   */
+  function bindRunFileDrop() {
+    const isFileDrag = function (e) {
+      const t = e.dataTransfer && e.dataTransfer.types;
+      return !!t && Array.prototype.indexOf.call(t, "Files") >= 0;
+    };
+    ["dragover", "drop"].forEach(function (type) {
+      document.addEventListener(type, function (e) {
+        if (!isFileDrag(e)) return;
+        if (type === "dragover") { e.preventDefault(); return; }
+        const files = e.dataTransfer.files;
+        let rid = "";
+        Array.prototype.forEach.call(files || [], function (f) {
+          if (!rid) rid = runIdFromName(f.name);
+        });
+        e.preventDefault();                    // 任何文件都别让浏览器当页面打开
+        const zone = $("dropzone");
+        if (zone) zone.classList.remove("over");
+        if (rid) { e.stopPropagation(); openRunFromDrop(rid); }   // 是 run 记录：打开该 run
+      }, true);
     });
   }
 
@@ -1607,6 +1718,7 @@
   // ---------- 启动 ----------
   function boot() {
     bindDrop();
+    bindRunFileDrop();          // 拖 run 记录文件到页面任意位置 → 打开这条历史 run
     bindSplitters();
     loadHealth();
     renderTree();
@@ -1632,7 +1744,10 @@
         done();
       }
     });
-    $("runsel").addEventListener("change", function () { pickRun(this.value); });
+    $("runsel").addEventListener("change", function () {
+      if (this.value) pickRun(this.value);
+      else resetRunView();          // 选「就绪」= 清屏回到空画面
+    });
     // 不能把 send 直接挂到 click 上：浏览器会把 MouseEvent 作为第一个实参传进去，
     // 而 send 的第一个形参是 resume —— 真值即走续接分支。显式包一层并传 false。
     $("btn-send").addEventListener("click", function () { send(false); });
