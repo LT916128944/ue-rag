@@ -42,6 +42,15 @@
     --right-w: 548px;
   }
   * { box-sizing: border-box; }
+  /* 让原生控件/滚动条走暗色（否则默认浅色滚动条在白/浅底主题下很扎眼）。 */
+  :root { color-scheme: dark; }
+  /* ---------------- 暗色滚动条：轨道贴面板底色，滑块用分隔线色 ---------------- */
+  * { scrollbar-width: thin; scrollbar-color: #2c3542 #0b1016; }
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-track { background: #0b1016; }
+  ::-webkit-scrollbar-thumb { background: #2c3542; border-radius: 6px; border: 2px solid #0b1016; }
+  ::-webkit-scrollbar-thumb:hover { background: #3b4657; }
+  ::-webkit-scrollbar-corner { background: #0b1016; }
   html, body { margin: 0; height: 100%; }
   body {
     background: var(--bg); color: var(--text);
@@ -1827,7 +1836,9 @@
     const live = $("runlive");
     const prog = $("runprogress");
     const total = (run.order || []).length;
-    const running = String(run.status || "") === "running";
+    // 只有「真有 run 且在跑」才点亮不定进度条；空页面 blankRun 的 status 也是 "running"，
+    // 不判 run_id 的话新开页面会一直跑一条蓝光条，像卡死。
+    const running = !!run.run_id && String(run.status || "") === "running";
     if (prog) prog.classList.toggle("active", running);
     if (!live) return;
     let cls = "", text = "", spinning = false;
