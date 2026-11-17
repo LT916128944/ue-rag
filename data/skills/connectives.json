@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "owner": "人（工程 owner / Lead）",
+  "note": "连接词表（agent/connectives.py 的只读真值源）。只认多字连接词，避免「和/与/再」这类单字误吃正文。kind 语义：seq=顺序（后句在前句之后，用于 windows 依赖排序）；parallel=并列（同时发生，不构成依赖，但仍是真实需求不能漏）；disjunction=选择（或者/还是/要么，歧义，不自动替人决定）；contrast=转折（语气词，一般不额外拆动作）。加词只改本表，不动代码；认不出的连接词不当切点，保持原文。",
+  "rows": [
+    {"kind": "seq", "words": ["然后", "接着", "随后", "最后", "之后", "其次"]},
+    {"kind": "parallel", "words": ["并且", "同时", "以及", "顺便", "顺带"]},
+    {"kind": "disjunction", "words": ["或者", "还是", "要么"]},
+    {"kind": "contrast", "words": ["但是", "然而", "可是"]}
+  ]
+}

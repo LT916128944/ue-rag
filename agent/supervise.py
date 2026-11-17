@@ -128,6 +128,21 @@ _PROJECT_COMPILE_RE = re.compile(r"编译工程|编译项目|编译一下工程|
 _BP_CREATE_PHRASE_RE = re.compile(
     r"(?:新增|添加|创建|新建|生成|加)一?个?\s*(?:/Game/[A-Za-z0-9_/]+|BP_[A-Za-z0-9_]+|蓝图)"
 )
+# 「加一个 / 添加 / 新增」后面跟这些**场景里的东西**时是摆放，不是改 C++。
+# 20261117：`_is_cpp_edit("在关卡里加一个点光源")` 曾因「加一个」命中而返回 True，
+# 把「然后编译工程」的编译扇从 _is_project_compile 里挤掉，整句掉给模型。
+_SCENE_PLACE_NOUN_RE = re.compile(
+    r"点光源|聚光灯|方向光|矩形光|面光源|点光|聚光|平行光|光源|灯光|灯|"
+    r"SkyLight|StaticMesh|静态网格|网格体|网格|模型|道具|物体|Actor|"
+    r"箱子|平台|金币|门|椅子|桌子|球|柱|墙|地板|地面|靶|拾取物",
+    re.I,
+)
+# 明确的 C++ 符号：出现这些就仍按改代码处理（「新增一个属性 / 函数 / 组件…」）。
+_CODE_SYMBOL_RE = re.compile(
+    r"函数|方法|变量|属性|字段|成员|接口|组件|子系统|模块|枚举|结构体|委托|事件|宏|"
+    r"逻辑|算法|行为|玩法|节点|类|\.h\b|\.cpp\b|头文件|构造|析构|重载",
+    re.I,
+)
 _LAUNCH_EDITOR_RE = re.compile(
     r"(?:启动|打开|开启)\s*(?:UE|Unreal|虚幻)\s*(?:引擎)?\s*(?:编辑器)?"
     r"|(?:启动|打开|开启)\s*编辑器",
@@ -150,11 +165,22 @@ _PICKUP_BEI_RE = re.compile(r"被\s*(?P<picker>A[A-Z][A-Za-z0-9_]*)\s*拾取")
 
 
 def _is_cpp_edit(query: str) -> bool:
-    """要改源码。修编译错误仍走先裁判、再改，不算新增功能。「新增蓝图」那半句不算 C++ 改动。"""
+    """要改源码。修编译错误仍走先裁判、再改，不算新增功能。「新增蓝图」那半句不算 C++ 改动。
+
+    场景摆放的「加一个 / 添加 / 新增」不算改代码：句子里只有场景名词（灯 / 模型 / 道具 /
+    平台…）、没有任何 C++ 符号时，把它当摆放而不是改码。否则「加一个点光源，然后编译工程」
+    的编译扇会被 `_is_project_compile` 误判掉，整句掉给模型（20261117 实测）。
+    """
     if re.search(r"编译错误|error\s*C", query, re.I):
         return False
     text = _BP_CREATE_PHRASE_RE.sub(" ", query)
-    return bool(_CPP_EDIT_RE.search(text) or _is_source_fix(text))
+    if not (_CPP_EDIT_RE.search(text) or _is_source_fix(text)):
+        return False
+    if _SCENE_PLACE_NOUN_RE.search(text) and not _CODE_SYMBOL_RE.search(text):
+        # 只是摆放场景物体（没有 C++ 符号、也不是在修源码）→ 不是改代码。
+        if not _is_source_fix(text):
+            return False
+    return True
 
 
 def _is_source_fix(query: str) -> bool:
@@ -1166,6 +1192,47 @@ def _open_level_task(query: str) -> dict:
     return task
 
 
+_LIGHT_TOKEN_RE = re.compile(
+    r"点光源|聚光灯|方向光|矩形光|面光源|点光|聚光|平行光|"
+    r"point\s*light|spot\s*light|directional\s*light|rect\s*light|\bsun\b",
+    re.I,
+)
+_LIGHT_PLACE_RE = re.compile(r"放|添加|新增|加|创建|摆|生成|put|add|spawn", re.I)
+_ORIGIN_RE = re.compile(r"世界原点|原点|world\s*origin|\(\s*0\s*[,，]\s*0\s*[,，]\s*0\s*\)", re.I)
+
+
+def _wants_place_light(query: str) -> bool:
+    """句子里要放一盏灯（说了灯类型 + 放置动词）。放灯是动作表里的 place_light，可确定性拆。"""
+    text = query or ""
+    return bool(_LIGHT_TOKEN_RE.search(text)) and bool(_LIGHT_PLACE_RE.search(text))
+
+
+def _origin_from_query(text: str):
+    """句里点名「世界原点 / 原点 / (0,0,0)」→ 返回 [0,0,0]；否则 None（交给缺省位置）。"""
+    return [0, 0, 0] if _ORIGIN_RE.search(text or "") else None
+
+
+def _place_light_task(query: str) -> dict:
+    """放灯整句由代码接住：place_light 只需 light_type（缺省点光源），位置按句里的「世界原点」给 (0,0,0)。
+    不放蓝图、不改源码；保存按任务策略（menu 缺省 save 开）。"""
+    match = _LIGHT_TOKEN_RE.search(query or "")
+    light_type = match.group(0) if match else "点光源"
+    task = _base(query)
+    task["title"] = f"放一盏{light_type}"
+    task["action"] = "place_light"
+    slots: dict = {"light_type": light_type}
+    origin = _origin_from_query(query)
+    if origin is not None:
+        slots["location"] = origin
+    task["slots"] = slots
+    task["verify"] = [{"kind": "editor_assert", "text": "当前关卡里该类灯的实例数 +1"}]
+    task["allow_writes"] = []
+    task["save"] = True
+    task["pie"] = False
+    task["max_retries"] = 0
+    return task
+
+
 def _wants_create_level(query: str) -> bool:
     """句子里真的要求新建一个关卡（不是「在这个关卡里做什么」）。
     「新建/创建/建一个/做一个 + 紧邻的 关卡/地图」才算；中间夹了别的词（做一个平台跳跃关卡）不算。"""
@@ -1453,6 +1520,7 @@ def _plan_rules(query: str) -> list[dict] | None:
     editor_hit = _wants_scene_move(query)
     create_level_hit = _wants_create_level(query)
     open_level_hit = _wants_open_level(query)
+    place_light_hit = _wants_place_light(query)
     launch_only = (
         _wants_launch_editor(query)
         and not compile_hit
@@ -1462,10 +1530,25 @@ def _plan_rules(query: str) -> list[dict] | None:
         and not editor_hit
         and not create_level_hit
         and not open_level_hit
+        # 放灯不是「只启动编辑器」：句子里还有「在关卡…加个灯」时不能被 launch_only 提前吞掉，
+        # 否则「打开编辑器，在关卡世界原点添加一个点光源」只拆出 [launch_editor]，放灯半句丢失。
+        and not place_light_hit
     )
     if launch_only:
         # 只要求启动编辑器：给一扇真正启动编辑器的步骤，不再交给规划者编 compile_project
         return [_launch_editor_task(query)]
+    if place_light_hit and not (cpp_hit or project_compile or compile_hit or create_level_hit or open_level_hit):
+        # 放灯整句（「打开编辑器，在关卡世界原点添加一个点光源」）：动作表里有 place_light，但理解器
+        # 对「参考关卡」这类措辞常 JSON 失败 / 判语义不唯一 → 掉进 solver-fallback；而 solve 收口固定
+        # automation，加灯产不出过滤器，必诚实失败（20261116-232643 实测：灯加上了却记失败）。
+        # 这个形状可确定性拆：先启动、打开点名的参考关卡、再放灯（place_light 收口是 editor_assert）。
+        light_steps: list[dict] = []
+        if _wants_launch_editor(query):
+            light_steps.append(_launch_editor_task(query))
+        if _level_token(query):
+            light_steps.append(_open_level_task(query))
+        light_steps.append(_place_light_task(query))
+        return light_steps
     if not cpp_hit and not project_compile and not named_bp and not editor_hit:
         manual = _try_manual_graph(query)
         if manual is not None:
@@ -1481,6 +1564,11 @@ def _plan_rules(query: str) -> list[dict] | None:
         if _wants_launch_editor(query):
             steps.append(_launch_editor_task(query))
         steps.append(_open_level_task(query))
+    if place_light_hit:
+        # 放灯与「建关卡 / 开关卡 / 编译 / 改码」同句时，作为一扇独立窗口追加。
+        # 顺序交给 windows_from_rules 的依赖（place_light 依赖 launch/open_level/create_level），
+        # 这里不硬排；否则「打开关卡 L_X，加个点光源」「加个点光源然后编译工程」会丢掉放灯扇。
+        steps.append(_place_light_task(query))
     if project_compile:
         steps.append(_project_compile_task(query))
     if cpp_hit:

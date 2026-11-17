@@ -203,9 +203,11 @@ class Channel:
 
         answer, source = "", "stdin"
         if self.inbox is not None and not _is_tty(self.stdin):
-            answer = self._wait_inbox(qid, kind=kind, window=window)
-            source = "ui" if answer else "timeout"
-            if not answer:
+            answer, found = self._wait_inbox(qid, kind=kind, window=window)
+            # 空答案 ≠ 超时：任务书人审的「确认」按钮写的就是空串（brief_flow 把空输入当通过）。
+            # 旧写 `"ui" if answer else "timeout"` 会把「确认」误判成 timeout → 调用方按放弃处理。
+            source = "ui" if found else "timeout"
+            if not found:
                 self.printer(
                     f"\n[UI] 收件箱里没有 {qid} 的答案（{self.inbox}），按停止处理，不替你跳过。"
                 )
@@ -224,14 +226,16 @@ class Channel:
         return answer, source
 
     # ---------- 收件箱 ----------
-    def _wait_inbox(self, qid: str, *, kind: str, window: str) -> str:
+    def _wait_inbox(self, qid: str, *, kind: str, window: str) -> tuple[str, bool]:
+        """等收件箱。返回 (answer, found)：found 表示「领取到了这个 qid 的那一行」，
+        与 answer 是否为空无关——任务书「确认」就是空串，但仍算拿到了答案。"""
         deadline = time.monotonic() + (self.wait if self.wait is not None else wait_seconds())
         told = False
         while time.monotonic() <= deadline:
             rows = claim_rows(self.inbox, self.run_id)
             for row in rows:
                 if str(row.get("id") or "") == qid:
-                    return str(row.get("answer") or "").strip()
+                    return str(row.get("answer") or "").strip(), True
             if rows:
                 # 双键对不上：丢弃并告警，不猜着分配（计划 §11）。
                 dropped = [str(row.get("id") or "") for row in rows]
@@ -241,7 +245,7 @@ class Channel:
                 told = True
                 self.printer(f"\n[UI] 等待裁决 {qid}：把答案写进 {self.inbox}（{kind}）")
             time.sleep(POLL_SECONDS)
-        return ""
+        return "", False
 
 
 # ---------------------------------------------------------------------------

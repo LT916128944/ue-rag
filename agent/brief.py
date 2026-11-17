@@ -46,6 +46,22 @@ _GAP_ACTION_RE = re.compile(r"(?:没有|缺少|缺|没)([^，。；、\s“”\"
 # （20261029-015933 的 W1/W2 就是被这一句拦住，一次都没跑）。
 _VERIFIABLE_EXTERNAL = ("UE_EDITOR_BACKEND",)
 
+# 模型还会把「打开编辑器 / 连 MCP」这种本来就能跑、甚至已经在跑的动作写成自然语言
+# 外部依赖（20261116-223130 的「UE 编辑器进程与 MCP 端口」）。编辑器进程在且 MCP
+# 端口连通时这个依赖其实已经满足，不许再把整句钉在 waiting_external 一次都不跑。
+# 命中即实测探活；探不到、认不出的一律维持「等外部」，不凭一句猜测放行。
+_EDITOR_MCP_DEP_RE = re.compile(r"编辑器|UnrealEditor|MCP")
+
+
+def _editor_mcp_ready() -> bool:
+    """编辑器进程在且 MCP 端口连通才算这个依赖真的满足；探活异常一律当未满足。"""
+    try:
+        from core.editor_launch import editor_running, mcp_up
+
+        return bool(editor_running()) and bool(mcp_up())
+    except Exception:
+        return False
+
 
 def external_dep_satisfied(dep: str) -> bool:
     """「等外部」依赖现在是否其实已经满足。满足就不许再拦窗口。
@@ -62,6 +78,8 @@ def external_dep_satisfied(dep: str) -> bool:
             return bool(mcp_up())
         except Exception:
             return False
+    if _EDITOR_MCP_DEP_RE.search(name):
+        return _editor_mcp_ready()
     return False
 
 
@@ -1767,6 +1785,33 @@ def materialize_scopes(brief: dict, candidates: list[dict] | None = None, comple
             if last not in merged:
                 merged.append(last)
             first["depends_on"] = merged
+    # 整句求解扇兜底（20261116-223130）：solver-fallback 只产出一扇「受控求解」扇，它的
+    # task/scope_text 就是整句原话——它就是替整句干活的。任务书生成器若把同一句拆成多个
+    # 范围却只把求解扇挂在其中一个范围上，另一个范围就成了零窗口，还被模型塞一条「UE 编辑器
+    # 进程与 MCP 端口」之类的外部依赖 → 即使整句做成了也永远记「等待外部 · 部分完成」。
+    # 这里把「整句求解扇」挂到那些“外部依赖已被探活证实满足、却一扇窗口都没有”的范围上：
+    # 让它们由同一扇求解扇交付，不另起第二扇 solve（多扇 solve 会各写一套同名类，撞重复定义）。
+    whole_solve = None
+    for win in windows:
+        if str(win.get("action") or "") != "solve":
+            continue
+        task = win.get("task") or {}
+        covered = str(win.get("scope_text") or task.get("query") or "").strip()
+        if covered and covered == query.strip():
+            whole_solve = win
+            break
+    if whole_solve is not None:
+        wsid = str(whole_solve.get("id") or "")
+        for meta in scopes_meta:
+            if str(meta.get("id") or "") == "INT" or meta.get("kind") == "integration":
+                continue
+            ext = str(meta.get("external_dep") or "").strip()
+            if not ext or not external_dep_satisfied(ext):
+                continue
+            if meta.get("window_ids") or meta.get("blocked") or meta.get("capability_gap"):
+                continue
+            meta["window_ids"] = [wsid]
+            meta["external_dep"] = ""
     if leftover_ids:
         scopes_meta.append({
             "id": "EX",

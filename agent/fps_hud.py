@@ -40,6 +40,20 @@ HUD_LAYOUT: tuple[tuple[str, str, dict, dict, str], ...] = (
 HUD_PARENT = "/Script/AIAgentProject.FpsHUDWidget"
 HUD_DEFAULT_REF = "/Game/UI/WBP_FpsHUD.WBP_FpsHUD"
 
+# 图形血条（20261117）：「血条」不能只是一个文本 "100"。系统在左下角给它配一套
+# 背景底条(Border·半透明黑) + 填充条(ProgressBar·满血绿) + 数值(复用 txt_Health 叠在上面)。
+# 这两个是展示层附加控件，不进 FPS_HUD_WIDGETS 合同（那是 C++ BindWidgetOptional 的文本名，
+# 与 sequence.FPS_HUD_WIDGETS 对齐）；合同名一个字都不动。
+HEALTH_BAR_BG = "HealthBarBG"
+HEALTH_BAR_FILL = "HealthBarFill"
+HEALTH_BAR_VISUALS: tuple[str, ...] = (HEALTH_BAR_BG, HEALTH_BAR_FILL)
+_HB_POS = {"x": 40, "y": 1000}
+_HB_SIZE = {"x": 280, "y": 44}
+_HB_FILL_POS = {"x": 46, "y": 1006}
+_HB_FILL_SIZE = {"x": 268, "y": 32}
+_HB_BG_COLOR = {"R": 0.0, "G": 0.0, "B": 0.0, "A": 0.55}
+_HB_FILL_COLOR = {"R": 0.12, "G": 0.80, "B": 0.25, "A": 1.0}
+
 # 句子里出现这些词，才认为它在要这些读数里的东西。
 _HUD_TOKENS = ("血条", "血量", "子弹", "弹药", "手雷", "载具", "时速", "上下车", "HUD")
 
@@ -86,6 +100,76 @@ def is_fps_hud_request(text: str) -> bool:
     # 或者同时说了两类以上读数（血条 + 子弹/手雷/载具），才当成完整 HUD 需求。
     hits = {token for token in _HUD_TOKENS if token in blob}
     return len(hits) >= 2
+
+
+# 读数词 → 合同控件。用于「只加一条血条」这类**单读数**请求：只落地它要的那几块，
+# 不把整套 HUD 都塞进去（20261117-140229：「给 WBP_FpsHUD 左下角加一个血条」曾整体掉进
+# 通用受控求解、用无关的 AIAgent.Fps.Hit automation 收口——需求根本没被拆成控件动作）。
+_HUD_READOUT: tuple[tuple[tuple[str, ...], tuple[str, ...]], ...] = (
+    (("血条", "血量", "生命值"), ("txt_Health",)),
+    (("子弹", "弹药"), ("txt_Ammo",)),
+    (("手雷", "手榴弹"), ("txt_Grenade",)),
+    (("火箭弹", "火箭筒"), ("txt_RocketAmmo",)),
+    (("载具", "车辆"), ("txt_VehicleName", "txt_EnterPrompt", "txt_VehicleSpeed")),
+    (("上下车", "上车", "下车"), ("txt_EnterPrompt",)),
+    (("时速", "车速"), ("txt_VehicleSpeed",)),
+)
+
+
+def requested_hud_controls(text: str) -> list[str]:
+    """这句话要点哪几块读数 → 需要的合同控件名（按 HUD_LAYOUT 顺序、去重）。
+
+    口径：
+    - 命中两类及以上读数，或只提「HUD / 控件 / 视口」这种泛称 → **整份合同**（保持既有行为，
+      整句 FPS HUD 仍摆齐七块）；
+    - 只命中一类读数（如只说「血条」）→ **只落地这一类**（单读数请求不越权补别的读数）；
+    - 句子里直接点了控件名（txt_Health…）→ 就按点的那个来。
+    """
+    blob = str(text or "")
+    all_names = [name for name, *_ in HUD_LAYOUT]
+    categories: list[tuple[str, ...]] = []
+    for tokens, names in _HUD_READOUT:
+        if any(token in blob for token in tokens):
+            categories.append(names)
+    explicit = [name for name in all_names if name in blob]
+    if len(categories) >= 2:
+        return all_names
+    picked: list[str] = []
+    for names in categories:
+        for name in names:
+            if name not in picked:
+                picked.append(name)
+    for name in explicit:
+        if name not in picked:
+            picked.append(name)
+    if not picked:
+        return all_names
+    return [name for name in all_names if name in picked]
+
+
+# 删除/新增意图：一句「先删血条再加一条」要两件事都做，不能只当「补控件」。
+_REMOVE_RE = re.compile(r"(删除|删掉|移除|去掉|清除|删了|抹掉|清掉|拿下)")
+_ADD_RE = re.compile(r"(添加|加上|新增|增加|加一个|加个|做一个|新建|摆放|放一个|放入|显示|补上|补一|补|摆)")
+
+
+def wants_remove_controls(text: str) -> bool:
+    """这句要删/移除合同控件吗（删除…血条 / 移除…控件）。"""
+    return bool(_REMOVE_RE.search(str(text or "")))
+
+
+def wants_add_controls(text: str) -> bool:
+    """这句要把合同控件摆上去吗。没写删除动作时默认按「补/摆」处理（保持原行为）。"""
+    blob = str(text or "")
+    if _ADD_RE.search(blob):
+        return True
+    return not _REMOVE_RE.search(blob)
+
+
+def hud_expectation(text: str) -> str:
+    """复核口径：先删后加 / 只加 ⇒ present；只删 ⇒ absent。"""
+    if wants_remove_controls(text) and not wants_add_controls(text):
+        return "absent"
+    return "present"
 
 
 def widget_ref_from(step: dict) -> str:
@@ -144,14 +228,18 @@ def build_fps_hud(step: dict) -> dict | None:
     text = " ".join(str((step or {}).get(key) or "") for key in ("query", "title", "summary"))
     if not is_fps_hud_request(text):
         return None
+    # 只落地这句话要的那几块读数；单读数（如「加一个血条」）不越权补齐整套 HUD。
+    wanted = requested_hud_controls(text)
+    remove_intent = wants_remove_controls(text)
+    add_intent = wants_add_controls(text)
 
     from core.editor_exec import exec_tool
 
     ref = widget_ref_from(step or {})
     package = _package(ref)
     write = {
-        "allow_writes": ["AddWidget", "SetWidgetProperty", "RenameWidget",
-                         "CompileWidgetBlueprint", "set_parent"],
+        "allow_writes": ["AddWidget", "SetWidgetProperty", "RenameWidget", "RemoveWidget",
+                         "set_widget_property", "CompileWidgetBlueprint", "set_parent"],
         "save": True, "pie": False, "allow_umg": True,
     }
     tools: list[str] = []
@@ -186,10 +274,30 @@ def build_fps_hud(step: dict) -> dict | None:
                 "error": f"父类没设成 FpsHUDWidget：{fixed.get('error') or '未知错误'}",
             }
 
-    # ③ 缺哪个补哪个；已有的控件不重建（幂等：重跑这一句不会叠出第二份）。
+    # ③ 删除意图：句子里说「删除/移除…血条」时，先把这些控件 RemoveWidget 掉。
+    #    「删了再加」= 先删后重建一条新的；纯删除则只删不加。
+    removed: list[str] = []
+    if remove_intent:
+        for name in wanted:
+            if name not in existing:
+                continue
+            gone = _call("UMGToolSet.UMGToolSet", "RemoveWidget", {
+                "widgetBlueprint": {"refPath": ref}, "widget": {"refPath": name},
+            })
+            if not gone.get("ok"):
+                return {
+                    "ok": False, "attempts": 1, "exec_count": len(tools), "tools": tools,
+                    "error": f"删除控件 {name} 失败：{gone.get('error') or '未知错误'}",
+                }
+            removed.append(name)
+        existing = [name for name in existing if name not in removed]
+
+    # ④ 缺哪个补哪个；已有的控件不重建（幂等：重跑这一句不会叠出第二份）。
     root = existing[0] if existing else "CanvasPanel"
     added: list[str] = []
     for name, preset, position, size, text_value in HUD_LAYOUT:
+        if name not in wanted or not add_intent:
+            continue
         if name in existing:
             # 已经在了也把锚点摆正：老文件里可能是上一版错位的偏移。
             _monolith_ui("set_anchor_preset", {
@@ -223,7 +331,84 @@ def build_fps_hud(step: dict) -> dict | None:
             "font_size": 28, "text_color": "#FFFFFF",
         }, write, tools)
 
-    # ④ 编译 + 保存这一份资产（裁判是编译，保存由任务策略决定）。
+    # ⑤ 图形血条：要「血条」就把 背景底条(Border) + 填充条(ProgressBar) + 数值 一起做出来，
+    #    不是只放一个文本 "100"。这就是「样式你自己定义、仿照常见 FPS」被系统兜住的地方。
+    present = set(existing) | set(added)
+    health_wanted = "txt_Health" in wanted
+    if health_wanted and remove_intent:
+        for vname in HEALTH_BAR_VISUALS:
+            if vname not in present:
+                continue
+            gone = _call("UMGToolSet.UMGToolSet", "RemoveWidget", {
+                "widgetBlueprint": {"refPath": ref}, "widget": {"refPath": vname},
+            })
+            if not gone.get("ok"):
+                return {
+                    "ok": False, "attempts": 1, "exec_count": len(tools), "tools": tools,
+                    "error": f"删除血条图形控件 {vname} 失败：{gone.get('error') or '未知错误'}",
+                }
+            removed.append(vname)
+            present.discard(vname)
+    if health_wanted and add_intent:
+        def _prop(wid: str, prop: str, val) -> None:
+            _monolith_ui("set_widget_property", {
+                "asset_path": package, "widget_name": wid,
+                "property_name": prop, "value": val,
+            }, write, tools)
+
+        def _slot(wid: str, pos: dict, size: dict, z: int | None = None) -> None:
+            params = {"asset_path": package, "widget_name": wid, "position": pos, "size": size}
+            if z is not None:
+                params["z_order"] = z
+            _monolith_ui("set_slot_property", params, write, tools)
+
+        def _add_widget(wname: str, wclass: str, pos: dict, size: dict) -> dict:
+            return _call("UMGToolSet.UMGToolSet", "AddWidget", {
+                "widgetBlueprint": {"refPath": ref},
+                "widgetClass": {"refPath": wclass},
+                "widgetDisplayName": wname,
+                "parentWidget": {"refPath": f"WidgetTree.{root}"},
+                "position": pos, "size": size, "h_align": "Left", "v_align": "Top",
+            })
+
+        if HEALTH_BAR_BG not in present:
+            made_bg = _add_widget(HEALTH_BAR_BG, "/Script/UMG.Border", _HB_POS, _HB_SIZE)
+            if not made_bg.get("ok"):
+                return {
+                    "ok": False, "attempts": 1, "exec_count": len(tools), "tools": tools,
+                    "error": f"加血条底条失败：{made_bg.get('error') or '未知错误'}",
+                }
+            added.append(HEALTH_BAR_BG)
+            present.add(HEALTH_BAR_BG)
+        _monolith_ui("set_anchor_preset", {
+            "asset_path": package, "widget_name": HEALTH_BAR_BG, "preset": "top_left"}, write, tools)
+        _prop(HEALTH_BAR_BG, "BrushColor", _HB_BG_COLOR)
+        _slot(HEALTH_BAR_BG, _HB_POS, _HB_SIZE, z=0)
+
+        if HEALTH_BAR_FILL not in present:
+            made_fill = _add_widget(HEALTH_BAR_FILL, "/Script/UMG.ProgressBar", _HB_FILL_POS, _HB_FILL_SIZE)
+            if not made_fill.get("ok"):
+                return {
+                    "ok": False, "attempts": 1, "exec_count": len(tools), "tools": tools,
+                    "error": f"加血条填充条失败：{made_fill.get('error') or '未知错误'}",
+                }
+            added.append(HEALTH_BAR_FILL)
+            present.add(HEALTH_BAR_FILL)
+        _monolith_ui("set_anchor_preset", {
+            "asset_path": package, "widget_name": HEALTH_BAR_FILL, "preset": "top_left"}, write, tools)
+        _prop(HEALTH_BAR_FILL, "Percent", 1.0)
+        _prop(HEALTH_BAR_FILL, "FillColorAndOpacity", _HB_FILL_COLOR)
+        _slot(HEALTH_BAR_FILL, _HB_FILL_POS, _HB_FILL_SIZE, z=1)
+
+        # 数值叠在血条上，居中白字（C++ 运行期仍会刷新 txt_Health 的文本值）。
+        _prop("txt_Health", "Justification", "Center")
+        _slot("txt_Health", _HB_FILL_POS, _HB_FILL_SIZE, z=2)
+        _monolith_ui("set_text", {
+            "asset_path": package, "widget_name": "txt_Health", "text": "100",
+            "font_size": 22, "text_color": "#FFFFFF",
+        }, write, tools)
+
+    # ⑥ 编译 + 保存这一份资产（裁判是编译，保存由任务策略决定）。
     compiled = _call("UMGToolSet.UMGToolSet", "CompileWidgetBlueprint",
                      {"widgetBlueprint": {"refPath": ref}})
     if not compiled.get("ok"):
@@ -234,19 +419,38 @@ def build_fps_hud(step: dict) -> dict | None:
     _call("editor_toolset.toolsets.asset.AssetTools", "save_assets",
           {"asset_paths": [package]})
 
-    # ⑤ 复查：合同名字必须真的都在（不信「调用成功」）。
+    # ⑤ 复查：按意图核对（先删后加/只加 ⇒ 必须在；只删 ⇒ 必须不在）。
     again = _call("UMGToolSet.UMGToolSet", "GetWidgets", {"widgetBlueprint": {"refPath": ref}})
     final = _names(again.get("data"))
-    missing = [name for name, *_ in HUD_LAYOUT if name not in final]
-    if missing:
-        return {
-            "ok": False, "attempts": 1, "exec_count": len(tools), "tools": tools,
-            "error": f"{ref} 复查缺控件：{'、'.join(missing)}",
-        }
-    summary = (
-        f"{ref} 合同控件齐（新增 {'、'.join(added) if added else '无，原本就在'}），"
-        f"父类 FpsHUDWidget，已编译并保存这份资产。"
-    )
+    expectation = hud_expectation(text)
+    if expectation == "absent":
+        still = [name for name in wanted if name in final]
+        if still:
+            return {
+                "ok": False, "attempts": 1, "exec_count": len(tools), "tools": tools,
+                "error": f"{ref} 删除后仍在：{'、'.join(still)}",
+            }
+        summary = (
+            f"{ref} 已删除控件 {'、'.join(removed) if removed else '（原本就没有）'}，"
+            f"已编译并保存这份资产。"
+        )
+    else:
+        missing = [name for name in wanted if name not in final]
+        if missing:
+            return {
+                "ok": False, "attempts": 1, "exec_count": len(tools), "tools": tools,
+                "error": f"{ref} 复查缺控件：{'、'.join(missing)}",
+            }
+        bits = []
+        if removed:
+            bits.append("删除 " + "、".join(removed))
+        bits.append("新增 " + ("、".join(added) if added else "无，原本就在"))
+        if health_wanted and add_intent:
+            bits.append("图形血条（底条+填充条+数值）已就位")
+        summary = (
+            f"{ref} 合同控件齐（{'；'.join(bits)}），"
+            f"父类 FpsHUDWidget，已编译并保存这份资产。"
+        )
     return {
         "ok": True, "attempts": 1, "exec_count": len(tools), "tools": tools,
         "summary": summary, "index_note": summary, "ref": ref,
@@ -288,6 +492,9 @@ def hud_windows(query: str) -> list[dict] | None:
     ref = widget_ref_from({"query": text})
     asset = ref.rsplit("/", 1)[-1].split(".", 1)[0]
     folder = ref.rsplit("/", 1)[0]
+    # 只加一条血条时，复核扇也只看这一块（否则「缺 txt_Ammo」会把单读数请求判成失败）。
+    controls = requested_hud_controls(text)
+    expect = hud_expectation(text)
     windows: list[dict] = []
 
     def _add(action: str, slots: dict, title: str) -> None:
@@ -309,9 +516,12 @@ def hud_windows(query: str) -> list[dict] | None:
          {"folder": folder, "name": asset, "parent": "UserWidget"},
          f"新建/定位 {asset}")
     _add("edit_widget_blueprint",
-         {"folder": folder, "name": asset},
+         {"folder": folder, "name": asset, "hud_controls": controls},
          f"摆放 {asset} 的 HUD 控件")
-    _add("check_fps_hud", {"widget": ref}, "只读核对 FPS HUD")
+    _add("check_fps_hud",
+         {"widget": ref, "hud_controls": controls, "hud_expect": expect},
+         ("只读核对 FPS HUD（应已删除）：" if expect == "absent" else "只读核对 FPS HUD：")
+         + "、".join(controls))
     return windows
 
 

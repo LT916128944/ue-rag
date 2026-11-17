@@ -22,10 +22,24 @@ _SYSTEM = (
     "现有执行器表达不了、需要新的 C++ 文件时才用 apply_spec。"
     "spec.files 每项是 {path, content}。path 只能是 Public/名字.h 或 Private/名字.cpp，"
     f"最多 {_MAX_FILES} 个，每个 content 不超过 {_MAX_CONTENT} 字。\n"
+    "只放/摆放/移动/删除场景里的 Actor（灯、模型、道具）不需要新 C++，绝不要用 apply_spec；"
+    "只有确实要写新的 .h/.cpp 逻辑时才用 apply_spec。\n"
     "slots 只填原句里出现的 token，不要编 /Game 路径，不要编工具名。\n"
     "推不出就输出 {\"steps\":[]}。\n"
     "形状：{\"steps\":[{\"script\":\"动作名\",\"slots\":{},\"spec\":{}}]}"
 )
+
+# 需要新 C++ 的说法。全都对不上，就当纯场景编辑：不许用 apply_spec 写代码。
+_CODE_TOKENS = (
+    "c++", "cpp", ".h", ".cpp", "类", "函数", "接口", "逻辑", "玩法", "重构",
+    "子系统", "组件", "gamemode", "编译", "源码", "实现", "新功能", "算法",
+)
+
+
+def _needs_code(clause: str) -> bool:
+    """这一句是不是在要新 C++。场景摆放（放灯/放模型/移动/删除）一律 False。"""
+    blob = str(clause or "").lower()
+    return any(token in blob for token in _CODE_TOKENS)
 
 
 def executor_cards() -> list[str]:
@@ -200,4 +214,8 @@ def windows_for_clause(clause: str, complete, titles: list[str] | None = None) -
     except Exception:
         return []
     steps, _dropped = parse_steps(_text_of(raw))
+    if not _needs_code(text):
+        # 纯场景编辑（放灯/放模型/移动/删除）：模型就算写了 apply_spec（新 C++），
+        # 也丢掉——不拿「写一套代码」冒充「在关卡里放个东西」。
+        steps = [step for step in steps if str(step.get("script") or "") != "apply_spec"]
     return windows_from_steps(steps)

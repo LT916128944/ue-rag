@@ -73,6 +73,7 @@ COVERAGE = {
     "create_level": "both",             # _create_level_monolith
     "open_level": "both",               # sequence 有 monolith 分支
     "place_actor": "both",              # find_actors / add_to_scene_from_asset / save 已桥
+    "place_light": "partial:monolith 走 editor.author_map_settings(actors) 按类生成原生 Actor；official 后端没有按类生成原生 Actor 的入口，如实失败",
     "place_batch": "both",              # 已桥；props 在生成时写（U3a）
     "remove_batch": "both",             # find_actors / remove_from_scene 已桥
     "judge_pickup": "partial:monolith 读不到实例属性（get_properties 不支持），裁决如实失败",

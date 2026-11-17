@@ -60,7 +60,7 @@
       "score": 10,
       "verified": true,
       "gap": "",
-      "evidence": "data/costs.jsonl（149 行）；eval/report.py",
+      "evidence": "data/costs.jsonl（362 行）；eval/report.py",
       "basis": "evidence",
       "counted": 10
     },

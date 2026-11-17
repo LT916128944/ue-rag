@@ -263,6 +263,69 @@ def _tail_events(run_id: str, count: int) -> list[dict]:
     return rows
 
 
+def _stamp_seconds(stem: str) -> float | None:
+    """`YYYYMMDD-HHMMSS` → epoch 秒；对不上返回 None。只用于给 run_id 找对应日志。"""
+    try:
+        return datetime.strptime(str(stem), "%Y%m%d-%H%M%S").timestamp()
+    except (ValueError, OverflowError, OSError):
+        return None
+
+
+def _log_path_for(run_id: str) -> Path | None:
+    """把 run_id 映射到它那次子进程写的 `data/ui/logs/<ts>.log`。
+
+    正常情况 run_id 与请求文件名/日志名逐字相同（都是同一秒的时间戳）。跨秒时退一步取
+    「时间戳最接近且相差 ≤120s」的那份，避免因为落 run 记录晚了 1 秒就读不到日志。
+    找不到就返回 None（不瞎配一份别人的日志）。
+    """
+    folder = _ui_dir() / "logs"
+    if not folder.is_dir():
+        return None
+    exact = folder / f"{run_id}.log"
+    if exact.is_file():
+        return exact
+    want = _stamp_seconds(run_id)
+    if want is None:
+        return None
+    best: tuple[float, Path] | None = None
+    for path in folder.glob("*.log"):
+        got = _stamp_seconds(path.stem)
+        if got is None:
+            continue
+        delta = abs(got - want)
+        if delta <= 120 and (best is None or delta < best[0]):
+            best = (delta, path)
+    return best[1] if best else None
+
+
+@app.get("/api/uilog/{run_id}")
+def api_uilog(run_id: str, tail: int = 400) -> dict:
+    """后台日志尾巴：`data/ui/logs/<ts>.log` 的最后 N 行。**只读**，不解析成状态。
+
+    入口页把它铺在中央区域（左对齐），让「正在写任务书 / 等待人审 / 执行中」这些阶段
+    看得见——否则规划+任务书那几十秒到十几分钟里页面一片空白，用户会以为卡死。
+    """
+    path = _log_path_for(run_id)
+    if path is None:
+        return {"ok": True, "run_id": run_id, "exists": False, "path": "", "lines": [], "total": 0}
+    count = max(1, min(int(tail or 400), 800))
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        return {"ok": False, "run_id": run_id, "exists": True, "path": str(path),
+                "lines": [], "total": 0, "error": str(exc)}
+    lines = text.splitlines()
+    return {
+        "ok": True,
+        "run_id": run_id,
+        "exists": True,
+        "path": str(path),
+        "total": len(lines),
+        "lines": lines[-count:],
+        "mtime": _mtime(path),
+    }
+
+
 @app.get("/api/stream/{run_id}")
 def stream(run_id: str, request: Request) -> StreamingResponse:
     """tail 事件文件。`id:` 是行号，支持 `Last-Event-ID` 续传。不引 sse-starlette。"""
@@ -551,12 +614,17 @@ def api_run(body: RunBody) -> dict:
                 "warnings": built["warnings"],
             }
         prompt = built["prompt"]
+    # 先记下"起进程之前"已有的 run_id 集合，再写请求文件、起进程。
+    # 顺序不能反过来：子进程落 run 记录只需一两百毫秒，若起完进程再读，新 run 可能已经
+    # 出现在这里，前端 `before` 便把它当成"本来就有"，于是永远等不到"新 run"——又是
+    # 一次「等 12 秒」的假卡死。放在起进程之前就彻底排除这条竞态。
+    before = sorted(_run_ids_now(), reverse=True)[:5]
     req = _write_request(prompt)
     started = _spawn(req, force=bool(body.force), mode=mode)
     started["prompt"] = prompt
     if started.get("ok"):
         # 记下这一刻的 run_id 候选：UI 可以据此在 /api/runs 里认出新 run。
-        started["before"] = sorted(_run_ids_now(), reverse=True)[:5]
+        started["before"] = before
     return started
 
 

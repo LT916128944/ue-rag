@@ -37,6 +37,9 @@
     --wait: #58a6ff;
     --lock: #f0883e;
     --mono: ui-monospace, SFMono-Regular, "Cascadia Mono", Consolas, "Courier New", monospace;
+    /* 三栏可拖拽/滚轮调整的宽度（内存态，刷新回默认；不写浏览器存储）。 */
+    --left-w: 262px;
+    --right-w: 548px;
   }
   * { box-sizing: border-box; }
   html, body { margin: 0; height: 100%; }
@@ -81,10 +84,22 @@
   /* ---------------- 三栏 ---------------- */
   main { flex: 1 1 auto; display: flex; min-height: 0; }
 
+  /* 可拖拽分隔条：拖动改宽度，滚轮微调，双击复位。分隔线本身画在这里，避免与面板双线。 */
+  .splitter {
+    flex: 0 0 7px; cursor: col-resize; position: relative; z-index: 6; background: transparent;
+    touch-action: none;
+  }
+  .splitter::after {
+    content: ""; position: absolute; top: 0; bottom: 0; left: 3px; width: 1px; background: var(--line);
+    transition: background .12s, width .12s;
+  }
+  .splitter:hover, .splitter.dragging { background: rgba(76, 154, 255, .08); }
+  .splitter:hover::after, .splitter.dragging::after { background: var(--accent); width: 2px; left: 2.5px; }
+
   /* 侧边栏 */
   aside.sidebar {
-    flex: 0 0 262px; min-width: 0; overflow: hidden; display: flex; flex-direction: column;
-    background: var(--bg-soft); border-right: 1px solid var(--line); min-height: 0;
+    flex: 0 0 var(--left-w); min-width: 0; overflow: hidden; display: flex; flex-direction: column;
+    background: var(--bg-soft); min-height: 0;
   }
   .side-head { padding: 9px 10px 7px; border-bottom: 1px solid var(--line-soft); }
   .side-head .title { font-size: 11px; color: var(--text-dim); letter-spacing: .4px; display: flex; justify-content: space-between; }
@@ -110,7 +125,7 @@
   .side-foot { padding: 6px 10px; border-top: 1px solid var(--line-soft); font-size: 10px; color: var(--text-mute); line-height: 1.5; }
 
   /* 中间：对话 */
-  section.chat { flex: 1 1 44%; display: flex; flex-direction: column; min-width: 340px; min-height: 0; }
+  section.chat { flex: 1 1 auto; display: flex; flex-direction: column; min-width: 300px; min-height: 0; }
   .thread { flex: 1 1 auto; overflow: auto; padding: 14px 16px 4px; display: flex; flex-direction: column; gap: 10px; }
   .msg { max-width: 88%; border: 1px solid var(--line); border-radius: 9px; padding: 8px 11px; background: var(--bg-panel); }
   .msg.me { align-self: flex-end; background: #172231; border-color: #22354d; }
@@ -228,12 +243,39 @@
   .qzone.done .qopts button { opacity: .5; }
 
   /* 右侧：运行面板 */
-  section.run { flex: 0 0 548px; min-width: 0; overflow: hidden; display: flex; flex-direction: column; background: var(--bg-soft); border-left: 1px solid var(--line); min-height: 0; }
+  section.run { flex: 0 0 var(--right-w); min-width: 0; overflow: hidden; display: flex; flex-direction: column; background: var(--bg-soft); min-height: 0; }
   .run-head { padding: 8px 11px 7px; border-bottom: 1px solid var(--line-soft); display: flex; align-items: baseline; gap: 8px; }
   .run-head .t { font-size: 11px; color: var(--text-dim); letter-spacing: .4px; }
   .run-head .id { font-family: var(--mono); font-size: 10px; color: var(--text-mute); margin-left: auto; }
+
+  /* 全局运行状态：主视口顶部常驻，运行中有旋转加载环 + 文案，避免「像卡死」。 */
+  .run-live { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; color: var(--text-dim); min-width: 0; }
+  .run-live .txt { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 220px; }
+  .run-live.running { color: #7fb0e8; }
+  .run-live.done { color: var(--ok); }
+  .run-live.failed { color: var(--bad); }
+  .run-live.paused { color: var(--warn); }
+  .spin {
+    flex: 0 0 auto; display: inline-block; width: 11px; height: 11px; border-radius: 50%;
+    border: 2px solid rgba(76, 154, 255, .25); border-top-color: var(--accent);
+    animation: spinslow .8s linear infinite;
+  }
+  .spin.sm { width: 9px; height: 9px; border-width: 1.5px; }
+  .dot-idle { flex: 0 0 auto; display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--text-mute); }
+  @keyframes spinslow { to { transform: rotate(360deg); } }
+
+  /* 运行中的顶部不定进度条 */
+  .run-progress { flex: 0 0 auto; height: 2px; overflow: hidden; position: relative; background: transparent; }
+  .run-progress.active { background: #10151d; }
+  .run-progress.active::after {
+    content: ""; position: absolute; top: 0; bottom: 0; left: 0; width: 34%;
+    background: linear-gradient(90deg, transparent, var(--accent), transparent);
+    animation: runbar 1.25s ease-in-out infinite;
+  }
+  @keyframes runbar { 0% { left: -40%; } 100% { left: 100%; } }
+
   .canvas-wrap { flex: 1 1 auto; overflow: auto; position: relative; min-height: 120px; min-width: 0; }
-  #canvas { position: relative; }
+  #canvas { position: relative; margin: 0 auto; }
   #edges { position: absolute; left: 0; top: 0; overflow: visible; pointer-events: none; }
   .card {
     position: absolute; border: 1px solid var(--line); border-radius: 8px;
@@ -252,6 +294,12 @@
   .card.st-skipped::before { background: var(--text-mute); }
   .card.st-waiting_external::before { background: var(--wait); }
   .card.st-interrupted::before { background: #8b3a3a; }
+  /* 执行中的卡片：脉冲高光灯环 + 左侧条变亮，明确「正在跑」而不是卡死。 */
+  .card.st-running, .card.st-retry, .card.st-revising { border-color: #2f5c8a; animation: cardglow 1.6s ease-in-out infinite; }
+  @keyframes cardglow {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(76, 154, 255, 0); }
+    50% { box-shadow: 0 0 0 2px rgba(76, 154, 255, .30); }
+  }
   .card .hd { display: flex; align-items: center; gap: 5px; flex: 0 0 auto; }
   .card .wid { font-family: var(--mono); font-size: 10px; color: var(--text-mute); }
   .card .badge {
@@ -277,6 +325,11 @@
   .card .meta .q { color: var(--warn); }
   .card .bar { height: 3px; border-radius: 2px; background: #232d3b; margin-top: 5px; overflow: hidden; }
   .card .bar i { display: block; height: 100%; background: var(--accent); width: 0; }
+  /* 执行中：进度条改成来回扫的不定动画，即使进度未知也在动。 */
+  .card.st-running .bar i, .card.st-retry .bar i, .card.st-revising .bar i {
+    width: 32% !important; animation: barSlide 1.3s ease-in-out infinite;
+  }
+  @keyframes barSlide { 0% { transform: translateX(-120%); } 100% { transform: translateX(420%); } }
   .card.st-done .bar i { background: var(--ok); }
   .card.st-failed .bar i { background: var(--bad); }
   .card .step { font-size: 10.5px; color: #9fb0c6; margin-top: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -324,6 +377,41 @@
   .askbar .will b { color: var(--warn); font-weight: 500; }
   .askbar .undo { font-size: 10px; }
 
+  /* 中央区域底部：后台日志（左对齐，仿 DSH 轨迹）。有 run 才出现，可折叠。 */
+  .logpanel {
+    flex: 0 0 34%; min-height: 96px; max-height: 58%; min-width: 0;
+    display: flex; flex-direction: column; border-top: 1px solid var(--line); background: #0a0e14;
+  }
+  .logpanel[hidden] { display: none; }
+  .logpanel.collapsed { flex: 0 0 29px; max-height: 29px; }
+  .logpanel.collapsed .log-body { display: none; }
+  .log-head {
+    flex: 0 0 auto; display: flex; align-items: center; gap: 8px; padding: 4px 12px;
+    border-bottom: 1px solid var(--line-soft); font-size: 10px; color: var(--text-mute);
+    background: #0d1219;
+  }
+  .log-head .lt { color: var(--text-dim); letter-spacing: .4px; }
+  .log-head .lphase { font-family: var(--mono); color: #7fb0e8; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 40%; }
+  .log-head .grow { flex: 1 1 auto; }
+  .log-head .autoscroll { display: flex; align-items: center; gap: 3px; cursor: pointer; }
+  .log-head button { font-size: 10px; padding: 0 6px; line-height: 1.4; }
+  .log-body {
+    flex: 1 1 auto; overflow: auto; margin: 0; padding: 6px 12px 10px; text-align: left;
+    font-family: var(--mono); font-size: 11.5px; line-height: 1.55; color: #aab6c6;
+    white-space: pre-wrap; word-break: break-word;
+  }
+  .log-body .ln { display: block; }
+  .log-body .ln.dim { color: #66727f; }
+  .log-body .ln.node { color: #7fb0e8; }
+  .log-body .ln.tool { color: #c9a84c; }
+  .log-body .ln.ok { color: #67c27a; }
+  .log-body .ln.err { color: #f0a9a6; }
+  .log-body .ln.mcp { color: #5c6778; }
+  .log-body .empty { color: var(--text-mute); }
+  /* 规划期的占位卡：右侧在拆窗口/写任务书时不再空白，明确「在规划」而不是卡死。 */
+  .plan-card { padding: 10px 12px; }
+  .plan-card .ti { -webkit-line-clamp: initial; max-height: none; }
+
   .hidden { display: none !important; }
   .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
 </style>
@@ -346,6 +434,7 @@
     <span class="chip" id="g-queue">队列 <b>0</b></span>
     <span class="chip" id="g-done">完成 <b>0/0</b></span>
     <span class="chip" id="g-stop">停因 <b>—</b></span>
+    <span class="chip" id="g-eta" title="粗略预估，仅供参考">用时 <b>—</b></span>
   </div>
 </header>
 
@@ -362,9 +451,22 @@
     </div>
   </aside>
 
+  <div class="splitter" id="splitL" title="拖动或滚轮调整左栏宽度（双击复位）"></div>
+
   <section class="chat">
     <div class="thread" id="thread">
       <div class="sysmsg" id="welcome">侧边栏拖文件或目录进来；输入框下方会实时显示将要交给 CLI 的原文（由服务端装配）。</div>
+    </div>
+
+    <div class="logpanel" id="logpanel" hidden>
+      <div class="log-head">
+        <span class="lt">后台日志</span>
+        <span class="lphase" id="logphase">—</span>
+        <span class="grow"></span>
+        <label class="autoscroll" title="新行进来时自动滚到底"><input type="checkbox" id="logauto" checked> 跟随</label>
+        <button id="logtoggle" type="button" title="展开 / 收起后台日志">▾</button>
+      </div>
+      <pre class="log-body" id="logbody"></pre>
     </div>
 
     <div class="composer">
@@ -404,11 +506,15 @@
     </div>
   </section>
 
+  <div class="splitter" id="splitR" title="拖动或滚轮调整右栏宽度（双击复位）"></div>
+
   <section class="run">
     <div class="run-head">
       <span class="t">运行 · 窗口</span>
+      <span class="run-live" id="runlive" title="当前运行状态"><span class="dot-idle"></span><span class="txt">就绪</span></span>
       <span class="id" id="runid">—</span>
     </div>
+    <div class="run-progress" id="runprogress"></div>
     <div class="qzone" id="qzone" hidden>
       <div class="qhead">
         <span class="qkind" id="qkind">裁决</span>
@@ -501,12 +607,51 @@
     return "pending";
   }
 
-  /** 拓扑分层（最长路径深度）+ 两趟重心排序。环依赖不爆栈。 */
+  /**
+   * 估算一行文本的像素宽度（不依赖 DOM，便于离线检查与确定性）：
+   * CJK/全角按 1 个字宽，ASCII 按 0.55，其余按 0.6。用于按内容压缩卡片宽度。
+   */
+  function textW(s, px, mono) {
+    const str = String(s == null ? "" : s);
+    if (typeof document !== "undefined" && document.createElement) {
+      if (!textW._ctx) {
+        const cv = document.createElement("canvas");
+        textW._ctx = cv.getContext ? cv.getContext("2d") : null;
+      }
+      if (textW._ctx) {
+        textW._ctx.font = px + "px " + (mono
+          ? "ui-monospace, SFMono-Regular, Consolas, 'Courier New', monospace"
+          : "-apple-system, 'Segoe UI', 'Microsoft YaHei UI', 'Noto Sans SC', sans-serif");
+        return textW._ctx.measureText(str).width;
+      }
+    }
+    // 无 DOM（离线检查）时的估算：CJK/全角按 1 字宽，ASCII 0.55，其余 0.6
+    let w = 0;
+    for (let i = 0; i < str.length; i++) {
+      const c = str.codePointAt(i);
+      if (c >= 0x2e80) w += px;
+      else if (c >= 0x20 && c < 0x7f) w += px * (mono ? 0.6 : 0.55);
+      else w += px * 0.6;
+    }
+    return w;
+  }
+
+  /**
+   * 拓扑分层（最长路径深度）+ 两趟重心排序。环依赖不爆栈。
+   * 纵向（从上到下）布局：层深度 → 行（y 向下递增），同层兄弟 → 列（x 向右递增）。
+   * 卡片宽度按内容压缩：够「标题最多两行 + 动作名 + 头部」即可，内容少的卡片就窄一点；
+   * 每层整组水平居中，读起来像一条纵向流程脊线。
+   */
   function layout(windows, opts) {
     const o = opts || {};
     // cardH 是布局网格用的**高度配额**，必须容得下一张卡的满配内容
     // （标题 2 行 + 动作 + meta + 进度条 + 当前步骤 + 思考 2 行 + 交接 2 行）。
-    const cardW = o.cardW || 176, cardH = o.cardH || 186, gapX = o.gapX || 46, gapY = o.gapY || 14;
+    const padX = 12, padY = 12;
+    const gapX = o.gapX || 22;        // 同层兄弟横向间距（副轴）
+    const gapY = o.gapY || 42;        // 层与层纵向间距（主轴）
+    const availW = Math.max(220, o.availW || 548);
+    const cardH = o.cardH || 186;
+    const MINW = 176, MAXW = Math.min(440, availW - 24);   // 单卡宽度的上下限
     const ids = (windows || []).map(function (w) { return w.id; });
     const byId = {};
     (windows || []).forEach(function (w) { byId[w.id] = w; });
@@ -533,7 +678,7 @@
       (layers[k] || (layers[k] = [])).push(id);
     });
 
-    // 重心排序：按上游平均行号
+    // 重心排序：同层内左右顺序按上游平均序号
     const layerKeys = Object.keys(layers).map(Number).sort(function (a, b) { return a - b; });
     const order = {};
     layerKeys.forEach(function (k) {
@@ -557,61 +702,102 @@
       });
     }
 
+    // 每张卡按内容估宽：头部(W+角色+徽标)、动作名、标题两行，取最大 + 内边距
+    const widths = {};
+    ids.forEach(function (id) {
+      const w = byId[id] || {};
+      const headNeed = 74 + (w.role ? 22 : 0);
+      // 标题最多两行：单行实测宽度的一半，再留 10px 余量避免刚好卡到第三行被截断
+      const titleNeed = Math.ceil(textW(w.title, 12) / 2) + 10;
+      const actionNeed = Math.ceil(textW(w.action, 10, true)) + 4;
+      const need = Math.max(headNeed, titleNeed, actionNeed) + 20;   // 20 = 左右内边距+边框
+      widths[id] = Math.max(MINW, Math.min(MAXW, need));
+    });
+
+    // 每层总宽 = 兄弟宽度 + 间距；整幅宽取最宽一层，层内水平居中
+    function layerTotal(k) {
+      let t = 0;
+      layers[k].forEach(function (id, i) { t += widths[id] + (i ? gapX : 0); });
+      return t;
+    }
+    let contentW = 0;
+    layerKeys.forEach(function (k) { contentW = Math.max(contentW, layerTotal(k)); });
+
     const nodes = {};
-    let maxCol = 0, maxRow = 0;
-    layerKeys.forEach(function (k) {
+    layerKeys.forEach(function (k, j) {
+      let x = padX + Math.max(0, (contentW - layerTotal(k)) / 2);   // 层内水平居中
       layers[k].forEach(function (id, row) {
         nodes[id] = {
           id: id,
           layer: k, row: row,
-          x: 10 + k * (cardW + gapX),
-          y: 10 + row * (cardH + gapY),
-          w: cardW, h: cardH
+          x: x,
+          y: padY + j * (cardH + gapY),
+          w: widths[id], h: cardH
         };
-        maxCol = Math.max(maxCol, k);
-        maxRow = Math.max(maxRow, row);
+        x += widths[id] + gapX;
       });
+    });
+
+    // 单节点层：把这张卡对齐到上游父卡中点的平均位置，而不是整幅宽度居中。
+    // 这样「串行链」是一条竖直脊线；「分叉后再汇合」的汇合卡落在两支中间；
+    // 只有一层里有多个兄弟卡（真并行）时才保持整层居中。
+    layerKeys.forEach(function (k) {
+      if (layers[k].length !== 1) return;
+      const id = layers[k][0];
+      const node = nodes[id];
+      if (!node) return;
+      const parents = ((byId[id] || {}).depends_on || [])
+        .map(function (x) { return nodes[x]; })
+        .filter(function (p) { return p && p.layer < k; });
+      if (!parents.length) return;
+      let cx = 0;
+      parents.forEach(function (p) { cx += p.x + p.w / 2; });
+      cx /= parents.length;
+      const minX = padX, maxX = padX + contentW - node.w;
+      node.x = Math.max(minX, Math.min(maxX, cx - node.w / 2));
     });
 
     return {
       nodes: nodes,
       layers: layers,
       order: layerKeys,
-      width: 10 * 2 + (maxCol + 1) * cardW + maxCol * gapX,
-      height: 10 * 2 + (maxRow + 1) * cardH + maxRow * gapY,
-      cardW: cardW, cardH: cardH
+      width: padX * 2 + contentW,
+      height: padY * 2 + layerKeys.length * cardH + Math.max(0, layerKeys.length - 1) * gapY,
+      cardW: Math.max.apply(null, ids.map(function (id) { return widths[id]; }).concat([MINW])),
+      cardH: cardH
     };
   }
 
-  /** 连线：按两卡相对位置四分支选接点，避免从卡片中间横穿。 */
+  /** 连线：纵向为主时源底中点 → 目标顶中点；横向时左右接；回边绕行避免穿卡。 */
   function edgePath(a, b) {
     const ac = { x: a.x + a.w / 2, y: a.y + a.h / 2 };
     const bc = { x: b.x + b.w / 2, y: b.y + b.h / 2 };
     const dx = bc.x - ac.x, dy = bc.y - ac.y;
     let x1, y1, x2, y2, c1x, c1y, c2x, c2y;
 
-    if (Math.abs(dx) >= Math.abs(dy)) {
-      // 水平为主
-      if (dx >= 0) {
-        x1 = a.x + a.w; y1 = ac.y; x2 = b.x; y2 = bc.y;
-        const mx = (x1 + x2) / 2;
-        c1x = mx; c1y = y1; c2x = mx; c2y = y2;
+    if (Math.abs(dy) >= Math.abs(dx)) {
+      // 纵向为主（纵向布局的主流向）
+      if (dy >= 0) {
+        // 目标在下方：源底 → 目标顶，竖直贝塞尔
+        x1 = ac.x; y1 = a.y + a.h; x2 = bc.x; y2 = b.y;
+        const my = (y1 + y2) / 2;
+        c1x = x1; c1y = my; c2x = x2; c2y = my;
       } else {
-        // 回边：绕右侧
-        x1 = a.x + a.w; y1 = ac.y; x2 = b.x + b.w; y2 = bc.y;
-        const mx = Math.max(x1, x2) + 34;
-        c1x = mx; c1y = y1; c2x = mx; c2y = y2;
+        // 回边：目标在上方，绕到卡片外侧
+        x1 = ac.x; y1 = a.y; x2 = bc.x; y2 = b.y + b.h;
+        const my = Math.min(y1, y2) - 34;
+        c1x = x1; c1y = my; c2x = x2; c2y = my;
       }
-    } else if (dy > 0) {
-      // 目标在下方
-      x1 = ac.x; y1 = a.y + a.h; x2 = bc.x; y2 = b.y;
-      const my = (y1 + y2) / 2;
-      c1x = x1; c1y = my; c2x = x2; c2y = my;
+    } else if (dx >= 0) {
+      // 目标在右侧
+      x1 = a.x + a.w; y1 = ac.y; x2 = b.x; y2 = bc.y;
+      const mx = (x1 + x2) / 2;
+      c1x = mx; c1y = y1; c2x = mx; c2y = y2;
     } else {
-      // 目标在上方（回边）
-      x1 = ac.x; y1 = a.y; x2 = bc.x; y2 = b.y + b.h;
-      const my = (y1 + y2) / 2;
-      c1x = x1; c1y = my; c2x = x2; c2y = my;
+      // 目标在左侧（回边）
+      x1 = a.x; y1 = ac.y; x2 = b.x + b.w; y2 = bc.y;
+      const mx = Math.min(x1, x2) - 34;
+      c1x = mx; c1y = y1; c2x = mx; c2y = y2;
     }
     return "M" + x1 + "," + y1 + " C" + c1x + "," + c1y + " " + c2x + "," + c2y + " " + x2 + "," + y2;
   }
@@ -829,7 +1015,9 @@
     root: "AIAgentProject",
     nodeCache: {},                       // path -> entries（侧边栏一层一层取）
     events: [],                          // 这条 run 的事件（question/answer 从这里判 pending）
-    question: null                       // 当前等着答的那条 question
+    question: null,                      // 当前等着答的那条 question
+    loglines: [],                        // 后台日志尾巴（/api/uilog），中央左对齐显示
+    startMs: 0                           // 本条 run 的本地起点（started_at 缺失时兜底算用时）
   };
 
   // ---------- 顶栏与运行列表 ----------
@@ -883,12 +1071,16 @@
   function pickRun(runId) {
     if (!runId) return;
     state.runId = runId;
+    state.loglines = [];
+    state.startMs = 0;
     getJSON("/api/run/" + encodeURIComponent(runId) + "?tail=400").then(function (data) {
       const run = blankRun(runId, String((data.run || {}).query || ""));
       run.status = String((data.run || {}).status || run.status);
       run.started_at = String((data.run || {}).started_at || "");
       run.source = String((data.run || {}).source || "");
       run.stop_reason = String((data.run || {}).stop_reason || "");
+      const st0 = Date.parse(run.started_at);
+      state.startMs = isNaN(st0) ? Date.now() : st0;
       state.cardH = 0;
       // 先按机读记录铺卡片（有出处），再把事件叠上去（事件是更细的进度）。
       const windows = (data.run || {}).windows || {};
@@ -915,6 +1107,9 @@
       renderRun();
       syncQuestion(state.events);
       followLive(runId, String((data.run || {}).status || ""));
+      $("logpanel").hidden = false;
+      pollUiLog(runId);
+      updateClock();
     }).catch(function (e) {
       $("runid").textContent = "读不到 run：" + String(e && e.message || e);
     });
@@ -1163,6 +1358,11 @@
   }
 
   function send(resume) {
+    // 只有「续接最近」才是续接：resume 必须是显式 true。
+    // 曾经 btn-send 的 click 监听器直接把事件对象当 resume 传进来（MouseEvent 恒为真），
+    // 于是点「发送」实际发的是 :resume latest，输入框里的指令根本没交给 CLI——表现为
+    // 「输入指令卡死」（服务起了进程却没有新 run，页面等 12 秒后报没等到）。这里强制成布尔。
+    resume = resume === true;
     const btn = resume ? $("btn-resume") : $("btn-send");
     const force = !!($("chk-force") || {}).checked;
     const mode = String(($("mode") || {}).value || "multi");
@@ -1347,9 +1547,67 @@
     });
   }
 
+  // ---------- 三栏可拖拽 / 滚轮缩放 ----------
+  /** 拖动改宽度、滚轮微调、双击复位。只改 CSS 变量（内存态，刷新回默认；不写浏览器存储）。 */
+  function bindSplitter(el, side) {
+    if (!el) return;
+    const main = document.querySelector("main");
+    const varName = side === "left" ? "--left-w" : "--right-w";
+    const def = side === "left" ? 262 : 548;
+    let dragging = false;
+    const readW = function () {
+      const raw = getComputedStyle(document.documentElement).getPropertyValue(varName);
+      const n = parseFloat(raw);
+      return isNaN(n) ? def : n;
+    };
+    const apply = function (px) {
+      if (!main) return;
+      const rect = main.getBoundingClientRect();
+      // 中间聊天至少留 300px，另一侧栏保持可见；最小值按侧栏给下限。
+      if (side === "left") {
+        const max = Math.max(180, rect.width - 300 - 300);
+        const w = Math.min(Math.max(180, px), max);
+        document.documentElement.style.setProperty(varName, Math.round(w) + "px");
+      } else {
+        const max = Math.max(300, rect.width - 300 - 180);
+        const w = Math.min(Math.max(300, px), max);
+        document.documentElement.style.setProperty(varName, Math.round(w) + "px");
+      }
+    };
+    el.addEventListener("pointerdown", function (e) {
+      dragging = true;
+      el.classList.add("dragging");
+      try { el.setPointerCapture(e.pointerId); } catch (err) { /* 老浏览器没有 */ }
+      e.preventDefault();
+    });
+    el.addEventListener("pointermove", function (e) {
+      if (!dragging || !main) return;
+      const rect = main.getBoundingClientRect();
+      apply(side === "left" ? (e.clientX - rect.left) : (rect.right - e.clientX));
+    });
+    const stop = function () { dragging = false; el.classList.remove("dragging"); };
+    el.addEventListener("pointerup", stop);
+    el.addEventListener("pointercancel", stop);
+    el.addEventListener("lostpointercapture", stop);
+    el.addEventListener("dblclick", function () {
+      document.documentElement.style.setProperty(varName, def + "px");
+    });
+    el.addEventListener("wheel", function (e) {
+      e.preventDefault();                       // 别让页面跟着滚
+      const step = e.deltaY < 0 ? 24 : -24;     // 上滚放大、下滚缩小
+      apply(readW() + step);
+    }, { passive: false });
+  }
+
+  function bindSplitters() {
+    bindSplitter($("splitL"), "left");
+    bindSplitter($("splitR"), "right");
+  }
+
   // ---------- 启动 ----------
   function boot() {
     bindDrop();
+    bindSplitters();
     loadHealth();
     renderTree();
     renderChips();
@@ -1375,7 +1633,9 @@
       }
     });
     $("runsel").addEventListener("change", function () { pickRun(this.value); });
-    $("btn-send").addEventListener("click", send);
+    // 不能把 send 直接挂到 click 上：浏览器会把 MouseEvent 作为第一个实参传进去，
+    // 而 send 的第一个形参是 resume —— 真值即走续接分支。显式包一层并传 false。
+    $("btn-send").addEventListener("click", function () { send(false); });
     $("btn-resume").addEventListener("click", function () { send(true); });
     $("q").addEventListener("keydown", function (e) {
       if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); send(); }
@@ -1385,6 +1645,17 @@
       list.classList.toggle("collapsed");
       $("donecaret").textContent = list.classList.contains("collapsed") ? "▸" : "▾";
     });
+    $("logtoggle").addEventListener("click", function () {
+      const panel = $("logpanel");
+      const collapsed = panel.classList.toggle("collapsed");
+      this.textContent = collapsed ? "▸" : "▾";
+    });
+
+    // 预估倒计时 + 规划期文案：每秒走一次，纯前端时钟（后台状态仍以落盘文件为准）。
+    updateClock();
+    setInterval(updateClock, 1000);
+    // 后台日志尾巴：选中 run 期间每 1.5s 拉一次，铺在中央底部（左对齐）。
+    setInterval(function () { if (state.runId) pollUiLog(state.runId); }, 1500);
 
     // 秒表：只有带 started_at 且没有 elapsed 的窗口才走字。
     setInterval(function () {
@@ -1432,11 +1703,170 @@
     stopEl.className = "chip" + (g.stop && g.stop !== "ok" ? " bad" : "");
     stopEl.innerHTML = "停因 <b>" + esc(g.stop || "—") + "</b>";
     $("runid").textContent = state.run.run_id || "—";
+    renderLive(g);
+  }
+
+  /** 主视口顶部的整体运行状态：运行中带旋转加载环 + 不定进度条，避免「像卡死」。 */
+  function renderLive(g) {
+    const run = state.run;
+    const live = $("runlive");
+    const prog = $("runprogress");
+    const total = (run.order || []).length;
+    const running = String(run.status || "") === "running";
+    if (prog) prog.classList.toggle("active", running);
+    if (!live) return;
+    let cls = "", text = "", spinning = false;
+    if (!run.run_id) {
+      text = "就绪"; cls = "";
+    } else if (!total) {
+      // 还没拆出窗口：这是「规划 / 写任务书 / 等人审」阶段——必须显示阶段，不能显示「就绪」。
+      if (running) {
+        cls = "running"; spinning = true;
+        text = "规划中 · " + (derivePhase() || "准备中");
+      } else {
+        const row = statusLiveRow(run.status);
+        cls = row[0]; text = row[1];
+      }
+    } else if (running) {
+      cls = "running"; spinning = true;
+      if (g.running > 0) text = "执行中 · " + g.running + " 个窗口在执行";
+      else if (g.finished < total) text = "执行中 · 等待调度";
+      else text = "执行中";
+    } else {
+      const row = statusLiveRow(run.status);
+      cls = row[0];
+      text = row[1] + " · " + g.done + "/" + total + " 完成";
+    }
+    live.className = "run-live " + cls;
+    live.innerHTML = (spinning ? '<span class="spin"></span>' : '<span class="dot-idle"></span>') +
+      '<span class="txt">' + esc(text) + "</span>";
+    live.title = text;
+  }
+
+  function statusLiveRow(status) {
+    const map = {
+      "成功": ["done", "成功"], "失败": ["failed", "失败"],
+      "部分完成": ["paused", "部分完成"], "未完成": ["failed", "未完成"], "中断": ["paused", "中断"]
+    };
+    return map[String(status || "")] || ["", String(status || "已结束")];
+  }
+
+  // ---------- 后台日志 / 规划阶段 / 预估倒计时（避免「像卡死」） ----------
+  function fmtClock(sec) {
+    const n = Math.max(0, Math.floor(Number(sec) || 0));
+    const h = Math.floor(n / 3600), m = Math.floor((n % 3600) / 60), s = n % 60;
+    const pad = function (x) { return (x < 10 ? "0" : "") + x; };
+    return h ? (h + ":" + pad(m) + ":" + pad(s)) : (pad(m) + ":" + pad(s));
+  }
+
+  /** 这条 run 的起点毫秒：优先 started_at，缺失时用页面首次看到它的时间兜底。 */
+  function runStartMs() {
+    if (state.startMs) return state.startMs;
+    const t = Date.parse(state.run.started_at || "");
+    state.startMs = isNaN(t) ? Date.now() : t;
+    return state.startMs;
+  }
+
+  /** 从后台日志尾巴 + 窗口状态推断当前阶段（规划期尤其需要它，否则只有「进行中」）。 */
+  function derivePhase() {
+    const run = state.run;
+    const total = (run.order || []).length;
+    const running = String(run.status || "") === "running";
+    if (!running) return "";
+    if (total > 0) {
+      const g = gaugeOf(run, currentNow());
+      return g.running > 0 ? "执行中" : "调度中";
+    }
+    const lines = state.loglines || [];
+    const from = Math.max(0, lines.length - 40);
+    for (let i = lines.length - 1; i >= from; i--) {
+      const t = String(lines[i] || "");
+      if (/等待裁决\s*Q/.test(t)) return "等待人审确认";
+      if (/正在写任务书|任务书第\s*\d+\s*版/.test(t)) return "正在写任务书";
+      if (/正在理解|正在检索|加载检索模型|检索模型已加载/.test(t)) return "正在理解 / 检索";
+      if (/正在拆窗口|拆成\s*\d+\s*扇/.test(t)) return "正在拆窗口";
+    }
+    return "规划中";
+  }
+
+  function logClass(t) {
+    const s = String(t || "");
+    if (/---\s*\[Node\]/.test(s)) return "node";
+    if (/>>\s*\[Local\]|apply_unified_diff|read_source|edit_cpp|compile/.test(s)) return "tool";
+    if (/(错误|失败|异常|Traceback|Exception|error:|Error:)/.test(s)) return "err";
+    if (/(成功|通过|ok=True|\bok\b)/.test(s)) return "ok";
+    if (/\[UEMCP\]|Mcp-Session-Id/.test(s)) return "mcp";
+    if (/^\s*$/.test(s)) return "dim";
+    return "";
+  }
+
+  function renderLog() {
+    const body = $("logbody");
+    if (!body) return;
+    const lines = state.loglines || [];
+    if (!lines.length) { body.innerHTML = '<span class="empty">（暂无后台日志）</span>'; return; }
+    const frag = document.createDocumentFragment();
+    lines.slice(-400).forEach(function (t) {
+      const d = document.createElement("div");
+      d.className = "ln " + logClass(t);
+      d.textContent = t;
+      frag.appendChild(d);
+    });
+    body.innerHTML = "";
+    body.appendChild(frag);
+    const auto = $("logauto");
+    if (auto && auto.checked) body.scrollTop = body.scrollHeight;
+  }
+
+  function pollUiLog(runId) {
+    if (!runId) return Promise.resolve();
+    return getJSON("/api/uilog/" + encodeURIComponent(runId) + "?tail=400").then(function (res) {
+      state.loglines = (res && res.lines) || [];
+      const panel = $("logpanel");
+      if (panel && res && res.exists) panel.hidden = false;
+      const ph = $("logphase");
+      if (ph) ph.textContent = derivePhase() || (res && res.exists ? "—" : "");
+      renderLog();
+      return res;
+    }).catch(function () { return null; });
+  }
+
+  /** 每秒刷新：预估倒计时 + 规划期文案 + 占位卡用时。纯前端时钟，不伪造后台状态。 */
+  function updateClock() {
+    const run = state.run;
+    const running = String(run.status || "") === "running";
+    const total = (run.order || []).length;
+    const etaEl = $("g-eta");
+    if (!run.run_id || !running) {
+      if (etaEl) { etaEl.className = "chip"; etaEl.innerHTML = "用时 <b>—</b>"; etaEl.title = "粗略预估，仅供参考"; }
+      return;
+    }
+    const elapsed = Math.max(0, (Date.now() - runStartMs()) / 1000);
+    const perWin = 45, base = 20;                 // 每窗约 45s、加 20s 启动垫底（粗估，不承诺）
+    const etaTotal = total > 0 ? (base + total * perWin) : 120;
+    const remain = etaTotal - elapsed;
+    if (etaEl) {
+      etaEl.className = "chip " + (remain > 0 ? "ok" : "bad");
+      etaEl.innerHTML = "用时 <b>" + esc(fmtClock(elapsed)) + "</b> · " +
+        (remain > 0 ? ("预估剩余 ~" + esc(fmtClock(remain))) : "已超预估");
+      etaEl.title = "粗略预估（启动垫 20s + 每窗约 " + perWin + "s），仅供参考；到点仍会继续跑。";
+    }
+    if (total === 0) {
+      const live = $("runlive");
+      if (live) {
+        live.className = "run-live running";
+        live.innerHTML = '<span class="spin"></span><span class="txt">规划中 · ' + esc(derivePhase() || "准备中") + "</span>";
+        live.title = "正在规划 / 写任务书 / 等人审；后台日志见中央底部";
+      }
+    }
+    const phEl = $("plan-elapsed");
+    if (phEl) phEl.textContent = fmtClock(elapsed);
   }
 
   function cardEl(win, node, run) {
     const div = document.createElement("div");
     const st = win.state;
+    const busy = st === "running" || st === "retry" || st === "revising";
     div.className = "card st-" + st + (run.writeLock === win.id ? " locked" : "");
     div.style.left = node.x + "px";
     div.style.top = node.y + "px";
@@ -1455,6 +1885,7 @@
       '<div class="hd"><span class="wid">' + esc(win.id) + "</span>" +
         (win.role ? '<span class="role">' +
           esc(win.role === "research" ? "只读" : win.role === "review" ? "复审" : "执行") + "</span>" : "") +
+        (busy ? '<span class="spin sm" title="执行中"></span>' : "") +
         '<span class="badge st-' + esc(st) + '">' + esc(statusText(st)) + "</span></div>" +
       '<div class="ti">' + esc(win.title) + "</div>" +
       '<div class="ac">' + esc(win.action || "（无动作）") + "</div>" +
@@ -1465,7 +1896,8 @@
         (win.toolCalls > 1 ? "<span>工具" + win.toolCalls + "</span>" : "") +
       "</div>" +
       '<div class="bar"><i style="width:' + pct + '%"></i></div>' +
-      (win.step ? '<div class="step">' + esc(win.step) + "</div>" : "") +
+      (win.step ? '<div class="step">' + (busy ? '<span class="spin sm"></span> ' : "") + esc(win.step) + "</div>"
+                : (busy ? '<div class="step"><span class="spin sm"></span> 执行中…</div>' : "")) +
       (win.reasoning ? '<div class="think">' + esc(win.reasoning) + "</div>" : "") +
       '<div class="foot">' +
         (unmet ? '<div class="unmet" title="' + esc((win.unmet || []).join("；")) + '">' + esc(unmet) + "</div>" : "") +
@@ -1478,10 +1910,40 @@
     return div;
   }
 
+  /**
+   * 旧 run 记录（计划生成器修复前）里，open_level / create_level 的 depends_on 可能是空的，
+   * 路线图就会把「启动编辑器」和「打开/新建关卡」画成同层并排、彼此没有连线。这两步本身是
+   * 硬串行（没有编辑器打不开关卡）。这里只为**画图**补一条指向最近 launch_editor 的边：
+   * 不改 run 数据、不改执行顺序；新 run 生成器已带这条依赖，走这里时不会再补。
+   */
+  function withLaunchLink(wins) {
+    const out = wins.map(function (w) {
+      const copy = {};
+      for (const k in w) if (Object.prototype.hasOwnProperty.call(w, k)) copy[k] = w[k];
+      copy.depends_on = (w.depends_on || []).slice();
+      return copy;
+    });
+    const act = function (w) { return String((w && w.action) || ""); };
+    out.forEach(function (w, i) {
+      if (act(w) !== "open_level" && act(w) !== "create_level") return;
+      let launchId = "";
+      for (let j = i - 1; j >= 0; j--) {
+        if (act(out[j]) === "launch_editor") { launchId = out[j].id; break; }
+      }
+      if (!launchId) return;
+      let covered = false;
+      out.forEach(function (o) {
+        if (act(o) === "launch_editor" && w.depends_on.indexOf(o.id) >= 0) covered = true;
+      });
+      if (!covered) w.depends_on.push(launchId);
+    });
+    return out;
+  }
+
   function renderRun() {
     const run = state.run;
     const ids = run.order || [];
-    const wins = ids.map(function (id) { return run.windows[id]; });
+    const wins = withLaunchLink(ids.map(function (id) { return run.windows[id]; }));
     const canvas = $("canvas");
     const svg = $("edges");
 
@@ -1494,18 +1956,24 @@
       svg.setAttribute("width", "0");
       svg.setAttribute("height", "0");
       svg.removeAttribute("viewBox");
+      renderPlanning(run);
       renderGauge();
       renderDone();
       return;
     }
 
-    // 两趟：先量真实最高的一张，再用它重排（固定高度会裁掉思考与交接两行）。
-    let cardH = state.cardH || 0;
+    // 两趟：先用面板宽度定卡片宽度，再量真实最高的一张拿高度配额，
+    // 最后按「纵向从上到下」重排（固定高度会裁掉思考与交接两行）。
+    const wrapEl = $("canvaswrap");
+    const availW = Math.max(240, (wrapEl && wrapEl.clientWidth) || 548);
+    const pre = layout(wins, { availW: availW, cardH: state.cardH || 186 });
+    let cardH = 0;
     {
       const probe = document.createElement("div");
       probe.style.cssText = "position:absolute;left:-9999px;top:0;visibility:hidden;display:flex;flex-direction:column;";
       wins.forEach(function (w) {
-        const c = cardEl(w, { x: 0, y: 0, w: 176, h: 0, id: w.id }, run);
+        const node0 = pre.nodes[w.id] || { w: 176 };
+        const c = cardEl(w, { x: 0, y: 0, w: node0.w, h: 0, id: w.id }, run);
         c.style.position = "static";
         c.style.height = "auto";
         probe.appendChild(c);
@@ -1514,11 +1982,11 @@
       let max = 0;
       Array.prototype.forEach.call(probe.children, function (c) { max = Math.max(max, c.offsetHeight); });
       probe.remove();
-      cardH = Math.max(cardH, 120, Math.ceil(max));
+      cardH = Math.max(120, Math.ceil(max));
       state.cardH = cardH;
     }
 
-    const lay = layout(wins, { cardH: cardH });
+    const lay = layout(wins, { cardH: cardH, availW: availW });
     const W = Math.max(lay.width, 340);
     const H = Math.max(lay.height, 200);
     canvas.style.width = W + "px";
@@ -1526,6 +1994,24 @@
     svg.removeAttribute("viewBox");   // 残留 viewBox 会把坐标整体缩放（一条边都画不出来）
     svg.setAttribute("width", String(W));
     svg.setAttribute("height", String(H));
+
+    // 箭头标记：边的方向 = 依赖方向（上游 → 下游），让「谁先谁后」一眼可读。
+    const SVG_NS = "http://www.w3.org/2000/svg";
+    const defs = document.createElementNS(SVG_NS, "defs");
+    ["ok", "pending", "blocked"].forEach(function (kindKey) {
+      const mk = document.createElementNS(SVG_NS, "marker");
+      mk.setAttribute("id", "arrow-" + kindKey);
+      mk.setAttribute("viewBox", "0 0 10 10");
+      mk.setAttribute("refX", "10"); mk.setAttribute("refY", "5");
+      mk.setAttribute("markerWidth", "6"); mk.setAttribute("markerHeight", "6");
+      mk.setAttribute("orient", "auto");
+      const tip = document.createElementNS(SVG_NS, "path");
+      tip.setAttribute("d", "M0,0 L10,5 L0,10 z");
+      tip.setAttribute("fill", EDGE_STYLE[kindKey].stroke);
+      mk.appendChild(tip);
+      defs.appendChild(mk);
+    });
+    svg.appendChild(defs);
 
     wins.forEach(function (w) {
       (w.depends_on || []).forEach(function (dep) {
@@ -1540,6 +2026,7 @@
         p.setAttribute("stroke", style.stroke);
         p.setAttribute("stroke-width", String(style.width));
         if (style.dash) p.setAttribute("stroke-dasharray", style.dash);
+        p.setAttribute("marker-end", "url(#arrow-" + kind + ")");
         p.setAttribute("data-edge", dep + "->" + w.id);
         p.setAttribute("data-kind", kind);
         svg.appendChild(p);
@@ -1554,6 +2041,30 @@
 
     renderGauge();
     renderDone();
+  }
+
+  /** 规划期占位卡：还没拆出窗口时，右侧不再一片空白，明确「在规划」而不是卡死。 */
+  function renderPlanning(run) {
+    const canvas = $("canvas");
+    Array.prototype.slice.call(canvas.querySelectorAll(".plan-card")).forEach(function (c) { c.remove(); });
+    if (!run.run_id || String(run.status || "") !== "running") return;
+    if ((run.order || []).length > 0) return;
+    const card = document.createElement("div");
+    card.className = "card st-running plan-card";
+    card.style.left = "50%";
+    card.style.top = "40%";
+    card.style.transform = "translate(-50%, -50%)";
+    card.style.width = "min(340px, 84%)";
+    card.style.height = "auto";
+    card.innerHTML =
+      '<div class="hd"><span class="wid">规划</span><span class="spin sm"></span>' +
+        '<span class="badge st-running">规划中</span></div>' +
+      '<div class="ti">正在规划任务书 / 拆窗口</div>' +
+      '<div class="ac">' + esc(derivePhase() || "准备中") + "</div>" +
+      '<div class="meta"><span id="plan-elapsed">00:00</span></div>' +
+      '<div class="bar"><i style="width:32%"></i></div>' +
+      '<div class="step"><span class="spin sm"></span> 后台日志见中央底部</div>';
+    canvas.appendChild(card);
   }
 
   function renderDone() {

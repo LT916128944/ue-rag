@@ -84,7 +84,7 @@ _MD_STATUS = {
 _TERMINAL_STATES = frozenset({"done", "failed", "paused", "skipped", "waiting_external"})
 _RESUMABLE_STATES = frozenset({"queued", "running", "retry", "failed", "paused", "waiting_external", "revising", "interrupted"})
 _SCENE_WRITE_ACTIONS = frozenset({
-    "set_pickable", "move_actor", "place_actor", "place_blueprint", "place_pair",
+    "set_pickable", "move_actor", "place_actor", "place_blueprint", "place_pair", "place_light",
     "bind_blueprint", "bind_slot", "create_blueprint", "create_widget_blueprint",
 })
 _SOURCE_WRITE_ACTIONS = frozenset({"edit_cpp"})
@@ -338,6 +338,16 @@ class _RunState:
 
     def entries(self) -> list[dict]:
         return list(self.data["windows"].values())
+
+    def set_windows(self, windows: list[dict]) -> None:
+        """用最终窗口重建 windows 表。
+
+        入口 UI 在「规划 + 任务书人审」之前就建了空壳 run（让页面立刻看到这条 run 并能
+        回答任务书问题），规划完成后由 `execute_windows` 调这里把真窗口填进去。
+        """
+        self.data["windows"] = {}
+        for window in windows:
+            self.data["windows"][str(window["id"])] = self._entry(window)
 
     def window(self, wid: str) -> dict:
         return self.data["windows"][wid]
@@ -1048,8 +1058,27 @@ def _capability_gap_text(scope: dict) -> str:
     return "；".join(bits)
 
 
+def _scope_criteria(state: _RunState) -> list[dict]:
+    """各范围自己那一份条款（`scope["criteria"]`）拍平。
+
+    求解兜底 / 任务书物化路径会把合同落在**范围级**（execute_windows 里按 scoped 窗口
+    build_criteria 写进 scope["criteria"]），而 run 级 `state.data["criteria"]` 可能已被
+    stitch 把「没有窗口能证明」的条款摘空。此时若只看 run 级 + 窗口级，就会一条条款都
+    读不到，交付验收退回「没有可验证的项 ⇒ judge_failed」——真做成了被记成假失败
+    （20261117-140229 的 W3：scope A 的 c-automation 已 passed=True，集成却判 judge_failed）。"""
+    out: list[dict] = []
+    for scope in state.data.get("scopes") or []:
+        if not isinstance(scope, dict):
+            continue
+        for item in scope.get("criteria") or []:
+            if isinstance(item, dict):
+                out.append(item)
+    return out
+
+
 def _delivery_criteria(state: _RunState) -> list[dict]:
-    """「交付验收」看的条款：优先 run 级 state.data["criteria"]，没有才回落各窗口 window["criteria"]。
+    """「交付验收」看的条款：优先 run 级 state.data["criteria"]，没有才回落各窗口 window["criteria"]，
+    再没有才回落各范围 scope["criteria"]（brief 物化路径把合同放在这里）。
     只算「所属窗口都跑完（done）」的条款：一扇失败的窗口可能已经带着通过的 build 判词
     （20261021-195220 那个空转扇：编译 exit 0 但源码零改动），那种条款不能给集成矩阵撑出
     ok=True —— check_harness 的老口径「只有不适用项的矩阵永远不算全过」靠的就是它保持 None。"""
@@ -1060,6 +1089,8 @@ def _delivery_criteria(state: _RunState) -> list[dict]:
                 item for item in ((entry.get("window") or {}).get("criteria") or [])
                 if isinstance(item, dict)
             )
+    if not rows:
+        rows = _scope_criteria(state)
     done = {str(entry.get("id") or "") for entry in state.entries() if entry.get("state") == "done"}
     out: list[dict] = []
     for item in rows:
@@ -1082,6 +1113,8 @@ def _all_criteria(state: _RunState) -> list[dict]:
                 item for item in ((entry.get("window") or {}).get("criteria") or [])
                 if isinstance(item, dict)
             )
+    if not rows:
+        rows = _scope_criteria(state)
     return rows
 
 
@@ -1928,7 +1961,8 @@ def _scope_has_change_evidence(state: _RunState, scope: dict) -> bool:
 
 
 def execute_windows(query: str, complete=None, echo=print, emit=None, planned=None, windows=None,
-                    brief=None, scopes=None, resume_state=None, decide=None, max_workers=3):
+                    brief=None, scopes=None, resume_state=None, decide=None, max_workers=3,
+                    pre_state=None, pre_run_id=""):
     """拆窗口 → 事件流与机读状态 → 只读并行调度 → 矩阵集成 → 台账与归档。
     兼容旧调用：execute_windows(query, complete=..., echo=...)。集成不叫模型。"""
     if resume_state is not None:
@@ -1949,12 +1983,29 @@ def execute_windows(query: str, complete=None, echo=print, emit=None, planned=No
         if planned.get("planner_text"):
             echo("规划者原文：" + str(planned["planner_text"]).replace("\n", " ")[:500])
         source = str(planned.get("source") or ("brief" if brief else ""))
-        run_id = datetime.now().strftime("%Y%m%d-%H%M%S")
         mark_dangling(windows)
-        state = _RunState(
-            run_id, query, source, windows,
-            review=(brief or {}).get("review") or {}, brief=brief, scopes=scopes,
-        )
+        if pre_state is not None:
+            # 入口 UI 在规划/任务书人审之前就建了空壳 run：这里复用它，不再另起 run_id，
+            # 否则一次输入会落出两条 run（页面认到的和真正执行的对不上）。
+            run_id = str(pre_run_id or pre_state.run_id)
+            state = pre_state
+            state.run_id = run_id
+            state.path = runs_json_path(run_id)
+            os.environ["UE_RAG_RUN_ID"] = str(run_id)
+            state.data["query"] = query
+            state.data["source"] = source
+            state.data["review"] = (brief or {}).get("review") or state.data.get("review") or {}
+            state.data["brief"] = brief if brief is not None else state.data.get("brief")
+            state.data["scopes"] = list(scopes) if scopes is not None else (state.data.get("scopes") or [])
+            state.set_windows(windows)
+            state.data["status"] = "running"
+            state.save()
+        else:
+            run_id = datetime.now().strftime("%Y%m%d-%H%M%S")
+            state = _RunState(
+                run_id, query, source, windows,
+                review=(brief or {}).get("review") or {}, brief=brief, scopes=scopes,
+            )
 
     path = runs_md_path(run_id)
     events = _EventBus(run_id, emit=emit)
@@ -2738,6 +2789,60 @@ def _decide_window(window: dict, entry: dict) -> str:
     return "stop"
 
 
+def _fillable_needs(window: dict, entry: dict) -> str:
+    """这扇暂停是不是「缺信息、能被 r 补」的一类：返回 path / source / filter，否则 ""。"""
+    if _filter_name_pause(window, entry):
+        return "filter"
+    parts: list[str] = []
+    for item in (entry, window):
+        if isinstance(item, dict):
+            parts.append(str(item.get("error") or ""))
+            nested = item.get("window")
+            if isinstance(nested, dict):
+                parts.append(str(nested.get("error") or ""))
+    err = " ".join(parts)
+    action = str(window.get("action") or entry.get("action") or "")
+    fillable = ("只给一次：r" in err) or ("只给一次 r" in err) or ("请用 r" in err)
+    if action == "edit_cpp" or "Private/" in err or "Public/" in err:
+        return "source" if (fillable or action == "edit_cpp") else ""
+    return "path" if fillable else ""
+
+
+def _decide_window_model_first(window: dict, entry: dict, query: str = "") -> str:
+    """`_decide_window` 的「模型优先」包装：缺路径/蓝图/源文件/过滤器时，先让模型补一次。
+
+    补出一个形状合法的值就当成人敲了 `r <值>` 直接返回（下游补路径逻辑完全相同）；
+    补不出（或离线检查把 `_complete_live` 换成抛异常的替身）→ 原样退回 `_decide_window` 问人，
+    人工裁决这条路一个字没改。目的只是把「能问模型就解决」的那部分从人身上挪走。
+    """
+    try:
+        needs = _fillable_needs(window, entry)
+        if needs:
+            from agent import model_fill
+
+            slots: dict = {}
+            if isinstance(window.get("slots"), dict):
+                slots.update(window["slots"])
+            nested = entry.get("window")
+            if isinstance(nested, dict) and isinstance(nested.get("slots"), dict):
+                for key, value in nested["slots"].items():
+                    slots.setdefault(key, value)
+            err = " ".join(
+                str(item.get("error") or "") for item in (entry, window) if isinstance(item, dict)
+            ).strip()
+            value = model_fill.fill_missing(
+                query, needs, error=err,
+                action=str(window.get("action") or entry.get("action") or ""),
+                slots=slots,
+            )
+            if value:
+                print(f"\n[model-fill] 缺 {needs}，模型补：{value}（先问模型，不再停下问人）", flush=True)
+                return value
+    except Exception:
+        pass
+    return _decide_window(window, entry)
+
+
 def _resume_command(query: str) -> str | None:
     """REPL 里的续接指令：:resume / :r / 误敲的 --resume / 裸的 resume，后接 run id 或 latest。
     裸 resume 只在后跟 latest 或 run id 形状（YYYYMMDD-HHMMSS）时才算指令，普通句子不受影响。
@@ -2775,7 +2880,8 @@ def _do_resume(data: dict, board, echo, emit) -> None:
         board.start()
     try:
         code, path = execute_windows(
-            str(data.get("query") or ""), resume_state=data, echo=echo, emit=emit, decide=_decide_window,
+            str(data.get("query") or ""), resume_state=data, echo=echo, emit=emit,
+            decide=lambda w, e: _decide_window_model_first(w, e, str(data.get("query") or "")),
         )
     finally:
         if board is not None:
@@ -2951,6 +3057,37 @@ def _run_query(query: str, board, echo, emit) -> tuple[int, Path | None]:
         board.reset(query)
         board.set_phase("正在拆窗口")
         board.start()
+
+    # 入口 UI 驱动时，先在「规划 + 任务书人审」之前落一条空壳 run。
+    # 否则这两段（动辄几十秒到十几分钟）里 /api/runs 没有这条 run，页面等 12 秒就报
+    # 「没等到新 run」；而任务书人审的 question 事件也没有 run_id / 事件出口可落，收件箱
+    # 更无处领取（run_id 为空 → 永远匹配不上），进程一直空转到 600 秒超时才放弃。
+    # 先建空壳后：页面立刻看到这条 run 并订阅事件流，任务书问题也能弹到决策面板。
+    from agent import ui_ask as _ui_ask
+
+    run_id = datetime.now().strftime("%Y%m%d-%H%M%S")
+    state = _RunState(run_id, query, "", [])
+    state.save()
+    events = _EventBus(run_id, emit=emit)
+    _ui_ask.attach(run_id, events.emit)
+
+    def _finish_unrun(status: str, sentence: str, summary: str, stop_reason: str) -> None:
+        """任务书被放弃 / 缺口未确认 / 异常：把空壳 run 收口，别让页面一直显示「运行中」。"""
+        state.data["status"] = status
+        state.data["sentence"] = sentence
+        state.data["integration"] = {
+            "ok": False, "status": status, "sentence": sentence, "summary": summary,
+        }
+        try:
+            state.save()
+        except Exception:
+            pass
+        try:
+            events.emit("integration", ok=False, status=status, summary=summary)
+            events.emit("run_end", status=status, ok=False, stop_reason=stop_reason)
+        except Exception:
+            pass
+
     try:
         planned = plan_windows(query)
         windows = planned.get("windows") or []
@@ -3021,6 +3158,7 @@ def _run_query(query: str, board, echo, emit) -> tuple[int, Path | None]:
                     board.set_review(review_text)
                 if status == "abort":
                     print("任务书被放弃，这次不执行。", flush=True)
+                    _finish_unrun("中断", "aborted", "任务书被放弃，这次不执行。", "paused")
                     return 1, md
                 windows, scopes = materialize_scopes(
                     brief, candidates=windows, complete=_decompose_complete,
@@ -3033,6 +3171,7 @@ def _run_query(query: str, board, echo, emit) -> tuple[int, Path | None]:
                         board.set_review("审阅：缺口未确认，未执行")
                     # 缺口要落盘：人拒绝之后的记录仍须说清「哪段没做、为什么」
                     _record_declined_gaps(query, md, brief, scopes, gaps, emit)
+                    _finish_unrun("失败", "failed", "能力缺口未确认，未执行。", "paused")
                     return 1, md
                 if board is not None:
                     board.set_phase("执行")
@@ -3041,7 +3180,8 @@ def _run_query(query: str, board, echo, emit) -> tuple[int, Path | None]:
                         board.start()
                 return execute_windows(
                     query, planned=planned, windows=windows, brief=brief, scopes=scopes,
-                    echo=echo, emit=emit, decide=_decide_window,
+                    echo=echo, emit=emit, decide=lambda w, e: _decide_window_model_first(w, e, query),
+                    pre_state=state, pre_run_id=run_id,
                 )
         if board is not None:
             board.set_phase("执行")
@@ -3062,7 +3202,12 @@ def _run_query(query: str, board, echo, emit) -> tuple[int, Path | None]:
                 planned = dict(planned)
                 planned["windows"] = fan
                 planned["source"] = "solver-fallback"
-        return execute_windows(query, planned=planned, echo=echo, emit=emit, decide=_decide_window)
+        return execute_windows(query, planned=planned, echo=echo, emit=emit,
+                               decide=lambda w, e: _decide_window_model_first(w, e, query),
+                               pre_state=state, pre_run_id=run_id)
+    except BaseException as exc:
+        _finish_unrun("失败", "failed", f"{type(exc).__name__}: {exc}", "failed")
+        raise
     finally:
         if board is not None and board.running():
             board.stop()

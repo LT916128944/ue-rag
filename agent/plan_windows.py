@@ -232,6 +232,8 @@ def _default_title(action: str, slots: dict) -> str:
         return "移动 Actor"
     if action == "place_actor":
         return "放进场景"
+    if action == "place_light":
+        return f"放一盏{slots.get('light_type') or '灯'}"
     if action == "place_batch":
         return f"按设计图批量放置 {slots.get('blueprint') or '蓝图'}"
     if action == "remove_batch":
@@ -780,6 +782,10 @@ def resolve_slots(action: str, slots: dict, text: str = "") -> dict:
 
     if action == "remove_batch":
         # targets 的逐条匹配（名字 + 坐标唯一）在执行器里做：筛不出唯一一条就整批不删
+        return {"ok": True}
+
+    if action == "place_light":
+        # 灯的类型只做 token 记录，引擎类由执行器按 token 解析；没有路径要在这里归地。
         return {"ok": True}
 
     slot_name = "blueprint" if action == "place_actor" else "target"
@@ -1570,6 +1576,25 @@ def windows_from_rules(steps: list[dict]) -> list[dict]:
                 ):
                     deps = [f"W{prev}"]
                     break
+        if action == "place_light":
+            # 放灯必须排在“启动/打开关卡”之后：否则会在当前（可能是别的）关卡里放灯。
+            # 20261116-235619 实测：open_level 失败时 place_light 仍往下跑，把灯放进了错误关卡。
+            for prev in range(index - 1, 0, -1):
+                if actions[prev - 1] in ("launch_editor", "open_level", "create_level"):
+                    if f"W{prev}" not in deps:
+                        deps.append(f"W{prev}")
+                    break
+        if action in ("open_level", "create_level"):
+            # 打开/新建关卡都要用「已经在跑的编辑器」：接在最近的 launch_editor 后面。
+            # 不接的话，launch（空依赖）和 open/create（空依赖）会被当成同层并行，
+            # run_windows 会在同一轮一起派发（冷启动时 open_level 先跑去连 MCP 就连不上）；
+            # 路线图也会把这两扇画成并排、彼此没有连线。20261117-122532 实测。
+            # 只接 launch_editor：open_level 的关卡归属仍由「名字数据流」按同目标补，不抢它的边。
+            for prev in range(index - 1, 0, -1):
+                if actions[prev - 1] == "launch_editor":
+                    if f"W{prev}" not in deps:
+                        deps.append(f"W{prev}")
+                    break
         # 名字数据流：同目标的扇才有依赖，独立读写之间不虚连
         for prev in range(1, index):
             if stems and stems & stems_list[prev - 1] and f"W{prev}" not in deps:
@@ -1598,6 +1623,10 @@ def windows_from_rules(steps: list[dict]) -> list[dict]:
         if action == "open_level":
             window["slots"] = dict(step.get("slots") or {})
             window.update(save=False, pie=False)
+        if action == "place_light":
+            # 放灯扇要把 light_type / location 带进窗口，执行层才拿得到槽位；放灯不 PIE、按策略保存。
+            window["slots"] = dict(step.get("slots") or {})
+            window.update(save=bool(step.get("save", True)), pie=False)
         if action == "compile_project":
             # 编译本身不进 PIE。窗口 pie 为真会让记录写成「PIE=进入」，哪怕测试被跳过。
             window["pie"] = False
@@ -1677,8 +1706,19 @@ def _is_reference_clause(clause: str) -> bool:
 
 
 def _clause_rows(query: str, steps: list[dict]) -> list[dict]:
-    """半句账本。constraint 是限制，covered 是规则已经认领，uncovered 交给模型。"""
-    clauses = [part.strip() for part in re.split(r"[，,；;。]", query or "") if part.strip()]
+    """半句账本。constraint 是限制，covered 是规则已经认领，uncovered 交给模型。
+
+    切句走 `agent/connectives.split`：标点之外也把「然后 / 并且 / 顺便…」当切点并剥掉。
+    否则「，然后编译工程」这类半句会以一个「然」字残留被判没盖住，整句掉给模型
+    （20261117 连接词层：零模型）。词表缺失时 split 退化为只按标点切，与旧行为一致。
+    """
+    from agent import connectives
+
+    clauses = [row["clause"] for row in connectives.split(query or "")]
+    # 连接词切句可能留下纯填充字的残句（如「并最后测试」切成「并」+「测试」里的「并」）。
+    # 纯填充字半句不是需求：丢掉，免得它被当成「已覆盖」触发「保留规则窗再合并」，
+    # 给理解器路径多塞一扇重复窗（20261117 check_upgrade 的 compile-then-place 回归）。
+    clauses = [clause for clause in clauses if not _residue_blank(clause)]
     if not clauses and str(query or "").strip():
         clauses = [str(query).strip()]
     rows = []
@@ -1723,12 +1763,19 @@ _HUD_WINDOW_ACTIONS = frozenset({
 })
 _HUD_CLAUSE_RE = re.compile(
     r"血条|血量|子弹|弹药|手雷|载具|时速|上下车|上车|下车|HUD|UMG|视口|控件|满血|扣血|占位|准星"
+    # 血条箱的「上限/满血」与「样式自定义」半句也是这条链能接住的（20261117-140229：
+    # 「加一个血条，上限100，样式你自己定义，可仿照常见FPS的设计」曾因这三半句判 uncovered
+    # 整句掉进通用受控求解）。只在这条链声明了 HUD 动作时才生效，不影响别的路径。
+    r"|上限|样式|设计|仿照|自定义|常见"
 )
 
 
 def _clause_accounted(clause: str, steps: list[dict]) -> bool:
+    from agent import connectives
     from agent.supervise import _is_cpp_edit, _is_source_fix, _wants_scene_move
 
+    # 连接词不是需求：先剥掉再判残句（_clause_rows 已剥过；这里兜住直接调用方传原文的情况）。
+    clause = connectives.strip(clause)
     if _residue_blank(_strip_owned_spans(clause, steps)):
         return True
     actions = {_action_of(step) for step in steps}
@@ -1741,6 +1788,11 @@ def _clause_accounted(clause: str, steps: list[dict]) -> bool:
     if ({"set_pickable", "judge_pickup", "check_pickup"} & actions) and re.search(r"拾取|可交互|标签|交互", clause):
         return True
     if ({"place_actor", "place_blueprint", "place_batch"} & actions) and re.search(r"放进|放入|放置|摆", clause):
+        return True
+    # 放灯半句（「在关卡中世界原点添加一个点光源」）：这半句是需求，place_light 扇已经接住了它。
+    # 缺这条会把「加灯」判成 uncovered → 整句被判没盖住 → 掉进 solver-fallback（受控求解收口是
+    # automation，加灯产不出过滤器，必诚实失败；20261116-232643 实测）。
+    if "place_light" in actions and re.search(r"点光源|聚光灯|方向光|矩形光|面光源|灯|光源", clause):
         return True
     # 上一扇的槽位续句：名字、L_、/Game。不是新的要求。
     if re.fullmatch(r"[\s名字为叫叫做：:，,._/A-Za-z0-9\-]+", clause) and re.search(r"L_|/Game|名字|名为", clause):

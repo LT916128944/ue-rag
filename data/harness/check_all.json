@@ -4,241 +4,259 @@
       "name": "check_routes",
       "script": "eval/check_routes.py",
       "exit": 0,
-      "seconds": 158.389
+      "seconds": 56.972
     },
     {
       "name": "check_backend",
       "script": "eval/check_backend.py",
       "exit": 0,
-      "seconds": 1.484
+      "seconds": 1.225
     },
     {
       "name": "check_backend_health",
       "script": "eval/check_backend_health.py",
       "exit": 0,
-      "seconds": 4.714
+      "seconds": 4.777
     },
     {
       "name": "check_producer_judges",
       "script": "eval/check_producer_judges.py",
       "exit": 0,
-      "seconds": 0.193
+      "seconds": 0.16
     },
     {
       "name": "check_write_rollback",
       "script": "eval/check_write_rollback.py",
       "exit": 0,
-      "seconds": 0.348
+      "seconds": 0.218
     },
     {
       "name": "check_criteria_binding",
       "script": "eval/check_criteria_binding.py",
       "exit": 0,
-      "seconds": 0.125
+      "seconds": 0.088
     },
     {
       "name": "check_backend_coverage",
       "script": "eval/check_backend_coverage.py",
       "exit": 0,
-      "seconds": 1.22
+      "seconds": 1.006
     },
     {
       "name": "check_fps_hud",
       "script": "eval/check_fps_hud.py",
       "exit": 0,
-      "seconds": 15.431
+      "seconds": 14.338
+    },
+    {
+      "name": "check_hud_single_readout",
+      "script": "eval/check_hud_single_readout.py",
+      "exit": 0,
+      "seconds": 0.79
     },
     {
       "name": "check_widget_event_binding",
       "script": "eval/check_widget_event_binding.py",
       "exit": 0,
-      "seconds": 0.075
+      "seconds": 0.08
     },
     {
       "name": "check_widget_slot_gaps",
       "script": "eval/check_widget_slot_gaps.py",
       "exit": 0,
-      "seconds": 0.073
+      "seconds": 0.076
     },
     {
       "name": "check_solver_plan_retry",
       "script": "eval/check_solver_plan_retry.py",
       "exit": 0,
-      "seconds": 0.122
+      "seconds": 0.103
     },
     {
       "name": "check_llm_backoff",
       "script": "eval/check_llm_backoff.py",
       "exit": 0,
-      "seconds": 0.6
+      "seconds": 0.612
     },
     {
       "name": "check_info_layer",
       "script": "eval/check_info_layer.py",
       "exit": 0,
-      "seconds": 0.099
+      "seconds": 0.082
     },
     {
       "name": "check_architecture",
       "script": "eval/check_architecture.py",
       "exit": 0,
-      "seconds": 0.374
+      "seconds": 0.419
     },
     {
       "name": "check_schema",
       "script": "eval/check_schema.py",
       "exit": 0,
-      "seconds": 0.073
+      "seconds": 0.082
     },
     {
       "name": "check_risk",
       "script": "eval/check_risk.py",
       "exit": 0,
-      "seconds": 0.231
+      "seconds": 0.239
     },
     {
       "name": "check_automation",
       "script": "eval/check_automation.py",
       "exit": 0,
-      "seconds": 0.194
+      "seconds": 0.184
     },
     {
       "name": "check_harness",
       "script": "eval/check_harness.py",
       "exit": 0,
-      "seconds": 34.266
+      "seconds": 5.888
     },
     {
       "name": "check_stitch",
       "script": "eval/check_stitch.py",
       "exit": 0,
-      "seconds": 0.099
+      "seconds": 0.092
     },
     {
       "name": "check_upgrade",
       "script": "eval/check_upgrade.py",
       "exit": 0,
-      "seconds": 40.749
+      "seconds": 42.104
     },
     {
       "name": "check_create_level",
       "script": "eval/check_create_level.py",
       "exit": 0,
-      "seconds": 0.851
+      "seconds": 0.803
+    },
+    {
+      "name": "check_roadmap_deps",
+      "script": "eval/check_roadmap_deps.py",
+      "exit": 0,
+      "seconds": 0.765
     },
     {
       "name": "check_implement_grenade",
       "script": "eval/check_implement_grenade.py",
       "exit": 0,
-      "seconds": 0.104
+      "seconds": 0.085
     },
     {
       "name": "check_build_error_loop",
       "script": "eval/check_build_error_loop.py",
       "exit": 0,
-      "seconds": 0.176
+      "seconds": 0.167
     },
     {
       "name": "check_solver_budget",
       "script": "eval/check_solver_budget.py",
       "exit": 0,
-      "seconds": 0.111
+      "seconds": 0.101
     },
     {
       "name": "check_solve_gap_fallback",
       "script": "eval/check_solve_gap_fallback.py",
       "exit": 0,
-      "seconds": 0.091
+      "seconds": 0.095
     },
     {
       "name": "check_solver_distill",
       "script": "eval/check_solver_distill.py",
       "exit": 0,
-      "seconds": 0.127
+      "seconds": 0.102
     },
     {
       "name": "check_solver_patch",
       "script": "eval/check_solver_patch.py",
       "exit": 0,
-      "seconds": 0.167
+      "seconds": 0.116
     },
     {
       "name": "check_orphan_run",
       "script": "eval/check_orphan_run.py",
       "exit": 0,
-      "seconds": 0.116
+      "seconds": 0.12
     },
     {
       "name": "check_capability_surface",
       "script": "eval/check_capability_surface.py",
       "exit": 0,
-      "seconds": 0.081
+      "seconds": 0.079
     },
     {
       "name": "check_capability_gap",
       "script": "eval/check_capability_gap.py",
       "exit": 0,
-      "seconds": 1.516
+      "seconds": 1.571
     },
     {
       "name": "check_archive_fidelity",
       "script": "eval/check_archive_fidelity.py",
       "exit": 0,
-      "seconds": 1.354
+      "seconds": 1.343
     },
     {
       "name": "check_integrate_verdict",
       "script": "eval/check_integrate_verdict.py",
       "exit": 0,
-      "seconds": 10.257
+      "seconds": 49.682
+    },
+    {
+      "name": "check_integrate_scope_criteria",
+      "script": "eval/check_integrate_scope_criteria.py",
+      "exit": 0,
+      "seconds": 0.989
     },
     {
       "name": "check_failure_192858",
       "script": "eval/check_failure_192858.py",
       "exit": 0,
-      "seconds": 2.845
+      "seconds": 2.84
     },
     {
       "name": "check_dsh_contract",
       "script": "eval/check_dsh_contract.py",
       "exit": 0,
-      "seconds": 0.205
+      "seconds": 0.198
     },
     {
       "name": "check_verify_spec",
       "script": "eval/check_verify_spec.py",
       "exit": 0,
-      "seconds": 0.251
+      "seconds": 0.23
     },
     {
       "name": "check_dsh_lock",
       "script": "eval/check_dsh_lock.py",
       "exit": 0,
-      "seconds": 7.033
+      "seconds": 6.227
     },
     {
       "name": "check_dsh_costs",
       "script": "eval/check_dsh_costs.py",
       "exit": 0,
-      "seconds": 0.107
+      "seconds": 0.088
     },
     {
       "name": "check_catalog_parity",
       "script": "eval/check_catalog_parity.py",
       "exit": 0,
-      "seconds": 0.474
+      "seconds": 0.502
     },
     {
       "name": "check_evidence_attribution",
       "script": "eval/check_evidence_attribution.py",
       "exit": 0,
-      "seconds": 2.358
+      "seconds": 2.391
     },
     {
       "name": "check_escalation",
       "script": "eval/check_escalation.py",
       "exit": 0,
-      "seconds": 0.092
+      "seconds": 0.097
     },
     {
       "name": "check_review_coverage",
@@ -250,85 +268,217 @@
       "name": "check_candidate_aging",
       "script": "eval/check_candidate_aging.py",
       "exit": 0,
-      "seconds": 0.136
+      "seconds": 0.086
     },
     {
       "name": "check_lexicon",
       "script": "eval/check_lexicon.py",
       "exit": 0,
-      "seconds": 0.096
+      "seconds": 0.093
     },
     {
       "name": "check_plan_parity",
       "script": "eval/check_plan_parity.py",
       "exit": 1,
-      "seconds": 14.478
+      "seconds": 14.719
     },
     {
       "name": "check_bench_provenance",
       "script": "eval/check_bench_provenance.py",
       "exit": 0,
-      "seconds": 0.12
+      "seconds": 0.104
     },
     {
       "name": "check_distill",
       "script": "eval/check_distill.py",
       "exit": 0,
-      "seconds": 14.817
+      "seconds": 13.937
     },
     {
       "name": "check_scoring_integrity",
       "script": "eval/check_scoring_integrity.py",
       "exit": 0,
-      "seconds": 64.378
+      "seconds": 67.034
     },
     {
       "name": "check_statuses",
       "script": "eval/check_statuses.py",
       "exit": 0,
-      "seconds": 0.649
+      "seconds": 0.763
     },
     {
       "name": "check_bench_audit",
       "script": "eval/check_bench_audit.py",
       "exit": 1,
-      "seconds": 0.082
+      "seconds": 0.075
     },
     {
       "name": "check_entry_spawn",
       "script": "eval/check_entry_spawn.py",
       "exit": 0,
-      "seconds": 0.356
+      "seconds": 0.358
     },
     {
       "name": "check_entry_paths",
       "script": "eval/check_entry_paths.py",
       "exit": 0,
-      "seconds": 0.844
+      "seconds": 0.803
     },
     {
       "name": "check_observer_labels",
       "script": "eval/check_observer_labels.py",
       "exit": 0,
-      "seconds": 0.306
+      "seconds": 0.326
     },
     {
       "name": "check_entry_questions",
       "script": "eval/check_entry_questions.py",
       "exit": 0,
-      "seconds": 1.349
+      "seconds": 1.354
     },
     {
       "name": "check_entry_drive",
       "script": "eval/check_entry_drive.py",
       "exit": 0,
-      "seconds": 0.381
+      "seconds": 0.384
+    },
+    {
+      "name": "check_entry_send",
+      "script": "eval/check_entry_send.py",
+      "exit": 0,
+      "seconds": 0.312
+    },
+    {
+      "name": "check_entry_brief_confirm",
+      "script": "eval/check_entry_brief_confirm.py",
+      "exit": 0,
+      "seconds": 0.565
+    },
+    {
+      "name": "check_entry_run_scaffold",
+      "script": "eval/check_entry_run_scaffold.py",
+      "exit": 0,
+      "seconds": 0.095
+    },
+    {
+      "name": "check_entry_ui_feedback",
+      "script": "eval/check_entry_ui_feedback.py",
+      "exit": 0,
+      "seconds": 0.308
+    },
+    {
+      "name": "check_entry_launch",
+      "script": "eval/check_entry_launch.py",
+      "exit": 0,
+      "seconds": 0.638
+    },
+    {
+      "name": "check_entry_bat",
+      "script": "eval/check_entry_bat.py",
+      "exit": 0,
+      "seconds": 0.315
+    },
+    {
+      "name": "check_place_light",
+      "script": "eval/check_place_light.py",
+      "exit": 0,
+      "seconds": 0.785
+    },
+    {
+      "name": "check_connectives",
+      "script": "eval/check_connectives.py",
+      "exit": 0,
+      "seconds": 0.777
+    },
+    {
+      "name": "check_cpp_edit_scene",
+      "script": "eval/check_cpp_edit_scene.py",
+      "exit": 0,
+      "seconds": 0.135
+    },
+    {
+      "name": "check_model_fill",
+      "script": "eval/check_model_fill.py",
+      "exit": 0,
+      "seconds": 0.087
+    },
+    {
+      "name": "check_spec_pipeline",
+      "script": "eval/check_spec_pipeline.py",
+      "exit": 0,
+      "seconds": 0.059
+    },
+    {
+      "name": "check_spec_toolmap",
+      "script": "eval/check_spec_toolmap.py",
+      "exit": 0,
+      "seconds": 0.157
+    },
+    {
+      "name": "check_spec_boundary",
+      "script": "eval/check_spec_boundary.py",
+      "exit": 0,
+      "seconds": 0.064
+    },
+    {
+      "name": "check_umg_spec",
+      "script": "eval/check_umg_spec.py",
+      "exit": 0,
+      "seconds": 0.063
+    },
+    {
+      "name": "check_graph_spec",
+      "script": "eval/check_graph_spec.py",
+      "exit": 0,
+      "seconds": 0.063
+    },
+    {
+      "name": "check_animgraph_spec",
+      "script": "eval/check_animgraph_spec.py",
+      "exit": 0,
+      "seconds": 0.063
+    },
+    {
+      "name": "check_material_spec",
+      "script": "eval/check_material_spec.py",
+      "exit": 0,
+      "seconds": 0.059
+    },
+    {
+      "name": "check_niagara_spec",
+      "script": "eval/check_niagara_spec.py",
+      "exit": 0,
+      "seconds": 0.065
+    },
+    {
+      "name": "check_animation_spec",
+      "script": "eval/check_animation_spec.py",
+      "exit": 0,
+      "seconds": 0.066
+    },
+    {
+      "name": "check_sequencer_spec",
+      "script": "eval/check_sequencer_spec.py",
+      "exit": 0,
+      "seconds": 0.061
+    },
+    {
+      "name": "check_postprocess_spec",
+      "script": "eval/check_postprocess_spec.py",
+      "exit": 0,
+      "seconds": 0.06
+    },
+    {
+      "name": "check_cpp_spec",
+      "script": "eval/check_cpp_spec.py",
+      "exit": 0,
+      "seconds": 0.064
     },
     {
       "name": "check_scorecard",
       "script": "eval/check_scorecard.py",
       "exit": 0,
-      "seconds": 34.701
+      "seconds": 39.599
     }
   ]
 }

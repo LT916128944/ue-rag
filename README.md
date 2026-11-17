@@ -41,7 +41,7 @@ copy .env.example .env
 | `UE_SOLVER_META_CALLS` | 12 | 注释掉。discover / describe / 列测试走这份额度；describe 命中 `capability_surface.json` 的 params 缓存时不占 |
 | `UE_SOLVER_NAMESPACES` | `editor,mesh,niagara,blueprint,material` | 注释掉。monolith 没有 `asset` namespace，别再往里放 |
 
-`UE_EDITOR_CMD`、`UE_PROJECT`、`UE_SOURCE_ROOT` 空着就用 `config.py` 的本机路径。换机器再改。
+`UE_EDITOR_CMD`、`UE_PROJECT`、`UE_SOURCE_ROOT`、`UE_MONOLITH_ROOT` 空着就用 `config.py` 的本机路径（本机 `UE_MONOLITH_ROOT` 是 `E:\UEProject\AIWork\RAG\monolith-master`）。换机器再改。
 
 任务没写 `save` / `pie` 时跟随上面两个缺省，缺省都会保存、都会允许 PIE。要关掉，任务里写 `save: false` / `pie: false`，或 CLI 加 `--no-save` / `--no-pie`。
 
@@ -60,9 +60,35 @@ copy .env.example .env
 
 `/api/health` 返回 `ok`、`model`、`mcp_url`、`mcp_up`，以及 `backend`、`index_present`、`circuit_closed`、`checkpoint_writable`、`disk_free_mb`。后五项各带 `ok` 和 `reason`。不调用模型。本机把 CI 里已有的离线检查串起来用 `python eval/check_all.py`。分数由 `python eval/check_scorecard.py` 按证据写入 `data/harness/scorecard.json`。成本按 `caller` 分列，没有行的入口不填 0。
 
-浏览器侧的 HTML 入口层是 `server/entry.py`（`python server/entry.py --port 8011`，127.0.0.1:8011），入口页在 `server/static/entry.html`（本仓库内，页面由本服务提供，`GET /` 直接读那个文件）：目录侧边栏（`/api/tree?path=` 一次只列一层，屏蔽 `Binaries / Intermediate / Saved / DerivedDataCache / .vs`）、拖拽附件、装配预览、运行面板（卡片与连线来自 `data/runs/**/*.json` 与 `data/events/<run_id>.jsonl`）、决策面板（只在出现 `question` 事件时弹出）。**读**走 `/api/runs`、`/api/run/<id>`、`/api/stream/<id>`、`/api/tree`、`/api/health`、`/api/questions/<id>`；**写**只有三个文件——`data/ui/req/<ts>.txt`（`POST /api/run` 写一行需求，再 `subprocess` 起对应模式的 agent 脚本；多窗口带 `--plain --force`）、`data/ui/inbox/<run_id>.jsonl`（`POST /api/answer` 一行一条裁决）、`data/ui/logs/<ts>.log`。装配预览 `POST /api/preview` 仍是纯函数（`server/prompt_builder.py`）。这一层只 import `config/core/server`，不 import `agent`——`run_guard` 的活 run 互斥、`UE_RAG_STDIN` 的原子改名、`editor_lock` 的跨进程锁都长在「一个进程一条 run」上，UI 只喂文件、只读文件。`--force` 由 `_spawn` 按请求体透传，改名（`.consumed`）在 `subprocess` 打开之前完成，`--plain` 只挂多窗口那条路——三条都由 `eval/check_entry_spawn.py` 钉住（原 `check_start_bat.py` 钉的是旧版菜单式 `start.bat`，那份菜单已删除；现在的 `AIAgentProject/start.bat` 只做启动，不含任何菜单与 run 逻辑）。
+浏览器侧的 HTML 入口层是 `server/entry.py`（`python server/entry.py --port 8011`，127.0.0.1:8011），入口页在 `server/static/entry.html`（本仓库内，页面由本服务提供，`GET /` 直接读那个文件）：目录侧边栏（`/api/tree?path=` 一次只列一层，屏蔽 `Binaries / Intermediate / Saved / DerivedDataCache / .vs`）、拖拽附件、装配预览、运行面板（卡片与连线来自 `data/runs/**/*.json` 与 `data/events/<run_id>.jsonl`）、决策面板（只在出现 `question` 事件时弹出）。**读**走 `/api/runs`、`/api/run/<id>`、`/api/stream/<id>`、`/api/tree`、`/api/health`、`/api/questions/<id>`、`/api/uilog/<id>`；**写**只有三个文件——`data/ui/req/<ts>.txt`（`POST /api/run` 写一行需求，再 `subprocess` 起对应模式的 agent 脚本；多窗口带 `--plain --force`）、`data/ui/inbox/<run_id>.jsonl`（`POST /api/answer` 一行一条裁决）、`data/ui/logs/<ts>.log`。装配预览 `POST /api/preview` 仍是纯函数（`server/prompt_builder.py`）。这一层只 import `config/core/server`，不 import `agent`——`run_guard` 的活 run 互斥、`UE_RAG_STDIN` 的原子改名、`editor_lock` 的跨进程锁都长在「一个进程一条 run」上，UI 只喂文件、只读文件。`--force` 由 `_spawn` 按请求体透传，改名（`.consumed`）在 `subprocess` 打开之前完成，`--plain` 只挂多窗口那条路——三条都由 `eval/check_entry_spawn.py` 钉住（原 `check_start_bat.py` 钉的是旧版菜单式 `start.bat`，那份菜单已删除；现在的 `AIAgentProject/start.bat` 只做启动，不含任何菜单与 run 逻辑）。
 
 裁决通道在 `agent/ui_ask.py`，四条口径：`question` 事件发在 `input()` **之前**（带 `question_id/kind/window/prompt/options[]/default`）；`options` 与 `_pause_hint` 的同一份字面生成，UI 按钮与终端提示不会漂移；收件箱按 `run_id`+`question_id` 双键、**领取即改名**（`os.replace`，两进程只有一个拿到），对不上的行丢弃并告警；**缺行不许当成自动 skip**——等不到答案就按 `timeout` 收口、走与 EOF 同一条「停止」路。`question`/`answer` 不进 `cli_log._VISIBLE`（它们给人看，不是子 CLI 日志）。`entry.py` 从人写的 `UE_RAG_UI_INBOX` 透传 `--ui-inbox`；不设就只有终端裁决。
+
+## 全域 Spec 内核（2026-11-17 边界升级）
+
+把「模型产 Spec → 脚本确定性执行 → 只读复核 → 回灌修复 → 沉淀」这条通用流水线落到九个域（UMG / 蓝图图 / 动画蓝图 / 材质 / Niagara / 动画&ControlRig / Sequencer / 后处理 / C++）。共享内核和域内核都在 `agent/`：
+
+| 文件 | 作用 |
+| --- | --- |
+| `agent/spec_pipeline.py` | 断言求值、路径取值、有序执行 `build_domain`（validate→exec→verify→回灌≤2→终态）、沉淀候选、写闸 |
+| `agent/spec_registry.py` | 九域惰性登记表 `describe` / `all_hints` / `recognize` / `build`，单域坏不连坐整表 |
+| `agent/spec_toolmap.py` | 当前后端（monolith）**真机核实**的工具单一事实源：各域原语→真实 `namespace.action`，缺口如实登记 |
+| `agent/{umg,graph,animgraph,material,niagara,animation,sequencer,postprocess,cpp}_spec.py` | 各域 Spec 内核：`KIND/JUDGE_KIND/SPEC_HINT/validate_spec/plan_ops/exec_op/verify_spec/recognize/build` |
+
+judge_kind 沿用既有 `EVIDENCE_KINDS`（不新增证据种类）：图 / UMG / 动画蓝图→`blueprint_compile`，材质 / Niagara / 动画 / Sequencer / 后处理→`editor_assert`，C++→`cpp_build`。模型只产 Spec，写只经内核 + 写闸 + 只读复核。今天后端确实做不到的子形态（材质图连线、ControlRig rig 图、Niagara 系统模块栈、状态机转换接线）走结构化 `unsupported` 暂停，不伪造工具。
+
+证据快照 `data/harness/monolith_tool_inventory.json`（8 个命名空间、729 个动作，2026-11-17 用 `backends.monolith.discover` 对在线编辑器抓的）。`default_call` 按命名空间路由：原生命名空间→`backends.monolith.exec`，其余→`exec_tool`（official/bridged）。离线守卫 `eval/check_spec_pipeline.py`、`check_spec_toolmap.py`、`check_spec_boundary.py`、`check_{umg,graph,animgraph,material,niagara,animation,sequencer,postprocess,cpp}_spec.py`，都不连编辑器、不调模型，已进 `.github/workflows/offline.yml`。这一层是「兜住能力」的地基，**尚未接进多窗口动作表**（提升为 CATALOG 动作是后续一步）。计划与落地记录见 `AIAgentProject/Plan/20261117-1610-UE5全域模型脚本边界总览.md` 与 `20261117-1630-全域边界升级-落地记录.md`。
+
+## 拆句、动作与入口（2026-11-17）
+
+除了上面的 Spec 内核，这一轮还把拆句、动作表和入口页的几处缺口收掉，全部有离线守卫、不连编辑器：
+
+- **连接词层**：`agent/connectives.py` 读人写的 `data/skills/connectives.json`，把「然后 / 接着 / 随后 / 最后 / 之后 / 其次」（seq）与「并且 / 同时 / 以及 / 顺便 / 顺带」（parallel）等多字连接词当切点并剥掉；只做「拆句 + 覆盖」，顺序依赖不自动串；词表缺失 / 坏 JSON 退化成只按标点切。`eval/check_connectives.py` 钉住。
+- **缺信息先问模型**：`agent/model_fill.py` 在缺路径 / 蓝图 / 源文件 / 过滤器暂停前先用模型补一个形状合法的值（源文件要求磁盘真存在），补不出再退回人工 `r`；只补缺信息，不补能力缺口。`run_multi` / `run_windows` 的 `_decide*_model_first` 接它。`eval/check_model_fill.py` 钉住。
+- **放灯 `place_light`**：`agent/actions.py` 新增动作（`light_type`：点光源 / 聚光灯 / 方向光 / 矩形光，缺省点光源），执行器在 `agent/sequence.py` 的 `_place_light`，走 monolith `editor.author_map_settings` 按类生成原生灯、`mesh.get_scene_statistics` 复查 +1 再按窗口 save。`supervise._plan_rules` 把「打开编辑器…加个点光源」确定性拆成 launch → open → place_light，零模型。`eval/check_place_light.py`、`check_cpp_edit_scene.py`、`check_roadmap_deps.py` 钉住。
+- **HUD 单读数**：`agent/fps_hud.py` 的 `requested_hud_controls` 让「只加一条血条」只落地所需控件（血条配图形底条 `HealthBarBG` + 填充条 `HealthBarFill`），两类以上读数仍整份七控件合同；支持先删后加 / 纯删。`eval/check_hud_single_readout.py` 钉住。
+- **范围级条款进集成**：`agent/run_windows.py` 的 `_delivery_criteria` / `_all_criteria` 在 run 级、窗口级都空时回落 `scope["criteria"]`，不再把真做成的记成 `judge_failed`；未过的范围条款仍判失败。`eval/check_integrate_scope_criteria.py` 钉住。
+- **入口页**：`server/entry.py` 新增只读 `GET /api/uilog/<run_id>`（`data/ui/logs/<ts>.log` 的尾巴）；`server/static/entry.html` 修了 `btn-send` 把 MouseEvent 当 `resume` 的接线、空答案确认、先落空壳 run（规划 + 任务书人审前就有 run 记录）、顶栏预估倒计时 + 中央后台日志 + 规划期占位卡。`eval/check_entry_{send,brief_confirm,run_scaffold,ui_feedback}.py` 钉住。
 
 ## 入库
 
@@ -123,7 +149,7 @@ python eval/run_bench.py
 
 | 路径 | 内容 |
 | --- | --- |
-| `agent/` | 对话、任务环、多窗口、理解器、诊断归地 |
+| `agent/` | 对话、任务环、多窗口、理解器、诊断归地、拆句连接词、缺信息补全、九域 Spec 内核 |
 | `backends/` | 一次运行锁一个后端：`select.py`、`official.py`、`monolith.py` |
 | `core/` | 检索、MCP 客户端、裁判、官方执行器 |
 | `pipelines/` | 导出元数据并写入向量库 |

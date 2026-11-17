@@ -59,6 +59,30 @@ def _decide(step: dict, summary: dict | None) -> str:
     return "stop"
 
 
+def _decide_model_first(step: dict, summary: dict | None, query: str = "") -> str:
+    """`_decide` 的「模型优先」包装：缺路径/蓝图/源文件时先让模型补一次。
+
+    补得出就当成人敲了 `r <值>` 直接返回；补不出（或离线检查把 `_complete_live` 换成抛异常
+    的替身）→ 原样退回 `_decide` 问人。人工裁决这条路不变，只是把「能问模型解决」的先问模型。
+    """
+    try:
+        needs = str(step.get("needs") or "")
+        if summary is None and needs in ("path", "blueprint", "source"):
+            from agent import model_fill
+
+            kind = "source" if needs == "source" else "path"
+            value = model_fill.fill_missing(
+                query, kind, error=str(step.get("error") or ""),
+                action=str(step.get("action") or ""), slots=step.get("slots"),
+            )
+            if value:
+                print(f"\n[model-fill] 缺 {kind}，模型补：{value}（先问模型，不再停下问人）")
+                return value
+    except Exception:
+        pass
+    return _decide(step, summary)
+
+
 def main(argv=None) -> None:
     import argparse
 
@@ -93,7 +117,10 @@ def main(argv=None) -> None:
         if query in (":quit", ":q", "exit", "quit"):
             print("退出")
             return
-        code, path = run_sequence(query, _decide, choices=True, layered=True)
+        code, path = run_sequence(
+            query, lambda step, summary: _decide_model_first(step, summary, query),
+            choices=True, layered=True,
+        )
         print(f"\n序列结束，退出码 {code}。记录：{path}\n")
 
 

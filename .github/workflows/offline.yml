@@ -40,6 +40,10 @@ jobs:
       # 模块入口真实可调用（防函数头被吞的 NameError），判词/C++/布局三处控件名一致。全离线。
       - name: check_fps_hud
         run: python eval/check_fps_hud.py
+      # 20261117-140229：只提「血条」一类读数的请求曾因「上限/样式/仿照…设计」半句判 uncovered
+      # 掉进通用受控求解。钉「单读数 → hud-rules 且只落地所需控件，整句 HUD 仍全合同」。全离线。
+      - name: check_hud_single_readout
+        run: python eval/check_hud_single_readout.py
       # FPS HUD 与 UMG 桥后续升级（Plan/20261029-1240）的四条护栏。全离线、不连编辑器：
       # 控件事件绑定走 blueprint.add_node(ComponentBoundEvent) 而非「无 action」；
       # NamedSlot/类级查询如实留在人工清单；AddWidget 的 childIndex 不再静默丢弃；
@@ -76,6 +80,12 @@ jobs:
       # 集成矩阵「交付验收」四态；以及 T3 的端到端离线回归（原句 → 规划/物化 → 真跑 → 收尾状态）。
       - name: check_create_level
         run: python eval/check_create_level.py
+      # 20261117-122532：路线图把 launch_editor 与 open_level 画成同层并排、彼此无连线。
+      # 根因是 windows_from_rules 没给 open_level/create_level 挂「编辑器已启动」的前置依赖
+      # （执行层也因此会在同一轮派发，冷启动时 open_level 先跑会连不上 MCP）。钉串行链与
+      # 「独立步骤不虚连」两条口径，全离线。
+      - name: check_roadmap_deps
+        run: python eval/check_roadmap_deps.py
       # 2026-10-28 手榴弹能力接线：implement_grenade 三态断言（缺前置引导、补拾取幂等、automation 收口）。
       - name: check_implement_grenade
         run: python eval/check_implement_grenade.py
@@ -106,6 +116,11 @@ jobs:
         run: python eval/check_archive_fidelity.py
       - name: check_integrate_verdict
         run: python eval/check_integrate_verdict.py
+      # 20261117-140229 的 W3 假失败：合同落在 scope["criteria"]（brief 物化路径），run 级被
+      # stitch 摘空后交付验收读不到任何条款 ⇒ judge_failed。钉「范围级条款也要被看见」，
+      # 且未过仍判失败（不许把真失败撑成成功）。全离线。
+      - name: check_integrate_scope_criteria
+        run: python eval/check_integrate_scope_criteria.py
       # T3 独立复验：独立写的断言 + 对抗性用例。data/briefs 与 data/runs 是 gitignore 的，
       # CI 上不存在时用同形状内联替身（文件里会打印一句），断言照样跑。
       - name: check_failure_192858
@@ -171,6 +186,21 @@ jobs:
         run: python eval/check_entry_questions.py
       - name: check_entry_drive
         run: python eval/check_entry_drive.py
+      # 发送按钮接线（20261116「输入指令卡死」修复）：btn-send 不许裸挂 send，否则 click 的
+      # MouseEvent 被当成 resume，点「发送」实际发 :resume latest。只读静态页，全离线。
+      - name: check_entry_send
+        run: python eval/check_entry_send.py
+      # 任务书人审门的「确认」= 空答案，不许被当成 timeout 而放弃任务。
+      # 20261116「输入指令卡死」修复的配套断言（空壳 run + 空答案语义）。
+      - name: check_entry_brief_confirm
+        run: python eval/check_entry_brief_confirm.py
+      # 结构修复：run 记录必须在「规划 + 任务书人审」之前落盘，且 execute_windows 复用同一 run_id。
+      - name: check_entry_run_scaffold
+        run: python eval/check_entry_run_scaffold.py
+      # 20261117 用户反馈：出任务书时界面无提示、右侧无窗口、像卡死。钉三件反馈：
+      # 顶栏预估倒计时 + 中央后台日志（/api/uilog 左对齐轨迹）+ 规划期「规划中」占位卡。只读静态页，全离线。
+      - name: check_entry_ui_feedback
+        run: python eval/check_entry_ui_feedback.py
       # 一步拉起：默认自动开浏览器、--no-open 关掉、已有实例不抢端口、端口 listen 之后才开。
       # 全离线：不起 uvicorn、不开真浏览器、不连编辑器。
       - name: check_entry_launch
@@ -180,3 +210,47 @@ jobs:
       # 钉 %~dp0 不被 shift 吃掉、默认 8011、参数转发、nopause/pause 口径、缺件指路。
       - name: check_entry_bat
         run: python eval/check_entry_bat.py
+      # place_light 拆窗（20261117-1015 修复）：放灯整句与「启动编辑器 / 打开关卡 / 编译」
+      # 同句时，launch_only / 通用步骤曾把 place_light 扇整条吃掉，灯根本不放。全离线。
+      - name: check_place_light
+        run: python eval/check_place_light.py
+      # 连接词层（20261117）：然后/并且/顺便… 在零模型下被拆句并接住，不再掉给理解器。
+      # 只做「拆句 + 覆盖」；顺序依赖不自动串（避免 steps 重排把因果接反）。全离线。
+      - name: check_connectives
+        run: python eval/check_connectives.py
+      # `_is_cpp_edit` 的「加一个/添加/新增+场景物体」假阳性（20261117）：把「加个灯」判成
+      # 改 C++ 会挤掉「然后编译工程」的编译扇，整句掉给模型。全离线。
+      - name: check_cpp_edit_scene
+        run: python eval/check_cpp_edit_scene.py
+      # 缺信息暂停「先问模型、补不出再问人」（20261117）：缺路径/蓝图/源文件/过滤器时先让模型补，
+      # 减少人工裁决；补不出时人工路径一字不改。全离线（模型替身）。
+      - name: check_model_fill
+        run: python eval/check_model_fill.py
+      # 20261117 全域模型/脚本边界升级（Plan/20261117-1610 总览 + 8 份分计划）。
+      # 共享内核 + 九域 Spec 内核（validate/plan_ops/exec_op/verify/repair）+ 只读复核 + 沉淀候选。
+      # 十一只全离线：不连编辑器、不调模型（exec 用注入替身）；各域守卫钉「好 Spec 零错 / 坏 Spec 被判 /
+      # kernel 确定性 / adapter 覆盖 / verifier 正反 / route 不误报 / 回灌有上限」。
+      - name: check_spec_pipeline
+        run: python eval/check_spec_pipeline.py
+      - name: check_spec_toolmap
+        run: python eval/check_spec_toolmap.py
+      - name: check_spec_boundary
+        run: python eval/check_spec_boundary.py
+      - name: check_umg_spec
+        run: python eval/check_umg_spec.py
+      - name: check_graph_spec
+        run: python eval/check_graph_spec.py
+      - name: check_animgraph_spec
+        run: python eval/check_animgraph_spec.py
+      - name: check_material_spec
+        run: python eval/check_material_spec.py
+      - name: check_niagara_spec
+        run: python eval/check_niagara_spec.py
+      - name: check_animation_spec
+        run: python eval/check_animation_spec.py
+      - name: check_sequencer_spec
+        run: python eval/check_sequencer_spec.py
+      - name: check_postprocess_spec
+        run: python eval/check_postprocess_spec.py
+      - name: check_cpp_spec
+        run: python eval/check_cpp_spec.py

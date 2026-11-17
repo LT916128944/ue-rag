@@ -301,6 +301,14 @@ def repair_blueprint(step: dict, *, attempts: int = 3) -> dict:
         if built is not None:
             built.setdefault("exec_count", 1)
             return built
+        # 通用 UMG Spec 内核（20261117 边界升级）：仅当窗口带着模型产出的 Spec 时才接管，
+        # 否则保持原有 discover 路径，零行为变化。与 fps_hud 共用同一批 UMGToolSet/ui 原语。
+        if isinstance(step.get("spec"), dict) or isinstance(step.get("umg_spec"), dict):
+            from agent.umg_spec import build as build_umg_spec
+
+            built_umg = build_umg_spec(step)
+            built_umg.setdefault("attempts", 1)
+            return built_umg
     if action == "create_widget_blueprint":
         # 控件图创建也不再走 discover 猜 action：`ui` 命名空间里 create_* 一大片，
         # 针名判不出唯一（20261029-020749 的 W3）。_create_widget_blueprint 本来就
@@ -508,6 +516,8 @@ def _run_action(step: dict) -> dict:
         return _probe_look(step)
     if action == "probe_play":
         return _probe_play(step)
+    if action == "place_light":
+        return _place_light(step)
     if action == "place_actor":
         step = dict(step)
         step["action"] = "place_blueprint"
@@ -518,6 +528,125 @@ def _run_action(step: dict) -> dict:
         out = _run_action(step)
         return _bind_evidence(step, out)
     return {"ok": False, "error": f"未知动作 {action}"}
+
+
+# 灯的类型 token → 引擎原生类路径。只认这四类；认不出不猜。
+_LIGHT_CLASS_BY_TOKEN = (
+    (("点光源", "点光", "point"), "/Script/Engine.PointLight"),
+    (("聚光灯", "聚光", "spot"), "/Script/Engine.SpotLight"),
+    (("方向光", "平行光", "directional", "sun"), "/Script/Engine.DirectionalLight"),
+    (("矩形光", "面光源", "rect"), "/Script/Engine.RectLight"),
+)
+_LIGHT_LEAF = {
+    "/Script/Engine.PointLight": ("PointLight", "点光源"),
+    "/Script/Engine.SpotLight": ("SpotLight", "聚光灯"),
+    "/Script/Engine.DirectionalLight": ("DirectionalLight", "方向光"),
+    "/Script/Engine.RectLight": ("RectLight", "矩形光"),
+}
+
+
+def _light_class_path(raw: str) -> str:
+    """把 light_type token（或已给的类路径）解析成上面四类之一。认不出返回空串，不猜。"""
+    text = str(raw or "").strip()
+    if not text:
+        return "/Script/Engine.PointLight"      # 缺省点光源
+    if text.startswith("/"):
+        for path in _LIGHT_LEAF:
+            if path.lower() == text.lower():
+                return path
+        return ""
+    low = text.lower()
+    for tokens, path in _LIGHT_CLASS_BY_TOKEN:
+        if any(tok in low for tok in tokens):
+            return path
+    return ""
+
+
+def _parse_xyz(value, default: list) -> list:
+    """坐标：{x,y,z} / [x,y,z] / "x,y,z"。解析不出就用默认，不猜一个假的点。"""
+    if isinstance(value, dict):
+        try:
+            return [float(value.get("x", default[0])),
+                    float(value.get("y", default[1])),
+                    float(value.get("z", default[2]))]
+        except (TypeError, ValueError):
+            return list(default)
+    if isinstance(value, (list, tuple)) and len(value) == 3:
+        try:
+            return [float(value[0]), float(value[1]), float(value[2])]
+        except (TypeError, ValueError):
+            return list(default)
+    text = str(value or "").strip().strip("()[]")
+    if text:
+        parts = [part for part in re.split(r"[,，\s]+", text) if part]
+        if len(parts) == 3:
+            try:
+                return [float(parts[0]), float(parts[1]), float(parts[2])]
+            except ValueError:
+                pass
+    return list(default)
+
+
+def _place_light(step: dict) -> dict:
+    """在当前关卡里放一盏灯（点光源/聚光灯/方向光/矩形光）。按类生成原生 Actor。
+
+    只走 monolith：`editor.author_map_settings` 的 actors 规格是项目里已验证的按类生成路径
+    （implement_shooter/grenade 同款）。放完用 `mesh.get_scene_statistics` 复查该类 +1，
+    再按窗口 save 落盘；拿不到统计就不冒充 +1。不改源码、不放蓝图。"""
+    from backends.monolith import exec as monolith_exec
+    from backends.select import current_backend
+
+    slots = step.get("slots") if isinstance(step.get("slots"), dict) else {}
+    raw = str(slots.get("light_type") or step.get("light_type") or step.get("light") or "").strip()
+    cls = _light_class_path(raw)
+    if not cls:
+        text = f"认不出灯的类型：{raw or '空'}（只认 点光源/聚光灯/方向光/矩形光）"
+        return {"ok": False, "error": text, "summary": text, "index_note": text}
+    leaf, label = _LIGHT_LEAF[cls]
+    if current_backend() != "monolith":
+        text = "当前后端不是 monolith：place_light 只在 monolith 下有按类生成路径（official 无此入口）。"
+        return {"ok": False, "error": text, "summary": text, "index_note": text}
+
+    default_loc = [0, 0, 400] if leaf == "DirectionalLight" else [0, 0, 120]
+    loc = _parse_xyz(slots.get("location") or step.get("location"), default_loc)
+    write = _menu_task([], save=False, pie=False)
+
+    def call(namespace: str, action: str, params: dict) -> dict:
+        return monolith_exec(namespace, action, params, task=write, transport=_monolith_transport)
+
+    before = _fps_stats(call("mesh", "get_scene_statistics", {}))
+    actor = {"class": cls, "location": loc, "folder": "Lights"}
+    actor_name = str(step.get("name") or slots.get("name") or "").strip()
+    if actor_name:
+        actor["name"] = actor_name
+    authored = call("editor", "author_map_settings", {"actors": [actor]})
+    if not authored.get("ok"):
+        text = f"放{label}失败：{_error_text(authored) or '没有返回'}"
+        return {"ok": False, "error": text, "summary": text, "index_note": text}
+    notes = _fps_spawn_notes(_monolith_payload(authored))
+    if notes:
+        text = f"放{label}失败：{notes}"
+        return {"ok": False, "error": text, "summary": text, "index_note": text}
+    after = _fps_stats(call("mesh", "get_scene_statistics", {}))
+    saved = _save_level(step)
+    if not saved.get("ok"):
+        text = str(saved.get("error") or "关卡保存失败")
+        return {"ok": False, "error": text, "summary": text, "index_note": text}
+    gained = None
+    if before and after:
+        gained = int(after.get(leaf, 0) or 0) - int(before.get(leaf, 0) or 0)
+        if gained <= 0:
+            text = f"没确认到新增的{label}（场景统计里 {leaf} 没有 +1，放灯可能没生效）"
+            return {"ok": False, "error": text, "summary": text, "index_note": text}
+    gain_text = "（场景统计 +1）" if gained is None else f"（场景统计 +{gained}）"
+    summary = f"已在当前关卡放一盏{label}{gain_text}，{saved.get('note')}"
+    return {
+        "ok": True,
+        "id": actor_name or label,
+        "summary": summary,
+        "index_note": summary,
+        "test": {"ok": True, "kind": "editor_assert", "summary": summary, "errors": []},
+    }
 
 
 def _bind_evidence(step: dict, out: dict) -> dict:
@@ -2076,8 +2205,21 @@ def _check_fps_hud(step: dict) -> dict:
     HUD 上，而且有东西会把它显示出来」。控件图能编过不等于 HUD 会动。"""
     from core.editor_exec import exec_tool
 
-    text = str((step or {}).get("widget") or (step or {}).get("query") or "")
-    ref = _fps_hud_ref(text)
+    from agent.fps_hud import HEALTH_BAR_VISUALS, hud_expectation, requested_hud_controls
+
+    step = step or {}
+    slots = step.get("slots") if isinstance(step.get("slots"), dict) else {}
+    blob = " ".join(str(step.get(key) or "") for key in ("widget", "query", "title", "summary"))
+    blob += " " + str(slots.get("widget") or "")
+    ref = _fps_hud_ref(blob)
+    # 单读数请求（只加一条血条）只核对它要的那几块；hud_controls 由 hud_windows 随窗口带下来，
+    # 没有就按句子重新推（默认整份合同）。
+    wanted = slots.get("hud_controls")
+    if not (isinstance(wanted, list) and wanted):
+        wanted = requested_hud_controls(blob) or list(FPS_HUD_WIDGETS)
+    wanted = [name for name in FPS_HUD_WIDGETS if name in wanted] or list(FPS_HUD_WIDGETS)
+    # 「先删血条再加」要删了再加回来；纯「删除血条」则复核这些控件必须已不在。
+    expectation = slots.get("hud_expect") or hud_expectation(blob)
     read = {"allow_writes": [], "save": False, "pie": False}
     problems: list[str] = []
 
@@ -2090,9 +2232,18 @@ def _check_fps_hud(step: dict) -> dict:
         problems.append("GetWidgets 失败：" + str(called.get("error") or "没有返回"))
     else:
         found = _fps_hud_widget_names(called.get("data"))
-        missing = [name for name in FPS_HUD_WIDGETS if name not in found]
-        for name in missing:
-            problems.append(f"缺控件 {name}")
+        if expectation == "absent":
+            for name in [n for n in wanted if n in found]:
+                problems.append(f"应已删除但仍在 {name}")
+        else:
+            missing = [name for name in wanted if name not in found]
+            for name in missing:
+                problems.append(f"缺控件 {name}")
+            # 「血条」还得是图形血条：底条 + 填充条 必须在（只挂一个文本 '100' 不算数）。
+            if "txt_Health" in wanted:
+                for vname in HEALTH_BAR_VISUALS:
+                    if vname not in found:
+                        problems.append(f"缺血条图形控件 {vname}（只有文本不算血条）")
 
     parent_ok = False
     parent_name = ""
@@ -2118,6 +2269,10 @@ def _check_fps_hud(step: dict) -> dict:
 
     if problems:
         summary = f"{ref} 不合格：" + "；".join(problems) + "。控件图能编过，不等于 HUD 会动。"
+    elif expectation == "absent":
+        summary = (
+            f"{ref} 已按要求删除 {'、'.join(wanted)}，父类是 {FPS_HUD_PARENT}，{mount_note}。"
+        )
     else:
         summary = (
             f"{ref} 合同控件都在，父类是 {FPS_HUD_PARENT}，{mount_note}；"

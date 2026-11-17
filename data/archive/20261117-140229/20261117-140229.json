@@ -1,0 +1,465 @@
+{
+  "run_id": "20261117-140229",
+  "query": "给该UI资产左下角添加一个血条，上限100，样式你自己定义，可仿照市面上常见FPS的设计。参考资产：/Game/UI/WBP_FpsHUD",
+  "source": "solver-fallback",
+  "started_at": "2026-11-17T14:02:29",
+  "updated_at": "2026-11-17T14:08:34",
+  "status": "部分完成",
+  "pid": 540,
+  "heartbeat_at": "2026-11-17T14:08:34",
+  "review": {
+    "rounds": 1,
+    "status": "通过"
+  },
+  "brief": {
+    "query": "给该UI资产左下角添加一个血条，上限100，样式你自己定义，可仿照市面上常见FPS的设计。参考资产：/Game/UI/WBP_FpsHUD",
+    "scopes": [
+      {
+        "id": "A",
+        "title": "在 WBP_FpsHUD 左下角新增上限100的血条控件",
+        "deliverables": [
+          "在 /Game/UI/WBP_FpsHUD 的控件树左下角新增血条容器（背景底条 + 前景填充条 + 数值文本）",
+          "血条最大值固定为 100 的初始化与数值来源绑定，保证显示比例为 当前值/100",
+          "FPS 常见视觉样式落地（低血量变色或警示、圆角/描边、半透明底条），布局锚定左下角且不遮挡现有 txt_RocketAmmo 等元素",
+          "对改动后的 WBP_FpsHUD 执行编译并确认无错误",
+          "只读复验：血条位于左下角、上限为 100、初始满血显示正确"
+        ],
+        "pending_note": "方案文本照抄：- 原语 editor.get_build_errors；代码已有，缺接线和验证：血条控件结构与样式尚未在 WBP_FpsHUD 中落地，最大值 100 的绑定与布局锚定未接线，编译与显示效果均未验证。",
+        "depends_on": [],
+        "external_dep": "",
+        "windows": [
+          {
+            "id": "SBW-A-SOLVE",
+            "title": "受控求解：给该UI资产左下角添加一个血条，上限100，样式你自己定义，可仿照市面上常见FPS的设计。参考资产：/Game/UI/WBP_FpsHUD",
+            "action": "solve",
+            "slots": {},
+            "depends_on": [],
+            "max_retries": 1
+          }
+        ],
+        "estimate_hours": [
+          3.0,
+          8.0
+        ]
+      }
+    ],
+    "integration": {
+      "title": "累计集成、验证与交付",
+      "deliverables": [
+        "对 WBP_FpsHUD 的血条改动做一次只读复验：确认编译无错误、血条位于左下角、上限为 100 且初始显示满血",
+        "确认新增血条未破坏现有控件（如 txt_RocketAmmo 的初始文本仍为「火箭弹 3/3」）"
+      ],
+      "estimate_hours": [
+        2.0,
+        8.0
+      ]
+    },
+    "external_dependencies": [],
+    "total_estimate": {
+      "min_hours": 5.0,
+      "max_hours": 16.0
+    },
+    "disclaimer": [
+      "任务之间有重叠",
+      "估算是粗的，不构成承诺",
+      "不含等待外部依赖的时间"
+    ],
+    "dropped": [],
+    "unresolved": [
+      "样式你自己定义，可仿照市面上常见FPS的设计（主观样式无法作为可验证条款）"
+    ],
+    "review": {
+      "rounds": 1,
+      "status": "通过"
+    },
+    "coverage": {
+      "scopes": [
+        {
+          "id": "A",
+          "title": "在 WBP_FpsHUD 左下角新增上限100的血条控件",
+          "count": 1,
+          "runnable": 1,
+          "actions": [
+            "solve"
+          ],
+          "declared": 1,
+          "rescued": 0,
+          "gap": false,
+          "blocked": false,
+          "external_dep": "",
+          "uncovered": [
+            "血条最大值固定为 100 的初始化与数值来源绑定，保证显示比例为 当前值/100",
+            "FPS 常见视觉样式落地（低血量变色或警示、圆角/描边、半透明底条），布局锚定左下角且不遮挡现有 txt_RocketAmmo 等元素"
+          ]
+        }
+      ],
+      "total": 1,
+      "gaps": [],
+      "dry_run": true
+    },
+    "stamp": "20261117-140352",
+    "json_path": "E:\\UEProject\\AIWork\\RAG\\ue-rag\\data\\briefs\\20261117-140352-UI-100-FPS-Game-UI-WBP_.json",
+    "manual_edits": 0
+  },
+  "scopes": [
+    {
+      "id": "A",
+      "title": "在 WBP_FpsHUD 左下角新增上限100的血条控件",
+      "window_ids": [
+        "W1",
+        "W2"
+      ],
+      "external_dep": "",
+      "blocked": false,
+      "deliverables": [
+        "在 /Game/UI/WBP_FpsHUD 的控件树左下角新增血条容器（背景底条 + 前景填充条 + 数值文本）",
+        "血条最大值固定为 100 的初始化与数值来源绑定，保证显示比例为 当前值/100",
+        "FPS 常见视觉样式落地（低血量变色或警示、圆角/描边、半透明底条），布局锚定左下角且不遮挡现有 txt_RocketAmmo 等元素",
+        "对改动后的 WBP_FpsHUD 执行编译并确认无错误",
+        "只读复验：血条位于左下角、上限为 100、初始满血显示正确"
+      ],
+      "pending_note": "方案文本照抄：- 原语 editor.get_build_errors；代码已有，缺接线和验证：血条控件结构与样式尚未在 WBP_FpsHUD 中落地，最大值 100 的绑定与布局锚定未接线，编译与显示效果均未验证。",
+      "criteria": [
+        {
+          "id": "c-automation",
+          "text": "Automation 过滤器失败数为 0",
+          "evidence_kind": "automation",
+          "passed": true,
+          "windows": [
+            "W1",
+            "W2"
+          ],
+          "evidence_sha1": "f82aed14e07d727b0013ff00da5929b88999333f"
+        }
+      ]
+    },
+    {
+      "id": "INT",
+      "title": "累计集成、验证与交付",
+      "window_ids": [
+        "W3"
+      ],
+      "external_dep": "",
+      "blocked": false,
+      "deliverables": [
+        "对 WBP_FpsHUD 的血条改动做一次只读复验：确认编译无错误、血条位于左下角、上限为 100 且初始显示满血",
+        "确认新增血条未破坏现有控件（如 txt_RocketAmmo 的初始文本仍为「火箭弹 3/3」）"
+      ],
+      "pending_note": "",
+      "kind": "integration",
+      "criteria": []
+    }
+  ],
+  "windows": {
+    "W1": {
+      "id": "W1",
+      "title": "受控求解：给该UI资产左下角添加一个血条，上限100，样式你自己定义，可仿照市面上常见FPS的设计。参考资产：/Game/UI/WBP_FpsHUD",
+      "action": "solve",
+      "depends_on": [],
+      "state": "done",
+      "ok": true,
+      "result": {
+        "id": "W1",
+        "ok": true,
+        "summary": "求解收口：AIAgent.Fps.Hit 失败数 0（编辑器 2 次、编译 0 轮）"
+      },
+      "detail": {
+        "id": "W1",
+        "ok": true,
+        "retry_count": 0,
+        "tool_calls": 0,
+        "elapsed": 0,
+        "index_note": "求解收口：AIAgent.Fps.Hit 失败数 0（编辑器 2 次、编译 0 轮）",
+        "summary": "求解收口：AIAgent.Fps.Hit 失败数 0（编辑器 2 次、编译 0 轮）",
+        "thread_id": "task_20261117_140409_fb86a5",
+        "trace": "",
+        "test": {
+          "ok": true,
+          "kind": "automation",
+          "filter": "AIAgent.Fps.Hit",
+          "summary": "求解收口：AIAgent.Fps.Hit 失败数 0（编辑器 2 次、编译 0 轮）",
+          "errors": []
+        },
+        "judge_kind": "automation",
+        "retries": 0
+      },
+      "thread_id": "task_20261117_140409_fb86a5",
+      "elapsed": 0,
+      "retries": 0,
+      "summary": "求解收口：AIAgent.Fps.Hit 失败数 0（编辑器 2 次、编译 0 轮）",
+      "snapshot": null,
+      "realizable": true,
+      "error": "",
+      "external_dep": "",
+      "window": {
+        "id": "W1",
+        "title": "受控求解：给该UI资产左下角添加一个血条，上限100，样式你自己定义，可仿照市面上常见FPS的设计。参考资产：/Game/UI/WBP_FpsHUD",
+        "action": "solve",
+        "slots": {},
+        "depends_on": [],
+        "max_retries": 0,
+        "realizable": true,
+        "ok": true,
+        "blocked": false,
+        "goal": true,
+        "scope_text": "给该UI资产左下角添加一个血条，上限100，样式你自己定义，可仿照市面上常见FPS的设计。参考资产：/Game/UI/WBP_FpsHUD",
+        "task": {
+          "id": "SBW-A-SOLVE",
+          "action": "solve",
+          "title": "受控求解：给该UI资产左下角添加一个血条，上限100，样式你自己定义，可仿照市面上常见FPS的设计。参考资产：/Game/UI/WBP_FpsHUD",
+          "query": "给该UI资产左下角添加一个血条，上限100，样式你自己定义，可仿照市面上常见FPS的设计。参考资产：/Game/UI/WBP_FpsHUD",
+          "slots": {},
+          "allow_writes": [],
+          "max_retries": 0
+        },
+        "solver_plan": "- 原语 editor.get_build_errors"
+      },
+      "task": {
+        "id": "W1",
+        "action": "solve",
+        "title": "受控求解：给该UI资产左下角添加一个血条，上限100，样式你自己定义，可仿照市面上常见FPS的设计。参考资产：/Game/UI/WBP_FpsHUD",
+        "allow_writes": [],
+        "save": true,
+        "pie": true,
+        "max_retries": 0,
+        "verify": []
+      },
+      "stop_reason": "ok"
+    },
+    "W2": {
+      "id": "W2",
+      "title": "受控求解：在 WBP_FpsHUD 左下角新增上限100的血条控件",
+      "action": "solve",
+      "depends_on": [
+        "W1"
+      ],
+      "state": "done",
+      "ok": true,
+      "result": {
+        "id": "W2",
+        "ok": true,
+        "summary": "求解收口：AIAgent.Fps.Hit 失败数 0（编辑器 0 次、编译 2 轮）"
+      },
+      "detail": {
+        "id": "W2",
+        "ok": true,
+        "retry_count": 0,
+        "tool_calls": 0,
+        "elapsed": 0,
+        "index_note": "求解收口：AIAgent.Fps.Hit 失败数 0（编辑器 0 次、编译 2 轮）",
+        "summary": "求解收口：AIAgent.Fps.Hit 失败数 0（编辑器 0 次、编译 2 轮）",
+        "thread_id": "task_20261117_140507_ad86cf",
+        "trace": "",
+        "build": {
+          "ok": true,
+          "kind": "cpp_build",
+          "summary": "编译通过",
+          "build_rounds": 2
+        },
+        "test": {
+          "ok": true,
+          "kind": "automation",
+          "filter": "AIAgent.Fps.Hit",
+          "summary": "求解收口：AIAgent.Fps.Hit 失败数 0（编辑器 0 次、编译 2 轮）",
+          "errors": []
+        },
+        "judge_kind": "automation",
+        "retries": 0
+      },
+      "thread_id": "task_20261117_140507_ad86cf",
+      "elapsed": 0,
+      "retries": 0,
+      "summary": "求解收口：AIAgent.Fps.Hit 失败数 0（编辑器 0 次、编译 2 轮）",
+      "snapshot": null,
+      "realizable": true,
+      "error": "",
+      "external_dep": "",
+      "window": {
+        "id": "W2",
+        "title": "受控求解：在 WBP_FpsHUD 左下角新增上限100的血条控件",
+        "action": "solve",
+        "slots": {},
+        "depends_on": [
+          "W1"
+        ],
+        "max_retries": 0,
+        "realizable": true,
+        "ok": true,
+        "blocked": false,
+        "goal": true,
+        "scope_text": "在 WBP_FpsHUD 左下角新增上限100的血条控件；以下交付项没有窗口接住，交给受控求解（全部合并为一扇，只写一套代码）；血条最大值固定为 100 的初始化与数值来源绑定，保证显示比例为 当前值/100；FPS 常见视觉样式落地（低血量变色或警示、圆角/描边、半透明底条），布局锚定左下角且不遮挡现有 txt_RocketAmmo 等元素",
+        "task": {
+          "id": "SBW-Acov-SOLVE",
+          "action": "solve",
+          "title": "受控求解：在 WBP_FpsHUD 左下角新增上限100的血条控件",
+          "query": "在 WBP_FpsHUD 左下角新增上限100的血条控件；以下交付项没有窗口接住，交给受控求解（全部合并为一扇，只写一套代码）；血条最大值固定为 100 的初始化与数值来源绑定，保证显示比例为 当前值/100；FPS 常见视觉样式落地（低血量变色或警示、圆角/描边、半透明底条），布局锚定左下角且不遮挡现有 txt_RocketAmmo 等元素",
+          "slots": {},
+          "allow_writes": [],
+          "max_retries": 0
+        }
+      },
+      "task": {
+        "id": "W2",
+        "action": "solve",
+        "title": "受控求解：在 WBP_FpsHUD 左下角新增上限100的血条控件",
+        "allow_writes": [],
+        "save": true,
+        "pie": true,
+        "max_retries": 0,
+        "verify": []
+      },
+      "stop_reason": "ok"
+    },
+    "W3": {
+      "id": "W3",
+      "title": "累计集成、验证与交付",
+      "action": "integrate_verify",
+      "depends_on": [
+        "W1",
+        "W2"
+      ],
+      "state": "failed",
+      "ok": false,
+      "result": {
+        "id": "W3",
+        "ok": false,
+        "summary": "矩阵没有可验证的项，不算全过；0 项通过口径、6 项不适用；触及文件 0 个；归档 E:\\UEProject\\AIWork\\RAG\\ue-rag\\data\\archive\\20261117-140229"
+      },
+      "detail": {
+        "id": "W3",
+        "ok": false,
+        "verdict": "",
+        "item_verdicts": {
+          "重复请求幂等": "not_applicable",
+          "拒答路径": "not_applicable",
+          "延迟窗口": "not_applicable",
+          "断线重连": "not_applicable",
+          "未知态恢复": "not_applicable",
+          "交付验收": "not_applicable"
+        },
+        "no_evidence_items": [],
+        "evidence_total": 0,
+        "summary": "矩阵没有可验证的项，不算全过；0 项通过口径、6 项不适用；触及文件 0 个；归档 E:\\UEProject\\AIWork\\RAG\\ue-rag\\data\\archive\\20261117-140229",
+        "matrix": [
+          {
+            "item": "重复请求幂等",
+            "ok": null,
+            "note": "没有可复验的只读裁决，本次不适用",
+            "evidence_count": 0,
+            "scope_ids": [],
+            "verdict": "not_applicable"
+          },
+          {
+            "item": "拒答路径",
+            "ok": null,
+            "note": "本次没有拒答窗口，不适用",
+            "evidence_count": 0,
+            "scope_ids": [],
+            "verdict": "not_applicable"
+          },
+          {
+            "item": "延迟窗口",
+            "ok": null,
+            "note": "本次没有重试，不适用",
+            "evidence_count": 0,
+            "scope_ids": [],
+            "verdict": "not_applicable"
+          },
+          {
+            "item": "断线重连",
+            "ok": null,
+            "note": "本次无断线，不适用",
+            "evidence_count": 0,
+            "scope_ids": [],
+            "verdict": "not_applicable"
+          },
+          {
+            "item": "未知态恢复",
+            "ok": null,
+            "note": "每扇都有明确终态或未开始",
+            "evidence_count": 0,
+            "scope_ids": [],
+            "verdict": "not_applicable"
+          },
+          {
+            "item": "交付验收",
+            "ok": null,
+            "note": "本次没有产出任何条款，交付验收不适用",
+            "evidence_count": 0,
+            "scope_ids": [],
+            "verdict": "not_applicable"
+          }
+        ],
+        "hashes": [],
+        "totals": {
+          "elapsed": 0.0,
+          "retries": 0,
+          "prompt_tokens": 0,
+          "completion_tokens": 0
+        },
+        "archive": "E:\\UEProject\\AIWork\\RAG\\ue-rag\\data\\archive\\20261117-140229"
+      },
+      "thread_id": null,
+      "elapsed": null,
+      "retries": 0,
+      "summary": "矩阵没有可验证的项，不算全过；0 项通过口径、6 项不适用；触及文件 0 个；归档 E:\\UEProject\\AIWork\\RAG\\ue-rag\\data\\archive\\20261117-140229",
+      "snapshot": null,
+      "realizable": true,
+      "error": "",
+      "external_dep": "",
+      "window": {
+        "id": "W3",
+        "title": "累计集成、验证与交付",
+        "action": "integrate_verify",
+        "slots": {},
+        "depends_on": [
+          "W1",
+          "W2"
+        ],
+        "max_retries": 1,
+        "realizable": true,
+        "ok": true,
+        "blocked": false,
+        "save": true,
+        "pie": true
+      },
+      "stop_reason": "judge_failed"
+    }
+  },
+  "artifacts": {},
+  "integration": {
+    "ok": false,
+    "status": "部分完成",
+    "summary": "完成 W1、W2；失败 W3（无下游依赖，不阻塞别的范围）。有范围没完成：INT（窗口没跑完：W3）。集成不调用模型。",
+    "sentence": "failed"
+  },
+  "criteria": [],
+  "stitch_script": true,
+  "stitch_note": "拿掉没有窗口能证明的条款：c-1",
+  "undelivered": [
+    {
+      "scope": "INT",
+      "title": "累计集成、验证与交付",
+      "deliverables": [
+        "对 WBP_FpsHUD 的血条改动做一次只读复验：确认编译无错误、血条位于左下角、上限为 100 且初始显示满血",
+        "确认新增血条未破坏现有控件（如 txt_RocketAmmo 的初始文本仍为「火箭弹 3/3」）"
+      ],
+      "reason": "窗口没跑完：W3",
+      "gap": false,
+      "windows": []
+    }
+  ],
+  "stale_candidates": [
+    {
+      "name": "open_marketplace",
+      "age_days": 21,
+      "hits": 2
+    },
+    {
+      "name": "建关卡",
+      "age_days": 20,
+      "hits": 114
+    }
+  ],
+  "sentence": "failed"
+}

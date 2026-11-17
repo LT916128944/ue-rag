@@ -1,0 +1,527 @@
+{
+  "run_id": "20261116-200303",
+  "query": "打开编辑器，在关卡中添加一个新的点光源。参考关卡：/Game/Maps/L_NewTest2",
+  "source": "solver-fallback",
+  "started_at": "2026-11-16T20:03:03",
+  "updated_at": "2026-11-16T20:16:54",
+  "status": "失败",
+  "pid": 7764,
+  "heartbeat_at": "2026-11-16T20:16:54",
+  "review": {
+    "rounds": 1,
+    "status": "通过"
+  },
+  "brief": {
+    "query": "打开编辑器，在关卡中添加一个新的点光源。参考关卡：/Game/Maps/L_NewTest2",
+    "scopes": [
+      {
+        "id": "A",
+        "title": "打开编辑器并加载参考关卡",
+        "deliverables": [
+          "确认 UE 编辑器进程已启动，并等待 MCP 端口连通",
+          "将 /Game/Maps/L_NewTest2 打开为当前关卡，确认关卡存在且唯一"
+        ],
+        "pending_note": "- 原语 editor.load_level\n- 原语 editor.run_python",
+        "depends_on": [],
+        "external_dep": "",
+        "windows": [
+          {
+            "id": "SBW-A-SOLVE",
+            "title": "受控求解：打开编辑器，在关卡中添加一个新的点光源。参考关卡：/Game/Maps/L_NewTest2",
+            "action": "solve",
+            "slots": {},
+            "depends_on": [],
+            "max_retries": 1
+          }
+        ],
+        "estimate_hours": [
+          1.0,
+          4.0
+        ]
+      },
+      {
+        "id": "B",
+        "title": "在参考关卡中添加一个新的点光源",
+        "deliverables": [
+          "在 /Game/Maps/L_NewTest2 关卡中新增一个点光源（仅新增一个，不替换现有光源）",
+          "确认点光源已生成并处于可保存、可验证的关卡状态"
+        ],
+        "pending_note": "",
+        "depends_on": [
+          "A"
+        ],
+        "external_dep": "",
+        "windows": [],
+        "estimate_hours": [
+          2.0,
+          8.0
+        ],
+        "block_note": "能力缺口：没有可执行的窗口（不是待办）。确认后先按同一路径试补窗，补不出就不执行。"
+      }
+    ],
+    "integration": {
+      "title": "累计集成、验证与交付",
+      "deliverables": [
+        "复验编辑器启动与 MCP 端口连通状态",
+        "只读确认当前关卡为 /Game/Maps/L_NewTest2 且关卡存在且唯一",
+        "只读确认新增点光源存在且仅新增一个"
+      ],
+      "estimate_hours": [
+        2.0,
+        8.0
+      ]
+    },
+    "external_dependencies": [],
+    "total_estimate": {
+      "min_hours": 5.0,
+      "max_hours": 20.0
+    },
+    "disclaimer": [
+      "任务之间有重叠",
+      "估算是粗的，不构成承诺",
+      "不含等待外部依赖的时间"
+    ],
+    "dropped": [],
+    "unresolved": [
+      "在关卡中添加一个新的点光源（动作表没有可直接生成点光源的动作，且未给出可放置的蓝图）"
+    ],
+    "review": {
+      "rounds": 1,
+      "status": "通过"
+    },
+    "coverage": {
+      "scopes": [
+        {
+          "id": "A",
+          "title": "打开编辑器并加载参考关卡",
+          "count": 1,
+          "runnable": 1,
+          "actions": [
+            "solve"
+          ],
+          "declared": 1,
+          "rescued": 0,
+          "gap": false,
+          "blocked": false,
+          "external_dep": "",
+          "uncovered": [
+            "确认 UE 编辑器进程已启动，并等待 MCP 端口连通"
+          ]
+        },
+        {
+          "id": "B",
+          "title": "在参考关卡中添加一个新的点光源",
+          "count": 1,
+          "runnable": 1,
+          "actions": [
+            "solve"
+          ],
+          "declared": 0,
+          "rescued": 1,
+          "gap": false,
+          "blocked": false,
+          "external_dep": ""
+        }
+      ],
+      "total": 2,
+      "gaps": [],
+      "dry_run": true
+    },
+    "stamp": "20261116-200408",
+    "json_path": "E:\\UEProject\\AIWork\\RAG\\ue-rag\\data\\briefs\\20261116-200408-Game-Maps-L_NewTest2.json",
+    "manual_edits": 0
+  },
+  "scopes": [
+    {
+      "id": "A",
+      "title": "打开编辑器并加载参考关卡",
+      "window_ids": [
+        "W1",
+        "W2"
+      ],
+      "external_dep": "",
+      "blocked": false,
+      "deliverables": [
+        "确认 UE 编辑器进程已启动，并等待 MCP 端口连通",
+        "将 /Game/Maps/L_NewTest2 打开为当前关卡，确认关卡存在且唯一"
+      ],
+      "pending_note": "- 原语 editor.load_level\n- 原语 editor.run_python",
+      "criteria": [
+        {
+          "id": "c-automation",
+          "text": "Automation 过滤器失败数为 0",
+          "evidence_kind": "automation",
+          "passed": false,
+          "windows": [
+            "W1",
+            "W2"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "B",
+      "title": "在参考关卡中添加一个新的点光源",
+      "window_ids": [
+        "W3",
+        "W4",
+        "W2"
+      ],
+      "external_dep": "",
+      "blocked": false,
+      "deliverables": [
+        "在 /Game/Maps/L_NewTest2 关卡中新增一个点光源（仅新增一个，不替换现有光源）",
+        "确认点光源已生成并处于可保存、可验证的关卡状态"
+      ],
+      "pending_note": "",
+      "criteria": [
+        {
+          "id": "c-editor_assert",
+          "text": "编辑器读数与期望一致",
+          "evidence_kind": "editor_assert",
+          "passed": false,
+          "windows": [
+            "W3",
+            "W2"
+          ]
+        },
+        {
+          "id": "c-cpp_build",
+          "text": "C++ 编译通过，退出码 0 且没有 error C",
+          "evidence_kind": "cpp_build",
+          "passed": false,
+          "windows": [
+            "W4"
+          ]
+        },
+        {
+          "id": "c-automation",
+          "text": "Automation 过滤器失败数为 0",
+          "evidence_kind": "automation",
+          "passed": false,
+          "windows": [
+            "W2"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "INT",
+      "title": "累计集成、验证与交付",
+      "window_ids": [
+        "W5"
+      ],
+      "external_dep": "",
+      "blocked": false,
+      "deliverables": [
+        "复验编辑器启动与 MCP 端口连通状态",
+        "只读确认当前关卡为 /Game/Maps/L_NewTest2 且关卡存在且唯一",
+        "只读确认新增点光源存在且仅新增一个"
+      ],
+      "pending_note": "",
+      "kind": "integration",
+      "criteria": []
+    }
+  ],
+  "windows": {
+    "W1": {
+      "id": "W1",
+      "title": "受控求解：打开编辑器，在关卡中添加一个新的点光源。参考关卡：/Game/Maps/L_NewTest2",
+      "action": "solve",
+      "depends_on": [],
+      "state": "queued",
+      "ok": null,
+      "result": null,
+      "detail": null,
+      "thread_id": null,
+      "elapsed": null,
+      "retries": 0,
+      "summary": "",
+      "snapshot": null,
+      "realizable": true,
+      "error": "",
+      "external_dep": "",
+      "window": {
+        "id": "W1",
+        "title": "受控求解：打开编辑器，在关卡中添加一个新的点光源。参考关卡：/Game/Maps/L_NewTest2",
+        "action": "solve",
+        "slots": {},
+        "depends_on": [],
+        "max_retries": 0,
+        "realizable": true,
+        "ok": true,
+        "blocked": false,
+        "goal": true,
+        "scope_text": "打开编辑器，在关卡中添加一个新的点光源。参考关卡：/Game/Maps/L_NewTest2",
+        "task": {
+          "id": "SBW-A-SOLVE",
+          "action": "solve",
+          "title": "受控求解：打开编辑器，在关卡中添加一个新的点光源。参考关卡：/Game/Maps/L_NewTest2",
+          "query": "打开编辑器，在关卡中添加一个新的点光源。参考关卡：/Game/Maps/L_NewTest2",
+          "slots": {},
+          "allow_writes": [],
+          "max_retries": 0
+        },
+        "solver_plan": "- 原语 editor.load_level\n- 原语 editor.run_python"
+      },
+      "task": {
+        "id": "SBW-A-SOLVE",
+        "action": "solve",
+        "title": "受控求解：打开编辑器，在关卡中添加一个新的点光源。参考关卡：/Game/Maps/L_NewTest2",
+        "allow_writes": [],
+        "max_retries": 0,
+        "verify": [],
+        "save": true,
+        "pie": true
+      }
+    },
+    "W2": {
+      "id": "W2",
+      "title": "受控求解：打开编辑器并加载参考关卡",
+      "action": "solve",
+      "depends_on": [
+        "W1"
+      ],
+      "state": "queued",
+      "ok": null,
+      "result": null,
+      "detail": null,
+      "thread_id": null,
+      "elapsed": null,
+      "retries": 0,
+      "summary": "",
+      "snapshot": null,
+      "realizable": true,
+      "error": "",
+      "external_dep": "",
+      "window": {
+        "id": "W2",
+        "title": "受控求解：打开编辑器并加载参考关卡",
+        "action": "solve",
+        "slots": {},
+        "depends_on": [
+          "W1"
+        ],
+        "max_retries": 0,
+        "realizable": true,
+        "ok": true,
+        "blocked": false,
+        "goal": true,
+        "scope_text": "打开编辑器并加载参考关卡；以下交付项没有窗口接住，交给受控求解（全部合并为一扇，只写一套代码）；确认 UE 编辑器进程已启动，并等待 MCP 端口连通；确认点光源已生成并处于可保存、可验证的关卡状态",
+        "task": {
+          "id": "SBW-Acov-SOLVE",
+          "action": "solve",
+          "title": "受控求解：打开编辑器并加载参考关卡",
+          "query": "打开编辑器并加载参考关卡；以下交付项没有窗口接住，交给受控求解（全部合并为一扇，只写一套代码）；确认 UE 编辑器进程已启动，并等待 MCP 端口连通；确认点光源已生成并处于可保存、可验证的关卡状态",
+          "slots": {},
+          "allow_writes": [],
+          "max_retries": 0
+        }
+      },
+      "task": {
+        "id": "SBW-Acov-SOLVE",
+        "action": "solve",
+        "title": "受控求解：打开编辑器并加载参考关卡",
+        "allow_writes": [],
+        "max_retries": 0,
+        "verify": [],
+        "save": true,
+        "pie": true
+      }
+    },
+    "W3": {
+      "id": "W3",
+      "title": "打开关卡 /Game/Maps/L_NewTest2",
+      "action": "open_level",
+      "depends_on": [
+        "W2"
+      ],
+      "state": "queued",
+      "ok": null,
+      "result": null,
+      "detail": null,
+      "thread_id": null,
+      "elapsed": null,
+      "retries": 0,
+      "summary": "",
+      "snapshot": null,
+      "realizable": true,
+      "error": "",
+      "external_dep": "",
+      "window": {
+        "id": "W3",
+        "title": "打开关卡 /Game/Maps/L_NewTest2",
+        "action": "open_level",
+        "slots": {
+          "level": "/Game/Maps/L_NewTest2"
+        },
+        "depends_on": [
+          "W2"
+        ],
+        "max_retries": 1,
+        "realizable": true,
+        "ok": true,
+        "blocked": false,
+        "save": true,
+        "pie": true,
+        "level_name": "L_NewTest2",
+        "level_path": "/Game/Maps/L_NewTest2",
+        "package_path": "/Game/Maps/L_NewTest2",
+        "asset_name": "L_NewTest2",
+        "ref_path": "/Game/Maps/L_NewTest2.L_NewTest2",
+        "goal": true
+      }
+    },
+    "W4": {
+      "id": "W4",
+      "title": "按拆分写入 C++",
+      "action": "apply_spec",
+      "depends_on": [
+        "W3"
+      ],
+      "state": "paused",
+      "ok": null,
+      "result": null,
+      "detail": null,
+      "thread_id": null,
+      "elapsed": null,
+      "retries": 0,
+      "summary": "人工裁决停止",
+      "snapshot": null,
+      "realizable": false,
+      "error": "表外动作 apply_spec，这一窗暂停，不执行。",
+      "external_dep": "",
+      "window": {
+        "id": "W4",
+        "title": "按拆分写入 C++",
+        "action": "apply_spec",
+        "slots": {},
+        "depends_on": [
+          "W3"
+        ],
+        "max_retries": 1,
+        "realizable": false,
+        "ok": false,
+        "blocked": true,
+        "save": true,
+        "pie": true,
+        "error": "表外动作 apply_spec，这一窗暂停，不执行。",
+        "action_candidate": "apply_spec",
+        "goal": true
+      }
+    },
+    "W5": {
+      "id": "W5",
+      "title": "累计集成、验证与交付",
+      "action": "integrate_verify",
+      "depends_on": [
+        "W1",
+        "W2",
+        "W3",
+        "W4"
+      ],
+      "state": "queued",
+      "ok": null,
+      "result": null,
+      "detail": null,
+      "thread_id": null,
+      "elapsed": null,
+      "retries": 0,
+      "summary": "",
+      "snapshot": null,
+      "realizable": true,
+      "error": "",
+      "external_dep": "",
+      "window": {
+        "id": "W5",
+        "title": "累计集成、验证与交付",
+        "action": "integrate_verify",
+        "slots": {},
+        "depends_on": [
+          "W1",
+          "W2",
+          "W3",
+          "W4"
+        ],
+        "max_retries": 1,
+        "realizable": true,
+        "ok": true,
+        "blocked": false,
+        "save": true,
+        "pie": true
+      }
+    }
+  },
+  "artifacts": {},
+  "integration": {
+    "ok": false,
+    "status": "失败",
+    "summary": "人工裁决停止，未跑完的窗口记未开始。有范围没完成：A（窗口没跑完：W1、W2）、B（窗口没跑完：W3、W4、W2）、INT（窗口没跑完：W5）；有窗口暂停：W4（表外动作 apply_spec，这一窗暂停，不执行。）。集成不调用模型。",
+    "sentence": "failed"
+  },
+  "criteria": [
+    {
+      "id": "c-automation",
+      "text": "Automation 过滤器失败数为 0",
+      "evidence_kind": "automation",
+      "passed": false,
+      "windows": [
+        "SBW-A-SOLVE"
+      ]
+    }
+  ],
+  "undelivered": [
+    {
+      "scope": "A",
+      "title": "打开编辑器并加载参考关卡",
+      "deliverables": [
+        "确认 UE 编辑器进程已启动，并等待 MCP 端口连通",
+        "将 /Game/Maps/L_NewTest2 打开为当前关卡，确认关卡存在且唯一"
+      ],
+      "reason": "窗口没跑完：W1、W2",
+      "gap": false,
+      "windows": []
+    },
+    {
+      "scope": "B",
+      "title": "在参考关卡中添加一个新的点光源",
+      "deliverables": [
+        "在 /Game/Maps/L_NewTest2 关卡中新增一个点光源（仅新增一个，不替换现有光源）",
+        "确认点光源已生成并处于可保存、可验证的关卡状态"
+      ],
+      "reason": "窗口没跑完：W3、W4、W2",
+      "gap": false,
+      "windows": [
+        {
+          "id": "W4",
+          "note": "表外动作 apply_spec，这一窗暂停，不执行。"
+        }
+      ]
+    },
+    {
+      "scope": "INT",
+      "title": "累计集成、验证与交付",
+      "deliverables": [
+        "复验编辑器启动与 MCP 端口连通状态",
+        "只读确认当前关卡为 /Game/Maps/L_NewTest2 且关卡存在且唯一",
+        "只读确认新增点光源存在且仅新增一个"
+      ],
+      "reason": "窗口没跑完：W5",
+      "gap": false,
+      "windows": []
+    }
+  ],
+  "stale_candidates": [
+    {
+      "name": "open_marketplace",
+      "age_days": 20,
+      "hits": 2
+    },
+    {
+      "name": "建关卡",
+      "age_days": 19,
+      "hits": 88
+    }
+  ],
+  "sentence": "failed"
+}

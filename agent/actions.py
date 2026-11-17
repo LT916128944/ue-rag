@@ -120,6 +120,24 @@ _ROWS: list[dict] = [
         "verify": ["实例在当前关卡"],
     },
     {
+        "name": "place_light",
+        "slots": ("light_type",),
+        "summary": "在当前关卡里放一盏灯：light_type 填 点光源/聚光灯/方向光/矩形光（缺省按点光源）。"
+                   "按类生成原生 Actor（如 /Script/Engine.PointLight），不是放蓝图，不要改用 place_actor。"
+                   "不保存，窗口显式 save:true 才保存当前关卡。",
+        "judge_kind": "editor_assert",
+        "dispatch": "direct",
+        "editor_lock": True,
+        "estimate": (0.3, 1.5),
+        "verify": ["当前关卡里该类灯的实例数 +1", "未授权不保存"],
+        "surface": [
+            "editor.author_map_settings",
+            "mesh.get_scene_statistics",
+            "editor.save_packages",
+            "editor.list_dirty_packages",
+        ],
+    },
+    {
         "name": "place_batch",
         "slots": ("blueprint", "layout"),
         "summary": "按设计图 JSON 批量放置同一蓝图（layout 填设计图文件名，"

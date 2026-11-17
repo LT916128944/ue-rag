@@ -129,6 +129,70 @@
       "version": 1,
       "lru": 3,
       "status": "shadow"
+    },
+    {
+      "id": "solver-8ce76833",
+      "when": "给该UI资产左下角添加一个血条，上限100，样式你自己定义，可仿照市面上常见FPS的设计。参考资产：/Game/UI/WBP_FpsHUD",
+      "roles": [],
+      "goals": [
+        "editor.run_python",
+        "editor.save_packages",
+        "apply_spec+build"
+      ],
+      "preconditions": [
+        "动作原语经 monolith 盘点确认存在"
+      ],
+      "action_sequence": [
+        "editor.run_python",
+        "editor.save_packages",
+        "apply_spec+build"
+      ],
+      "verification": [
+        "automation 收口：失败数 0（1 个测试） tests=AIAgent.Fps.Hit"
+      ],
+      "failure_recovery": [
+        "预算烧尽降级为能力缺口",
+        "编译错误原文进下一轮，最多 3 轮"
+      ],
+      "confidence": 0.5,
+      "source_runs": [
+        "W1"
+      ],
+      "conflicts": [],
+      "version": 1,
+      "lru": 4,
+      "status": "shadow"
+    },
+    {
+      "id": "solver-caf546e4",
+      "when": "上一扇交接：\n{\"window\": \"W1\", \"unmet\": [], \"unmet_total\": 0, \"unmet_omitted\": 0, \"evid",
+      "roles": [],
+      "goals": [
+        "apply_spec+build",
+        "apply_spec+build"
+      ],
+      "preconditions": [
+        "动作原语经 monolith 盘点确认存在"
+      ],
+      "action_sequence": [
+        "apply_spec+build",
+        "apply_spec+build"
+      ],
+      "verification": [
+        "automation 收口：失败数 0（1 个测试） tests=AIAgent.Fps.Hit"
+      ],
+      "failure_recovery": [
+        "预算烧尽降级为能力缺口",
+        "编译错误原文进下一轮，最多 3 轮"
+      ],
+      "confidence": 0.5,
+      "source_runs": [
+        "W2"
+      ],
+      "conflicts": [],
+      "version": 1,
+      "lru": 5,
+      "status": "shadow"
     }
   ]
 }

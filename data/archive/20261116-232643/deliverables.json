@@ -1,0 +1,51 @@
+{
+  "run_id": "20261116-232643",
+  "hashes": [],
+  "matrix": [
+    {
+      "item": "重复请求幂等",
+      "ok": null,
+      "note": "没有可复验的只读裁决，本次不适用",
+      "evidence_count": 0,
+      "scope_ids": []
+    },
+    {
+      "item": "拒答路径",
+      "ok": null,
+      "note": "本次没有拒答窗口，不适用",
+      "evidence_count": 0,
+      "scope_ids": []
+    },
+    {
+      "item": "延迟窗口",
+      "ok": null,
+      "note": "本次没有重试，不适用",
+      "evidence_count": 0,
+      "scope_ids": []
+    },
+    {
+      "item": "断线重连",
+      "ok": null,
+      "note": "本次无断线，不适用",
+      "evidence_count": 0,
+      "scope_ids": []
+    },
+    {
+      "item": "未知态恢复",
+      "ok": null,
+      "note": "每扇都有明确终态或未开始",
+      "evidence_count": 0,
+      "scope_ids": []
+    },
+    {
+      "item": "交付验收",
+      "ok": null,
+      "note": "本次没有产出任何条款，交付验收不适用",
+      "evidence_count": 0,
+      "scope_ids": [
+        "A"
+      ]
+    }
+  ],
+  "written_by": "finalize"
+}

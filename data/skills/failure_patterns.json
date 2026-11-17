@@ -220,6 +220,19 @@
       "successes": 0,
       "status": "shadow",
       "conflicts": []
+    },
+    {
+      "id": "solver-fail-8ce76833",
+      "symptom": "solver-no_criteria",
+      "symptom_detail": "",
+      "note": "求解 no_criteria：打开编辑器，在关卡中世界原点添加一个点光源。参考关卡：/Game/Maps/L_NewTest",
+      "fix_tools": [],
+      "source_runs": [
+        "W1"
+      ],
+      "successes": 0,
+      "status": "shadow",
+      "conflicts": []
     }
   ]
 }
