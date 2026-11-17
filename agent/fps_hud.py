@@ -232,6 +232,15 @@ def build_fps_hud(step: dict) -> dict | None:
     wanted = requested_hud_controls(text)
     remove_intent = wants_remove_controls(text)
     add_intent = wants_add_controls(text)
+    # 20261117：一句话里「先删旧血条、再加一条」是两个有序动作，规划层会把它们拆成
+    # 「删除扇」「摆放扇」两扇（见 hud_windows）。每扇用 slots.hud_op 指明自己只做哪一半，
+    # 不再都按整句文本同时删+加——否则删扇会顺手把加回来的又删了，两扇都错。
+    slots = step.get("slots") if isinstance(step, dict) else {}
+    hud_op = str((slots or {}).get("hud_op") or "").strip()
+    if hud_op == "remove":
+        remove_intent, add_intent = True, False
+    elif hud_op == "add":
+        remove_intent, add_intent = False, True
 
     from core.editor_exec import exec_tool
 
@@ -422,7 +431,7 @@ def build_fps_hud(step: dict) -> dict | None:
     # ⑤ 复查：按意图核对（先删后加/只加 ⇒ 必须在；只删 ⇒ 必须不在）。
     again = _call("UMGToolSet.UMGToolSet", "GetWidgets", {"widgetBlueprint": {"refPath": ref}})
     final = _names(again.get("data"))
-    expectation = hud_expectation(text)
+    expectation = "absent" if hud_op == "remove" else ("present" if hud_op == "add" else hud_expectation(text))
     if expectation == "absent":
         still = [name for name in wanted if name in final]
         if still:
@@ -515,9 +524,28 @@ def hud_windows(query: str) -> list[dict] | None:
     _add("create_widget_blueprint",
          {"folder": folder, "name": asset, "parent": "UserWidget"},
          f"新建/定位 {asset}")
-    _add("edit_widget_blueprint",
-         {"folder": folder, "name": asset, "hud_controls": controls},
-         f"摆放 {asset} 的 HUD 控件")
+    # 20261117：把「删除旧血条」与「新增血条」拆成两扇独立窗口，删除动作在窗口图上看得见。
+    # 之前删+加都塞进同一扇「摆放 HUD 控件」，运行时确实删了（RemoveWidget），但面板上
+    # 只显示「摆放…」，用户看不到「删除」这一步（185234 反馈）。删除扇只删、摆放扇只加，
+    # 各自带 slots.hud_op 让 build_fps_hud 只做一半。
+    edit_slots = {"folder": folder, "name": asset, "hud_controls": controls}
+    remove_intent = wants_remove_controls(text)
+    add_intent = wants_add_controls(text)
+    if remove_intent and add_intent:
+        _add("edit_widget_blueprint",
+             {**edit_slots, "hud_op": "remove"},
+             f"删除 {asset} 的旧血条控件")
+        _add("edit_widget_blueprint",
+             {**edit_slots, "hud_op": "add"},
+             f"摆放 {asset} 的 HUD 控件（新增血条）")
+    elif remove_intent:
+        _add("edit_widget_blueprint",
+             {**edit_slots, "hud_op": "remove"},
+             f"删除 {asset} 的血条控件")
+    else:
+        _add("edit_widget_blueprint",
+             {**edit_slots, "hud_op": "add"},
+             f"摆放 {asset} 的 HUD 控件")
     _add("check_fps_hud",
          {"widget": ref, "hud_controls": controls, "hud_expect": expect},
          ("只读核对 FPS HUD（应已删除）：" if expect == "absent" else "只读核对 FPS HUD：")

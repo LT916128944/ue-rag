@@ -57,6 +57,17 @@ def check_planning_placeholder(text: str) -> str:
     return "窗口未拆出时右侧显示「规划中」占位卡，阶段由后台日志推断"
 
 
+def check_done_card_not_marked_incomplete(text: str) -> str:
+    """成功扇不许标「未完成」：交接 unmet 是整句合同里还没被下游扇证明的条款，
+    不是这一扇没做到。20261117-185234 的 4/4 全绿 run 每张卡都挂「未完成 N/N」，
+    看着像没做完。cardEl 的未完成清单只许在非 done 扇上出现。"""
+    check('st !== "done" && win.unmet' in text or "st !== 'done' && win.unmet" in text,
+          "cardEl 仍无条件把 handoff.unmet 显示成「未完成」：全绿 run 会被画成没做完")
+    check('win.state !== "done"' in text,
+          "showWindowLog 仍会给成功扇追加「未完成」")
+    return "成功扇(done)不再显示「未完成 N/N」，unmet 只在未完成的扇上出现"
+
+
 def check_server_route() -> str:
     import server.entry as entry
 
@@ -73,6 +84,7 @@ def main() -> int:
             check_log_panel(text),
             check_countdown(text),
             check_planning_placeholder(text),
+            check_done_card_not_marked_incomplete(text),
             check_server_route(),
         ]
     except AssertionError as exc:

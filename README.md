@@ -86,9 +86,9 @@ judge_kind 沿用既有 `EVIDENCE_KINDS`（不新增证据种类）：图 / UMG 
 - **连接词层**：`agent/connectives.py` 读人写的 `data/skills/connectives.json`，把「然后 / 接着 / 随后 / 最后 / 之后 / 其次」（seq）与「并且 / 同时 / 以及 / 顺便 / 顺带」（parallel）等多字连接词当切点并剥掉；只做「拆句 + 覆盖」，顺序依赖不自动串；词表缺失 / 坏 JSON 退化成只按标点切。`eval/check_connectives.py` 钉住。
 - **缺信息先问模型**：`agent/model_fill.py` 在缺路径 / 蓝图 / 源文件 / 过滤器暂停前先用模型补一个形状合法的值（源文件要求磁盘真存在），补不出再退回人工 `r`；只补缺信息，不补能力缺口。`run_multi` / `run_windows` 的 `_decide*_model_first` 接它。`eval/check_model_fill.py` 钉住。
 - **放灯 `place_light`**：`agent/actions.py` 新增动作（`light_type`：点光源 / 聚光灯 / 方向光 / 矩形光，缺省点光源），执行器在 `agent/sequence.py` 的 `_place_light`，走 monolith `editor.author_map_settings` 按类生成原生灯、`mesh.get_scene_statistics` 复查 +1 再按窗口 save。`supervise._plan_rules` 把「打开编辑器…加个点光源」确定性拆成 launch → open → place_light，零模型。`eval/check_place_light.py`、`check_cpp_edit_scene.py`、`check_roadmap_deps.py` 钉住。
-- **HUD 单读数**：`agent/fps_hud.py` 的 `requested_hud_controls` 让「只加一条血条」只落地所需控件（血条配图形底条 `HealthBarBG` + 填充条 `HealthBarFill`），两类以上读数仍整份七控件合同；支持先删后加 / 纯删。`eval/check_hud_single_readout.py` 钉住。
+- **HUD 单读数**：`agent/fps_hud.py` 的 `requested_hud_controls` 让「只加一条血条」只落地所需控件（血条配图形底条 `HealthBarBG` + 填充条 `HealthBarFill`），两类以上读数仍整份七控件合同；先删后加拆成「删除扇（`slots.hud_op=remove`）→摆放扇（`hud_op=add`）」两扇，删除动作在窗口图上看得见，纯删仍单扇。`eval/check_hud_single_readout.py` 钉住。
 - **范围级条款进集成**：`agent/run_windows.py` 的 `_delivery_criteria` / `_all_criteria` 在 run 级、窗口级都空时回落 `scope["criteria"]`，不再把真做成的记成 `judge_failed`；未过的范围条款仍判失败。`eval/check_integrate_scope_criteria.py` 钉住。
-- **入口页**：`server/entry.py` 新增只读 `GET /api/uilog/<run_id>`（`data/ui/logs/<ts>.log` 的尾巴）；`server/static/entry.html` 修了 `btn-send` 把 MouseEvent 当 `resume` 的接线、空答案确认、先落空壳 run（规划 + 任务书人审前就有 run 记录）、顶栏预估倒计时 + 中央后台日志 + 规划期占位卡。`eval/check_entry_{send,brief_confirm,run_scaffold,ui_feedback}.py` 钉住。
+- **入口页**：`server/entry.py` 新增只读 `GET /api/uilog/<run_id>`（`data/ui/logs/<ts>.log` 的尾巴）；`server/static/entry.html` 修了 `btn-send` 把 MouseEvent 当 `resume` 的接线、空答案确认、先落空壳 run（规划 + 任务书人审前就有 run 记录）、顶栏预估倒计时 + 中央后台日志 + 规划期占位卡；窗口卡只在**未成功**的扇上显示「未完成」（交接 unmet 是整句合同里下游还没补验的条款，成功扇不再被标未完成）。`eval/check_entry_{send,brief_confirm,run_scaffold,ui_feedback}.py` 钉住。
 
 ## 入库
 

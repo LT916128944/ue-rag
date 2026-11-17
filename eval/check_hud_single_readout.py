@@ -107,12 +107,21 @@ def check_delete_then_add_intent() -> str:
     check(wants_add_controls(DELETE_ADD) is True, "没识别出「添加」意图")
     check(hud_expectation(DELETE_ADD) == "present", "先删后加复核口径应是 present（删完还要加回来）")
     ws = hud_windows(DELETE_ADD)
+    # 先删后加拆成两扇独立编辑窗（删除扇、摆放扇）：删除动作在窗口图上看得见（20261117-185234）。
     check(ws is not None and [w["action"] for w in ws] ==
-          ["create_widget_blueprint", "edit_widget_blueprint", "check_fps_hud"], ws)
+          ["create_widget_blueprint", "edit_widget_blueprint", "edit_widget_blueprint",
+           "check_fps_hud"], ws)
+    edits = [w for w in ws if w["action"] == "edit_widget_blueprint"]
+    ops = [str((w.get("slots") or {}).get("hud_op") or "") for w in edits]
+    check(ops == ["remove", "add"], f"先删后加应是「删除扇→摆放扇」两步，实际 {ops}")
+    check("删除" in str(edits[0].get("title") or ""), f"第一步应为删除扇：{edits[0].get('title')}")
+    # 依赖成链：删除扇在摆放扇之前，不许并行
+    check(list(edits[1].get("depends_on") or []) == [edits[0]["id"]],
+          f"摆放扇应依赖删除扇：{edits[1].get('depends_on')}")
     with closed_env(UE_ALLOW_UMG="true", UE_ALLOW_BLUEPRINT="true"):
         planned = plan_windows(DELETE_ADD)
     check(planned.get("source") == "hud-rules", planned.get("source"))
-    return "先删后加 → hud-rules 链，删除意图被识别（复核仍 present）"
+    return "先删后加 → 删除扇 + 摆放扇两扇，删除意图可见（复核仍 present）"
 
 
 def check_delete_only_expects_absent() -> str:

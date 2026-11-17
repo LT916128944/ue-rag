@@ -2003,7 +2003,10 @@
     const q = queueText(win.queue_ms);
     const el = elapsedText(win, currentNow());
     const pct = progressPct(win);
-    const unmet = (win.unmet && win.unmet.length)
+    // 仅「没成功」的扇才显示未完成清单：交接里的 unmet 是这一扇跑完时**整句合同**里还没被
+    // 任何扇证明的条款（未跑到的下游扇会补上），不是这一扇本身没做到。成功扇(done)再标
+    // 「未完成 N/N」会把一条 4/4 全绿的 run 画得像没做完（20261117-185234 反馈）。
+    const unmet = (st !== "done" && win.unmet && win.unmet.length)
       ? "↓未完成 " + win.unmet.length + "/" + (win.unmetTotal == null ? win.unmet.length : win.unmetTotal)
       : "";
 
@@ -2225,7 +2228,7 @@
     line.className = "sysmsg";
     line.textContent = win.id + " · " + (win.action || "无动作") + " · " +
       (win.summary || win.step || "（暂无输出）") +
-      (win.unmet && win.unmet.length ? " · 未完成：" + win.unmet.join("；") : "");
+      (win.unmet && win.unmet.length && win.state !== "done" ? " · 未完成：" + win.unmet.join("；") : "");
     $("thread").appendChild(line);
     $("thread").scrollTop = $("thread").scrollHeight;
   }
