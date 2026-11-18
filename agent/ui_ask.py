@@ -99,6 +99,10 @@ def split_answer(answer: str) -> tuple[str, str]:
     """一行答案 → (option, path)。option 是 CLI 认的那个记号，认不出就把原文当 option。"""
     text = str(answer or "").strip()
     low = text.lower()
+    # 任务书弹窗提交的结构化答案（`agent/brief.BRIEF_ANSWER_PREFIX`）：整份任务书在正文里，
+    # 事件只要一个记号，别把几 KB 的 brief 再抄进 answer 事件。返回值仍是原文，调用方照旧解析。
+    if low.startswith("@@brief@@"):
+        return "@@brief@@", ""
     if low in ("c", "skip"):
         return "c", ""
     if low in ("", "s", "stop"):
@@ -188,18 +192,26 @@ class Channel:
 
     # ---------- 提问 ----------
     def ask(self, *, kind: str, window: str = "", prompt: str = "", hint: str = "",
-            options: list[dict] | None = None, default: str = "") -> tuple[str, str]:
+            options: list[dict] | None = None, default: str = "",
+            extra: dict | None = None) -> tuple[str, str]:
         """返回 (answer, source)。source ∈ ui / stdin / eof / timeout。
 
         `answer` 是**原文**：解析仍由调用方（`_decide_window` / `brief_flow`）做，
         本模块不替它们判断 s/c/r 的含义。
+
+        `extra`（20261118）：随 `question` 事件一起附带的结构化上下文（任务书门传当前这版
+        brief）。只加进事件，不参与领答案的逻辑；不传时事件形状与改动前逐字一致。
         """
         rows = list(options) if options is not None else decide_options(hint)
         qid = self.next_question_id()
-        self.emit_event(
-            "question", question_id=qid, kind=kind, window=window,
-            prompt=prompt, options=rows, default=default,
-        )
+        fields = {
+            "question_id": qid, "kind": kind, "window": window,
+            "prompt": prompt, "options": rows, "default": default,
+        }
+        if isinstance(extra, dict):
+            for key, value in extra.items():
+                fields.setdefault(key, value)
+        self.emit_event("question", **fields)
 
         answer, source = "", "stdin"
         if self.inbox is not None and not _is_tty(self.stdin):

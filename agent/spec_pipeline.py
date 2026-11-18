@@ -238,18 +238,23 @@ def run_ops(module, spec: dict, call: Callable | None, write: dict) -> dict:
     call = call or default_call
     tools: list[str] = []
     readback: dict = {}
+    warnings: list[str] = []
     for op in module.plan_ops(spec) or []:
         result = module.exec_op(op, call, write) or {}
         tools.extend(result.get("tools") or [])
         readback.update(result.get("readback") or {})
+        if result.get("warning"):
+            warnings.append(str(result["warning"]))
         if not result.get("ok"):
             return {
                 "ok": False, "tools": tools, "readback": readback, "op": op,
+                "warnings": warnings,
                 "error": spec_error("exec_failed",
                                     f"原语 {op.get('op')} 执行失败：{result.get('error') or '未知错误'}",
                                     where=str(op.get("target") or op.get("op") or "")),
             }
-    return {"ok": True, "tools": tools, "readback": readback, "op": None, "error": None}
+    return {"ok": True, "tools": tools, "readback": readback, "op": None, "error": None,
+            "warnings": warnings}
 
 
 # ------------------------------------------------------------------ 主流水线
@@ -314,6 +319,7 @@ def build_domain(module, step: dict, *, call: Callable | None = None,
                         "ok": True, "phase": "done", "domain": domain, "judge_kind": judge_kind,
                         "spec": spec, "tools": last_tools, "exec_count": len(last_tools),
                         "readback": built["readback"], "rounds": rounds, "errors": [],
+                        "warnings": built.get("warnings") or [],
                         "summary": summary,
                     }
                 last_errors = [spec_error("verify", str(f), where=domain) for f in fails]
@@ -326,6 +332,65 @@ def build_domain(module, step: dict, *, call: Callable | None = None,
         reason = "复核/执行未通过且回灌修复用完或模型救不回，暂停点名"
         return _fail("repair" if len(last_errors) and last_errors[0].get("code") == "verify" else "build",
                      last_errors, paused=True, reason=reason, tools=last_tools, rounds=rounds)
+
+
+# ------------------------------------------------------------------ 模型产 Spec
+def _json_object(raw) -> dict | None:
+    text = str(raw or "")
+    start = text.find("{")
+    end = text.rfind("}")
+    if start < 0 or end <= start:
+        return None
+    try:
+        obj = json.loads(text[start:end + 1])
+    except (json.JSONDecodeError, ValueError, TypeError):
+        return None
+    return obj if isinstance(obj, dict) else None
+
+
+def _ask_model(complete, messages, caller: str) -> str:
+    """一次模型调用取文本。``complete`` 可注入（离线替身）；否则走 ``complete_logged``：
+    没有 key / 报错都立即返回空串（不联网重试到超时），产 Spec 是尽力而为。"""
+    try:
+        if complete is not None:
+            return str(complete(messages) or "")
+        from core.llm_call import complete_logged
+
+        response, record = complete_logged(messages, temperature=0, caller=caller)
+        if record.get("error") or response is None:
+            return ""
+        return response.choices[0].message.content or ""
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def produce_spec(module, step: dict, *, complete=None, defaults: dict | None = None) -> dict | None:
+    """让模型按域的 ``SPEC_HINT`` 产一份 Spec，再按该域 ``validate_spec`` 验收。
+
+    边界（与总览 §1 一致）：模型只产 Spec（数据），不直接发写工具；产不出 / 解析失败 /
+    校验不过**一律返回 None**，调用方保持原路径——诚实失败，绝不拿半个 Spec 冒充完成。
+    离线或无 key 时 ``_ask_model`` 立即返回空串 ⇒ None，行为与接入前逐字一致。"""
+    hint = str(getattr(module, "SPEC_HINT", "") or "").strip()
+    if not hint:
+        return None
+    step = step if isinstance(step, dict) else {}
+    query = str(step.get("query") or step.get("title") or "").strip()
+    messages = [
+        {"role": "system", "content": (
+            "你只输出一个 JSON Spec，不要解释、不要代码块、不要多余文字。\n" + hint)},
+        {"role": "user", "content": json.dumps({"原句": query[:800]}, ensure_ascii=False)},
+    ]
+    obj = _json_object(_ask_model(complete, messages, f"spec-{getattr(module, 'KIND', '') or 'x'}"))
+    if not isinstance(obj, dict):
+        return None
+    if isinstance(defaults, dict):
+        for key, value in defaults.items():
+            obj.setdefault(key, value)
+    try:
+        errors = module.validate_spec(obj) or []
+    except Exception:  # noqa: BLE001
+        return None
+    return None if errors else obj
 
 
 # ------------------------------------------------------------------ 沉淀（毕业候选）

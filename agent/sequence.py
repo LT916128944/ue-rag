@@ -309,6 +309,18 @@ def repair_blueprint(step: dict, *, attempts: int = 3) -> dict:
             built_umg = build_umg_spec(step)
             built_umg.setdefault("attempts", 1)
             return built_umg
+        # 走到这里说明：既不是 FPS HUD 固定合同，也没有模型产出的 UMG Spec。此时**不能再落到
+        # discover 猜 action**：ui 命名空间没有唯一的「编辑控件图」action（compile 针名同时命中
+        # compile_widget / dump_blueprint_compile_log），盲试 3 次会把「缺 Spec」误报成
+        # 「Monolith 不具备该能力」（20261118-164628 的 W2）。这里诚实失败并点名缺什么。
+        return {
+            "ok": False, "attempts": 1, "exec_count": 0,
+            "error": (
+                "控件图改动需要一个 UMG Spec（模型产）或 FPS HUD 固定合同；本扇两者都没有，"
+                "不盲试 discover（ui 命名空间没有唯一的“编辑控件图”action）。这不是 Monolith 没有能力。"
+            ),
+            "summary": "控件图改动缺少 UMG Spec，未执行（不是 Monolith 不具备能力）",
+        }
     if action == "create_widget_blueprint":
         # 控件图创建也不再走 discover 猜 action：`ui` 命名空间里 create_* 一大片，
         # 针名判不出唯一（20261029-020749 的 W3）。_create_widget_blueprint 本来就

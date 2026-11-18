@@ -422,6 +422,51 @@
   .plan-card { padding: 10px 12px; }
   .plan-card .ti { -webkit-line-clamp: initial; max-height: none; }
 
+  /* 任务书人审弹窗（20261118）：把「写任务书」从后台日志剥离成可读、可改的网页表单。
+     后台日志那张 rich ASCII 表在宽表里会截列（「尚未完… / 估时(小…」），人根本读不全，
+     也改不了；这里按范围分区渲染成输入框，改完点确认/应用修改即写回收件箱。 */
+  .briefmodal { position: fixed; inset: 0; z-index: 60; display: flex; align-items: center; justify-content: center; }
+  .briefmodal[hidden] { display: none; }
+  .briefmodal .bm-mask { position: absolute; inset: 0; background: rgba(3, 6, 10, .66); }
+  .briefmodal .bm-panel {
+    position: relative; z-index: 1; width: min(980px, 94vw); max-height: 90vh;
+    display: flex; flex-direction: column; background: #10161f; border: 1px solid #3a4b63;
+    border-radius: 12px; box-shadow: 0 18px 60px rgba(0, 0, 0, .6); overflow: hidden;
+  }
+  .bm-head { flex: 0 0 auto; display: flex; align-items: baseline; gap: 10px; padding: 11px 16px; border-bottom: 1px solid var(--line); background: #0d131b; }
+  .bm-head .bm-title { font-size: 14px; font-weight: 600; color: #cfe2f7; }
+  .bm-head .bm-sub { font-size: 11px; color: var(--text-mute); font-family: var(--mono); }
+  .bm-head .grow, .bm-foot .grow { flex: 1 1 auto; }
+  .bm-head .bm-close { font-size: 11px; }
+  .bm-body { flex: 1 1 auto; overflow: auto; padding: 12px 16px 16px; }
+  .bm-orig { font-size: 12px; color: var(--text-dim); background: #0c1219; border: 1px solid var(--line-soft); border-radius: 7px; padding: 7px 10px; margin-bottom: 12px; white-space: pre-wrap; }
+  .bm-scope, .bm-integ { border: 1px solid #2c3a4c; border-radius: 9px; padding: 10px 12px; margin-bottom: 11px; background: #121a24; }
+  .bm-integ { border-color: #34506b; }
+  .bm-row1 { display: flex; align-items: center; gap: 8px; margin-bottom: 7px; }
+  .bm-id { font-family: var(--mono); font-size: 11px; color: #7fb0e8; border: 1px solid #2f5c8a; border-radius: 4px; padding: 1px 6px; flex: 0 0 auto; }
+  .bm-title-in { flex: 1 1 auto; background: #0c1219; border: 1px solid var(--line); border-radius: 6px; color: var(--text); font: inherit; font-size: 13px; font-weight: 600; padding: 5px 8px; }
+  .bm-lbl { font-size: 10px; color: var(--text-mute); margin: 6px 0 4px; }
+  .bm-dels { display: flex; flex-direction: column; gap: 5px; }
+  .bm-del { display: flex; gap: 6px; align-items: center; }
+  .bm-del-in { flex: 1 1 auto; background: #0c1219; border: 1px solid var(--line); border-radius: 6px; color: var(--text); font: inherit; font-size: 12px; padding: 4px 8px; }
+  .bm-del-rm { flex: 0 0 auto; font-size: 12px; line-height: 1; padding: 2px 7px; color: var(--bad); }
+  .bm-del-add { align-self: flex-start; font-size: 11px; padding: 2px 8px; }
+  .bm-meta { display: flex; flex-wrap: wrap; gap: 14px; align-items: center; margin-top: 8px; font-size: 11px; color: var(--text-mute); }
+  .bm-meta label { display: flex; align-items: center; gap: 5px; }
+  .bm-meta .bm-pending { background: #0c1219; border: 1px solid var(--line); border-radius: 6px; color: var(--text); font: inherit; font-size: 12px; padding: 4px 8px; min-width: 220px; resize: vertical; }
+  .bm-meta input[type=number] { width: 64px; background: #0c1219; border: 1px solid var(--line); border-radius: 6px; color: var(--text); font: inherit; font-size: 12px; padding: 3px 6px; }
+  .bm-readonly { font-size: 10.5px; color: var(--text-mute); margin-top: 8px; font-family: var(--mono); }
+  .bm-chip { display: inline-block; font-family: var(--mono); font-size: 10px; color: #9dc4ea; border: 1px solid #2f4a63; border-radius: 4px; padding: 0 5px; margin: 0 3px 2px 0; }
+  .bm-chip.muted { color: var(--text-mute); border-color: #333; }
+  .bm-warn { margin-top: 7px; font-size: 11px; color: var(--warn); }
+  .bm-ext, .bm-total { font-size: 12px; color: var(--text-dim); margin: 4px 0; }
+  .bm-foot { flex: 0 0 auto; display: flex; align-items: center; gap: 8px; padding: 10px 16px; border-top: 1px solid var(--line); background: #0d131b; }
+  .bm-foot .bm-hint { font-size: 11px; color: var(--text-mute); max-width: 48%; }
+  .bm-foot .bm-decide { display: flex; gap: 6px; }
+  .bm-foot button { font-size: 12px; padding: 5px 14px; }
+  .bm-danger { color: var(--bad); border-color: #6b3434; }
+  .bm-body.bm-busy { opacity: .7; pointer-events: none; }
+
   .hidden { display: none !important; }
   .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
 </style>
@@ -552,6 +597,26 @@
     </div>
   </section>
 </main>
+
+<!-- 任务书人审弹窗：由 question 事件（kind=brief 且带 brief）驱动，见 renderBriefModal() -->
+<div class="briefmodal" id="briefmodal" hidden>
+  <div class="bm-mask"></div>
+  <div class="bm-panel" role="dialog" aria-modal="true" aria-label="任务书审阅">
+    <div class="bm-head">
+      <span class="bm-title">任务书审阅</span>
+      <span class="bm-sub" id="bm-sub"></span>
+      <span class="grow"></span>
+      <button type="button" class="bm-close" id="bm-close" title="收起弹窗（不提交；可从右侧“查看任务书”重新打开）">收起</button>
+    </div>
+    <div class="bm-body" id="bm-body"></div>
+    <div class="bm-foot">
+      <span class="bm-hint" id="bm-hint">直接在框里改。点「确认」会先应用修改再执行；点「应用修改」只保存、继续审。</span>
+      <span class="grow"></span>
+      <button type="button" id="bm-apply">应用修改（继续审）</button>
+      <span class="bm-decide" id="bm-decide"></span>
+    </div>
+  </div>
+</div>
 
 <script id="entry-core">
 "use strict";
@@ -1033,6 +1098,9 @@
     nodeCache: {},                       // path -> entries（侧边栏一层一层取）
     events: [],                          // 这条 run 的事件（question/answer 从这里判 pending）
     question: null,                      // 当前等着答的那条 question
+    brief: null,                         // 当前任务书人审的 brief（question 事件带过来）
+    briefEv: null,                       // 当前任务书那条 question 事件
+    briefCollapsed: false,               // 用户是否把任务书弹窗收起（收起后右侧退回小裁决条）
     loglines: [],                        // 后台日志尾巴（/api/uilog），中央左对齐显示
     startMs: 0                           // 本条 run 的本地起点（started_at 缺失时兜底算用时）
   };
@@ -1145,6 +1213,9 @@
     if (state.es) { try { state.es.close(); } catch (err) { /* 已关 */ } state.es = null; }
     state.runId = "";
     state.events = [];
+    state.brief = null;
+    state.briefEv = null;
+    state.briefCollapsed = false;
     state.loglines = [];
     state.startMs = 0;
     state.run = blankRun("", "");
@@ -1162,6 +1233,9 @@
     if (!runId) return;
     ensureRunOption(runId);          // 拖入的更早 run 不在最近 5 条里时，补一个下拉项并选中
     state.runId = runId;
+    state.brief = null;
+    state.briefEv = null;
+    state.briefCollapsed = false;
     state.loglines = [];
     state.startMs = 0;
     getJSON("/api/run/" + encodeURIComponent(runId) + "?tail=400").then(function (data) {
@@ -1512,8 +1586,23 @@
   // ---------- 决策面板（只有出现 question 事件才弹） ----------
   function renderQuestion(ev) {
     const zone = $("qzone");
-    if (!ev) { zone.hidden = true; zone.classList.remove("done"); state.question = null; return; }
+    if (!ev) {
+      zone.hidden = true; zone.classList.remove("done"); state.question = null;
+      state.brief = null; state.briefEv = null; closeBriefModal();
+      return;
+    }
     state.question = ev;
+    const hasBrief = ev.kind === "brief" && ev.brief && typeof ev.brief === "object";
+    if (hasBrief) { state.brief = ev.brief; state.briefEv = ev; }
+    else { state.brief = null; state.briefEv = null; }
+    // 任务书门：优先弹可读可改的弹窗；用户收起后，退回右侧小裁决条（仍能直接点确认/放弃）。
+    if (hasBrief && !state.briefCollapsed) {
+      renderBriefModal(ev);
+      zone.hidden = true;
+      zone.classList.remove("done");
+      return;
+    }
+    closeBriefModal();
     zone.hidden = false;
     zone.classList.remove("done");
     $("qkind").textContent = ev.kind === "brief" ? "任务书" :
@@ -1536,6 +1625,13 @@
       b.dataset.value = "";
       b.addEventListener("click", function () { chooseOption(b, ev); });
       host.appendChild(b);
+    }
+    if (hasBrief) {
+      const rb = document.createElement("button");
+      rb.type = "button";
+      rb.textContent = "查看任务书";
+      rb.addEventListener("click", function () { state.briefCollapsed = false; renderQuestion(ev); });
+      host.appendChild(rb);
     }
     $("qecho").textContent = "";
     $("qpath").value = "";
@@ -1575,6 +1671,256 @@
       sysmsg("已写入裁决：" + answer + "（" + res.path + "）");
     }).catch(function (e) {
       $("qecho").textContent = "没写进去：" + String(e && e.message || e);
+    });
+  }
+
+  // ---------- 任务书人审弹窗（20261118） ----------
+  // 与 agent/brief.py 的 BRIEF_ANSWER_PREFIX 必须逐字一致：网页把整份任务书（含修改）
+  // 塞进这一行的 JSON 里，brief._parse_brief_answer 据此走结构化编辑/确认，而不是老口令。
+  const BRIEF_ANS_PREFIX = "@@brief@@";
+
+  function closeBriefModal() {
+    const m = $("briefmodal");
+    if (m) m.hidden = true;
+  }
+
+  function briefSure(v) { return v == null ? "" : String(v); }
+  function briefNumOr(v, d) { const n = Number(v); return isFinite(n) ? n : d; }
+
+  /** 只取可编辑字段的快照，用于判断「用户到底改没改」。 */
+  function briefShape(brief) {
+    const scopes = (brief.scopes || []).map(function (s) {
+      return {
+        id: briefSure(s.id), title: briefSure(s.title),
+        deliverables: (s.deliverables || []).map(briefSure),
+        pending_note: briefSure(s.pending_note),
+        estimate_hours: (s.estimate_hours || [0, 0]).map(Number)
+      };
+    });
+    const it = brief.integration || null;
+    const integration = it ? {
+      title: briefSure(it.title),
+      deliverables: (it.deliverables || []).map(briefSure),
+      estimate_hours: (it.estimate_hours || [0, 0]).map(Number)
+    } : null;
+    return { scopes: scopes, integration: integration };
+  }
+
+  function briefCollect(ev) {
+    const body = $("bm-body");
+    const scopes = [];
+    if (body) {
+      Array.prototype.forEach.call(body.querySelectorAll(".bm-scope"), function (block) {
+        const dels = [];
+        Array.prototype.forEach.call(block.querySelectorAll(".bm-del-in"), function (inp) {
+          const v = briefSure(inp.value).trim();
+          if (v) dels.push(v);
+        });
+        const lo = briefNumOr((block.querySelector(".bm-est-lo") || {}).value, 0);
+        const hi = briefNumOr((block.querySelector(".bm-est-hi") || {}).value, lo);
+        scopes.push({
+          id: block.dataset.sid || "",
+          title: briefSure((block.querySelector(".bm-title-in") || {}).value),
+          deliverables: dels,
+          pending_note: briefSure((block.querySelector(".bm-pending") || {}).value).trim(),
+          estimate_hours: [lo, hi]
+        });
+      });
+    }
+    let integration = null;
+    const ib = body && body.querySelector(".bm-integ");
+    if (ib) {
+      const dels = [];
+      Array.prototype.forEach.call(ib.querySelectorAll(".bm-del-in"), function (inp) {
+        const v = briefSure(inp.value).trim();
+        if (v) dels.push(v);
+      });
+      integration = {
+        title: briefSure((ib.querySelector(".bm-title-in") || {}).value),
+        deliverables: dels,
+        estimate_hours: [
+          briefNumOr((ib.querySelector(".bm-est-lo") || {}).value, 0),
+          briefNumOr((ib.querySelector(".bm-est-hi") || {}).value, 0)
+        ]
+      };
+    }
+    return { query: briefSure((ev && ev.brief && ev.brief.query) || ""), scopes: scopes, integration: integration };
+  }
+
+  function briefDirty(ev) {
+    if (!ev || !ev.brief) return false;
+    return JSON.stringify(briefCollect(ev)) !== JSON.stringify(briefShape(ev.brief));
+  }
+
+  function briefDelRow(text) {
+    return '<div class="bm-del"><input class="bm-del-in" value="' + esc(text) +
+      '"><button type="button" class="bm-del-rm" title="删掉这条">×</button></div>';
+  }
+
+  function briefBlockHtml(s, opts) {
+    opts = opts || {};
+    const hours = s.estimate_hours || [0, 0];
+    let dels = (s.deliverables || []).map(briefDelRow).join("");
+    if (!dels) dels = briefDelRow("");
+    const wins = (s.windows || []).map(function (w) {
+      return '<span class="bm-chip">' + esc(w.id || "") + " " + esc(w.action || "") + "</span>";
+    }).join(" ") || '<span class="bm-chip muted">（无窗口）</span>';
+    let cover = "";
+    if (opts.coverage) {
+      cover = "窗口 " + (opts.coverage.count || 0) + " 扇" +
+        (opts.coverage.runnable != null ? ("，可跑 " + opts.coverage.runnable) : "");
+    }
+    let warn = "";
+    if (s.blocked) warn = '<div class="bm-warn">※ ' + esc(s.block_note || "这一范围暂停") + "</div>";
+    else if (opts.gap) warn = '<div class="bm-warn">※ 能力缺口：这一范围没有可落地动作，确认后不执行</div>';
+    const readonly = opts.integ
+      ? "物化后由代码追加集成扇"
+      : ("依赖：" + esc((s.depends_on || []).join("、") || "无") +
+         " · 窗口：" + wins + (cover ? (" · " + esc(cover)) : ""));
+    const cls = opts.integ ? "bm-integ" : "bm-scope";
+    const idAttr = opts.integ ? "" : (' data-sid="' + esc(s.id || "") + '"');
+    const idChip = opts.integ ? '<span class="bm-id">INT</span>' : ('<span class="bm-id">' + esc(s.id || "") + "</span>");
+    return '<div class="' + cls + '"' + idAttr + ">"
+      + '<div class="bm-row1">' + idChip
+      + '<input class="bm-title-in" value="' + esc(s.title || "") + '" placeholder="标题"></div>'
+      + '<div class="bm-lbl">尚未完成的交付（可直接改、增删）</div>'
+      + '<div class="bm-dels">' + dels + '<button type="button" class="bm-del-add">+ 加一条</button></div>'
+      + '<div class="bm-meta">'
+      + '<label>现状/说明 <textarea class="bm-pending" rows="1" placeholder="可选">' + esc(s.pending_note || "") + "</textarea></label>"
+      + '<label>估时 <input class="bm-est-lo" type="number" min="0" step="0.5" value="' + esc(hours[0]) + '"> – '
+      + '<input class="bm-est-hi" type="number" min="0" step="0.5" value="' + esc(hours[1]) + '"> 小时</label>'
+      + "</div>"
+      + '<div class="bm-readonly">' + readonly + "</div>"
+      + warn + "</div>";
+  }
+
+  function briefBodyHtml(brief) {
+    const covRows = (brief.coverage && brief.coverage.scopes) || [];
+    const covById = {};
+    covRows.forEach(function (r) { if (r && r.id != null) covById[String(r.id)] = r; });
+    const gapIds = {};
+    ((brief.coverage && brief.coverage.gaps) || []).forEach(function (g) { if (g && g.id) gapIds[String(g.id)] = true; });
+    let h = '<div class="bm-orig">原句：' + esc(brief.query || "") + "</div>";
+    (brief.scopes || []).forEach(function (s) {
+      h += briefBlockHtml(s, { coverage: covById[String(s.id)], gap: !!gapIds[String(s.id)] });
+    });
+    if (brief.integration) h += briefBlockHtml(brief.integration, { integ: true });
+    const ext = brief.external_dependencies || [];
+    h += '<div class="bm-ext"><b>外部依赖：</b>' +
+      (ext.length ? ext.map(function (x) { return esc(x.name || "") + (x.status ? ("（" + esc(x.status) + "）") : ""); }).join("、") : "无") + "</div>";
+    const total = brief.total_estimate || {};
+    h += '<div class="bm-total">合计：' + esc(total.min_hours == null ? "?" : total.min_hours) +
+      "–" + esc(total.max_hours == null ? "?" : total.max_hours) + " 小时（估算只记录，不作为执行预算）</div>";
+    return h;
+  }
+
+  function renderBriefModal(ev) {
+    const m = $("briefmodal");
+    if (!m || !ev || !ev.brief) { closeBriefModal(); return; }
+    m.hidden = false;
+    const bodyEl = $("bm-body");
+    if (bodyEl) bodyEl.classList.remove("bm-busy");
+    const applyBtn = $("bm-apply");
+    if (applyBtn) applyBtn.disabled = false;
+    const brief = ev.brief;
+    const rev = brief.review || {};
+    $("bm-sub").textContent = "第 " + briefSure(rev.rounds || 1) + " 版" + (brief.stamp ? (" · " + brief.stamp) : "");
+    $("bm-body").innerHTML = briefBodyHtml(brief);
+    const hint = $("bm-hint");
+    if (hint) hint.textContent = "直接在框里改。点「确认」会先应用修改再执行；点「应用修改」只保存、继续审。";
+    const host = $("bm-decide");
+    host.innerHTML = "";
+    const opts = (ev.options && ev.options.length) ? ev.options : [{ value: "", label: "确认" }];
+    opts.forEach(function (opt) {
+      const label = String(opt.label || opt.value || "");
+      const act = label === "确认" ? "confirm" : label === "放弃" ? "abort" : "gap_ack";
+      const b = document.createElement("button");
+      b.type = "button";
+      b.textContent = label;
+      if (act === "abort") b.className = "bm-danger";
+      else b.className = "primary";
+      b.addEventListener("click", function () { briefSubmit(ev, act, String(opt.value == null ? "" : opt.value)); });
+      host.appendChild(b);
+    });
+    const apply = $("bm-apply");
+    if (apply) apply.onclick = function () { briefSubmit(ev, "edit", ""); };
+    const close = $("bm-close");
+    if (close) close.onclick = function () { state.briefCollapsed = true; renderQuestion(state.question); };
+    bindBriefBody();
+  }
+
+  /** 交付行增删用事件委托，body 重渲染也不用重新绑定。 */
+  function bindBriefBody() {
+    const body = $("bm-body");
+    if (!body) return;
+    body.onclick = function (e) {
+      const t = e.target;
+      if (!t || !t.classList) return;
+      if (t.classList.contains("bm-del-rm")) {
+        const row = t.closest(".bm-del");
+        if (row) row.remove();
+      } else if (t.classList.contains("bm-del-add")) {
+        const dels = t.closest(".bm-dels");
+        if (dels) {
+          const div = document.createElement("div");
+          div.className = "bm-del";
+          div.innerHTML = '<input class="bm-del-in" value=""><button type="button" class="bm-del-rm" title="删掉这条">×</button>';
+          dels.insertBefore(div, t);
+        }
+      }
+    };
+  }
+
+  function briefSetHint(text) { const h = $("bm-hint"); if (h) h.textContent = text; }
+  function briefReenable() {
+    const m = $("briefmodal");
+    if (m) Array.prototype.forEach.call(m.querySelectorAll(".bm-foot button"), function (b) { b.disabled = false; });
+    const body = $("bm-body");
+    if (body) body.classList.remove("bm-busy");
+  }
+
+  function briefSubmit(ev, action, legacyValue) {
+    if (!ev) return;
+    const dirty = briefDirty(ev);
+    if (action === "edit" && !dirty) { briefSetHint("没有检测到改动——直接在框里改，或点「确认」执行。"); return; }
+    const body = $("bm-body");
+    if (body) body.classList.add("bm-busy");
+    const m = $("briefmodal");
+    if (m) Array.prototype.forEach.call(m.querySelectorAll(".bm-foot button"), function (b) { b.disabled = true; });
+    let answer;
+    if (action === "abort") {
+      answer = "放弃";
+    } else if (action === "edit") {
+      answer = BRIEF_ANS_PREFIX + JSON.stringify({ action: "edit", brief: briefCollect(ev) });
+    } else if (dirty) {
+      answer = BRIEF_ANS_PREFIX + JSON.stringify({ action: action, brief: briefCollect(ev) });
+    } else {
+      answer = legacyValue;
+    }
+    const label = action === "edit" ? "应用修改" : action === "abort" ? "放弃" : action === "gap_ack" ? "确认缺口" : "确认";
+    briefSetHint("提交中：" + label + " ……");
+    getJSON("/api/answer", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ run_id: state.runId, question_id: String(ev.question_id || ""), answer: answer, kind: "brief" })
+    }).then(function (res) {
+      if (!res || !res.ok) {
+        briefSetHint("没写进去：" + ((res && res.error) || "未知原因"));
+        briefReenable();
+        return;
+      }
+      sysmsg("任务书裁决已提交：" + label + (dirty && action !== "abort" ? "（含修改）" : ""));
+      if (action === "edit") {
+        // 保持按钮禁用，等后端把新版任务书作为新 question 推回来，renderBriefModal 会重建并解禁。
+        briefSetHint("已提交修改，等新版任务书回来……（返回后自动刷新）");
+      } else {
+        briefSetHint("已提交：" + label + "，后续流程继续。");
+        setTimeout(closeBriefModal, 500);
+        briefReenable();
+      }
+    }).catch(function (e) {
+      briefSetHint("没写进去：" + String((e && e.message) || e));
+      briefReenable();
     });
   }
 

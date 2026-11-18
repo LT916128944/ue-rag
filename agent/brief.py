@@ -305,6 +305,11 @@ def _uncovered_deliverables(scope: dict, windows: list[dict], threshold: float =
 GAP_ACK_PHRASE = "确认缺口"
 GAP_ACK_ESCALATE_ENV = "UE_ESCALATE_GAPS"
 _LEGACY_CONFIRM_WORDS = ("确认", "confirm", "y", "yes", "ok", "通过")
+
+# 网页弹窗的人审答案前缀（20261118）：入口页把整份任务书渲染成可编辑表单，点「确认 / 应用修改 /
+# 放弃」时把这一行原样写进收件箱。答案是一条单行 JSON（json.dumps 不换行），
+# 由 `_parse_brief_answer` 解析。不带这个前缀的答案（终端输入的老口令）走原来的分支，逐字不变。
+BRIEF_ANSWER_PREFIX = "@@brief@@"
 _CONFIRM_WORD_RE = re.compile(r"(?:确认|confirm|yes|ok)", re.I)
 
 
@@ -1312,6 +1317,104 @@ def _apply_manual_edit(brief: dict, answer: str) -> tuple[bool, str]:
     return False, "字段只有 title / pending / del+ / del- / est / dep。输入 e help 看写法。"
 
 
+def _ask_with_extra(reader, prompt, extra):
+    """把当前这份任务书一并交给提问通道，网页弹窗据此渲染表单。
+
+    通道（`run_windows._ask`）新增了 `extra` 形参就带上；终端 `input` / 旧 reader 没有这个
+    形参，退回老的单参数调用，行为与改动前逐字一致。用签名探测而不是 try/except TypeError，
+    免得把 reader 内部真正的 TypeError 也当成「不收 extra」吞掉。"""
+    try:
+        import inspect
+
+        if "extra" in inspect.signature(reader).parameters:
+            return reader(prompt, extra=extra)
+    except (TypeError, ValueError):
+        pass
+    return reader(prompt)
+
+
+def _parse_brief_answer(answer: str):
+    """网页弹窗答案 → (action, edited_brief|None)。不是本协议的行返回 None，交回老分支。
+
+    action ∈ confirm / gap_ack / abort / edit：
+      confirm  = 确认（可带编辑，带编辑时先落编辑再确认）
+      gap_ack  = 确认缺口（缺口范围不做，其余执行）
+      abort    = 放弃
+      edit     = 只应用修改、继续停在人审门（相当于老终端的 e 就地编辑）
+    """
+    text = str(answer or "").strip()
+    if not text.startswith(BRIEF_ANSWER_PREFIX):
+        return None
+    try:
+        payload = json.loads(text[len(BRIEF_ANSWER_PREFIX):])
+    except (json.JSONDecodeError, ValueError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    action = str(payload.get("action") or "").strip()
+    if action not in ("confirm", "gap_ack", "abort", "edit"):
+        return None
+    brief_part = payload.get("brief")
+    return action, (brief_part if isinstance(brief_part, dict) else None)
+
+
+def _apply_structured_edit(brief: dict, edited: dict) -> tuple[bool, str]:
+    """把弹窗提交的整份任务书里的**文本字段**合并回现有 brief（就地改，不动结构）。
+
+    与 `_apply_manual_edit` 同一口径：只改 title / deliverables / pending_note / estimate_hours
+    和集成行，窗口动作、依赖、覆盖一律保持原样——那些要过动作表和槽位校验，只能走生成器。
+    这样不会因为重新 `validate_brief` 丢掉 `stamp` / `coverage` / `unresolved`，`write_brief`
+    也不会每次编辑都换一个新时间戳文件。"""
+    if not isinstance(edited, dict) or not isinstance(edited.get("scopes"), list):
+        return False, "改后的任务书缺少 scopes，未应用（保留上一版）。"
+    by_id = {
+        str(scope.get("id")): scope
+        for scope in edited.get("scopes") or []
+        if isinstance(scope, dict) and str(scope.get("id") or "").strip()
+    }
+    changed = 0
+    for scope in brief.get("scopes") or []:
+        src = by_id.get(str(scope.get("id")))
+        if not isinstance(src, dict):
+            continue
+        title = str(src.get("title") or "").strip()
+        if title and title != scope.get("title"):
+            scope["title"] = title
+            changed += 1
+        if isinstance(src.get("deliverables"), list):
+            items = [str(x).strip() for x in src.get("deliverables") or [] if str(x).strip()]
+            if items and items != (scope.get("deliverables") or []):
+                scope["deliverables"] = items
+                changed += 1
+        if "pending_note" in src:
+            note = str(src.get("pending_note") or "").strip()
+            if note != (scope.get("pending_note") or ""):
+                scope["pending_note"] = note
+                changed += 1
+        hours = _clamp_hours(src.get("estimate_hours"))
+        if hours is not None and list(hours) != list(scope.get("estimate_hours") or []):
+            scope["estimate_hours"] = hours
+            changed += 1
+    integ = edited.get("integration")
+    if isinstance(integ, dict) and isinstance(brief.get("integration"), dict):
+        target = brief["integration"]
+        title = str(integ.get("title") or "").strip()
+        if title and title != target.get("title"):
+            target["title"] = title
+            changed += 1
+        if isinstance(integ.get("deliverables"), list):
+            items = [str(x).strip() for x in integ.get("deliverables") or [] if str(x).strip()]
+            if items and items != (target.get("deliverables") or []):
+                target["deliverables"] = items
+                changed += 1
+        hours = _clamp_hours(integ.get("estimate_hours"))
+        if hours is not None and list(hours) != list(target.get("estimate_hours") or []):
+            target["estimate_hours"] = hours
+            changed += 1
+    _refresh_total(brief)
+    return True, (f"已应用 {changed} 处修改" if changed else "没有检测到改动")
+
+
 def _print_brief_pretty(brief: dict, printer=print) -> None:
     """人审门里给眼睛看的表。文件里落的仍是 render_brief_md 的 markdown。
 
@@ -1412,16 +1515,44 @@ def brief_flow(query: str, windows: list[dict] | None = None, complete=None,
         escalate = bool(gaps) and _escalate_gaps()
         # 缺口说明已在上面 _print_brief_pretty 里逐条摆过（见 _gap_ack_prompt），
         # 这里只给一行提示，不重复第二遍整段。
+        question_prompt = (
+            "任务书审阅（输入「" + GAP_ACK_PHRASE + "」或确认词才算表态 / 放弃 / "
+            "e 就地编辑，e help 看写法 / 写修改意见交生成器）: "
+            if escalate else
+            "任务书审阅（确认 / e 就地编辑，e help 看写法 / 写修改意见交生成器 / 放弃）: "
+        )
+        # 把当前这一版任务书一并交给通道：网页弹窗据此渲染可编辑表单，不再是那张截断的 ASCII 表。
+        question_extra = {
+            "brief": brief,
+            "brief_md": str(md) if md else "",
+            "brief_json": str(js) if js else "",
+            "gap_phrase": GAP_ACK_PHRASE,
+        }
         try:
-            answer = str(reader(
-                "任务书审阅（输入「" + GAP_ACK_PHRASE + "」或确认词才算表态 / 放弃 / "
-                "e 就地编辑，e help 看写法 / 写修改意见交生成器）: "
-                if escalate else
-                "任务书审阅（确认 / e 就地编辑，e help 看写法 / 写修改意见交生成器 / 放弃）: "
-            )).strip()
+            answer = str(_ask_with_extra(reader, question_prompt, question_extra)).strip()
         except (EOFError, KeyboardInterrupt):
             printer("\n放弃")
             return ("abort", brief, md, js)
+        structured = _parse_brief_answer(answer)
+        if structured is not None:
+            action, edited = structured
+            if edited is not None:
+                ok, note = _apply_structured_edit(brief, edited)
+                if not ok:
+                    printer(note)
+                    continue
+                edits += 1
+                printer("已应用你在网页上改的内容：" + note)
+            if action == "edit":
+                # 只保存修改、继续停在人审门：与老终端的 e 就地编辑同一条路，不增加审阅轮次。
+                brief["review"] = {"rounds": rounds, "status": "待确认"}
+                write_brief(brief, directory)
+                continue
+            if edited is not None:
+                brief["review"] = {"rounds": rounds, "status": "待确认"}
+                write_brief(brief, directory)
+            # 归一成 CLI 的老口令，下面的分支逐字复用。
+            answer = {"confirm": "", "gap_ack": GAP_ACK_PHRASE, "abort": "放弃"}.get(action, answer)
         if escalate and not answer:
             # 缺口 + 空输入：不是确认。只记录「问过一次但没表态」，继续循环。
             printer(

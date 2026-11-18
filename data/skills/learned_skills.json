@@ -165,7 +165,7 @@
     },
     {
       "id": "solver-caf546e4",
-      "when": "上一扇交接：\n{\"window\": \"W1\", \"unmet\": [], \"unmet_total\": 0, \"unmet_omitted\": 0, \"evid",
+      "when": "上一扇交接：\n{\"window\": \"S1\", \"unmet\": [], \"unmet_total\": 0, \"unmet_omitted\": 0, \"evid",
       "roles": [],
       "goals": [
         "apply_spec+build",
@@ -187,11 +187,11 @@
       ],
       "confidence": 0.5,
       "source_runs": [
-        "W2"
+        "W1"
       ],
       "conflicts": [],
       "version": 1,
-      "lru": 5,
+      "lru": 6,
       "status": "shadow"
     }
   ]

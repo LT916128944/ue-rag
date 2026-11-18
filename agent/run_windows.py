@@ -675,6 +675,57 @@ def _task_writes_source(window: dict) -> bool:
 
 # ---------- 一扇的执行 ----------
 
+def _maybe_attach_umg_spec(window: dict, action: str, query: str, complete=None) -> dict:
+    """非 FPS HUD 的控件图扇：执行前让模型产一份 UMG Spec 挂到窗口上，交给
+    `sequence.repair_blueprint` 里的 umg_spec 内核确定性落地 + 只读复核（20261118）。
+
+    只做「谁产 Spec」这一件事：产不出 / 是 FPS HUD（build_fps_hud 固定合同管）/ UMG 开关关着 /
+    窗口已有 spec 时，原样返回交回旧路径。离线没有模型 key 时 `produce` 立即返回 None，行为不变。
+    这样「给血条左边加头像框」这类任意控件需求不再只能停在 discover 猜 action，而是回到
+    「模型产 Spec → 脚本执行 → 复核」的正路。"""
+    if str(action) != "edit_widget_blueprint" or not isinstance(window, dict):
+        return window
+    if isinstance(window.get("spec"), dict) or isinstance(window.get("umg_spec"), dict):
+        return window
+    # FPS HUD 固定合同链（hud_windows 产出的删除扇/摆放扇）带 hud_controls / hud_op，交给
+    # build_fps_hud，不在这里产通用 Spec（否则会绕过合同判词）。
+    slots = window.get("slots") if isinstance(window.get("slots"), dict) else {}
+    if slots.get("hud_controls") or slots.get("hud_op"):
+        return window
+    try:
+        from config import allow_umg
+
+        if not allow_umg():
+            return window
+    except Exception:  # noqa: BLE001
+        pass
+    from agent.fps_hud import is_fps_hud_request
+
+    text = " ".join(str(window.get(key) or "") for key in ("query", "title", "summary"))
+    if is_fps_hud_request(f"{text} {query or ''}"):
+        return window
+    probe = dict(window)
+    probe["query"] = str(window.get("query") or query or window.get("title") or "")
+    try:
+        from agent import umg_spec
+
+        spec = umg_spec.produce(probe, complete=complete)
+    except Exception:  # noqa: BLE001
+        spec = None
+    if not isinstance(spec, dict):
+        return window
+    out = dict(window)
+    out["spec"] = spec
+    try:
+        from config import task_policy
+
+        for key, value in task_policy().items():
+            out.setdefault(key, value)
+    except Exception:  # noqa: BLE001
+        pass
+    return out
+
+
 def _run_window(entry: dict, state: _RunState, query: str, artifacts: dict, events: _EventBus, echo) -> dict:
     from agent.run_task import new_thread_id
 
@@ -712,6 +763,10 @@ def _run_window(entry: dict, state: _RunState, query: str, artifacts: dict, even
         if monolith_blueprint:
             from agent.sequence import repair_blueprint
 
+            # 非 FPS HUD 的控件图扇：先让模型产 UMG Spec，交给内核确定性落地 + 复核（20261118）。
+            window = _maybe_attach_umg_spec(window, action, query)
+            if isinstance(window.get("spec"), dict):
+                entry["task"] = {"action": action, "spec": window["spec"]}
             events.emit("window_state", window=entry["id"], state="running", attempt=1)
             summary = repair_blueprint(
                 {**window, "action": action, "query": query or window.get("title") or ""},
@@ -3108,7 +3163,7 @@ def _run_query(query: str, board, echo, emit) -> tuple[int, Path | None]:
                     board.stop()
                 print(text, flush=True)
 
-            def _ask(prompt="") -> str:
+            def _ask(prompt="", extra=None) -> str:
                 if board is not None and board.running():
                     board.stop()
                 from agent import ui_ask
@@ -3118,7 +3173,7 @@ def _run_query(query: str, board, echo, emit) -> tuple[int, Path | None]:
                     return input(prompt)
                 answer, source = channel.ask(
                     kind="brief", window="", prompt=str(prompt),
-                    options=ui_ask.brief_options(prompt), default="",
+                    options=ui_ask.brief_options(prompt), default="", extra=extra,
                 )
                 if source in ("eof", "timeout"):
                     # brief_flow 捕获 EOFError 即「放弃」；这里走同一条路，不替人确认。

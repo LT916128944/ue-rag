@@ -2593,9 +2593,20 @@ def _plan_windows_body(query: str, complete=None) -> dict:
         # 关着停在缺口，unresolved 进任务书等人表态。
         # 规则已经留下窗口时，缺口交给模型的结果要继续跑，不用求解扇把整句换掉。
         if not kept and not _covers_after_gate(query, intent, windows):
-            fan = _solve_fallback_windows(query)
-            if fan:
-                return _solver_fallback_plan(query, intent, understood=True, fan=fan)
+            # 模型（理解器，就是那个大模型）已经给出整句的窗口、且 unresolved 为空（它认为盖住了整句），
+            # 只是**纯规则词典**没认出某个半句（如「加头像框 / 配置图片」）：这不是能力缺口，是词典不够。
+            # 按「接不住就去问大模型 / 以已经问过的大模型为准」——不当用纯规则否决大模型的答案，
+            # 也不加关键词表、也不掉进受控求解（20261118）。注意这里不额外再叫一次模型：理解器已经问过。
+            pending_unresolved = [str(x) for x in (intent.get("unresolved") or []) if str(x).strip()]
+            trust_model = (
+                not pending_unresolved
+                and bool(windows)
+                and all(isinstance(window, dict) and window.get("realizable") for window in windows)
+            )
+            if not trust_model:
+                fan = _solve_fallback_windows(query)
+                if fan:
+                    return _solver_fallback_plan(query, intent, understood=True, fan=fan)
         decision = intent_decision(intent)
         decision.update({
             "understand_called": True,

@@ -1,0 +1,566 @@
+{
+  "run_id": "20261118-152628",
+  "query": "打开编辑器，给UI左下角血条左边隔10像素，添加一个头像框，里面可以配置图片。参考资产：/Game/UI/WBP_FpsHUD",
+  "source": "solver-fallback",
+  "started_at": "2026-11-18T15:26:28",
+  "updated_at": "2026-11-18T15:31:56",
+  "status": "部分完成",
+  "pid": 34768,
+  "heartbeat_at": "2026-11-18T15:31:56",
+  "review": {
+    "rounds": 1,
+    "status": "通过，附修改"
+  },
+  "brief": {
+    "query": "打开编辑器，给UI左下角血条左边隔10像素，添加一个头像框，里面可以配置图片。参考资产：/Game/UI/WBP_FpsHUD",
+    "scopes": [
+      {
+        "id": "A",
+        "title": "在 WBP_FpsHUD 左下角血条左侧 10 像素处新增可配置图片的头像框",
+        "deliverables": [
+          "在 /Game/UI/WBP_FpsHUD 的控件树中，血条控件左侧间隔 10 像素处新增头像框容器节点",
+          "头像框内新增图片控件，并把图片源（纹理/材质参数）暴露为可在设计器中直接配置的公开参数",
+          "头像框锚定左下角、与现有血条垂直对齐，尺寸与间距按 10 像素落地，且不遮挡 txt_RocketAmmo 等现有元素",
+          "上述控件树结构、图片参数暴露与绑定关系尚未完成，也未做任何编译与运行期验证"
+        ],
+        "pending_note": "受控求解方案：打开编辑器，给UI左下角血条左边隔10像素，添加一个头像框，里面可以配置图片。参考资产：/Game/UI/WBP_FpsHUD；现状：头像框控件尚未在控件树中创建，图片配置参数尚未暴露与绑定，左侧 10 像素间距与遮挡情况未验证。",
+        "depends_on": [],
+        "external_dep": "",
+        "windows": [
+          {
+            "id": "SBW-A-SOLVE",
+            "title": "受控求解：打开编辑器，给UI左下角血条左边隔10像素，添加一个头像框，里面可以配置图片。参考资产：/Game/UI/WBP_FpsHUD",
+            "action": "solve",
+            "slots": {},
+            "depends_on": [],
+            "max_retries": 1
+          }
+        ],
+        "estimate_hours": [
+          0.5,
+          1.0
+        ]
+      }
+    ],
+    "integration": {
+      "title": "累计集成、验证与交付",
+      "deliverables": [
+        "对头像框改动做一次只读复验：确认头像框位于血条左侧 10 像素、图片参数可配置且已绑定、未遮挡 txt_RocketAmmo 等现有控件"
+      ],
+      "estimate_hours": [
+        0.5,
+        1.0
+      ]
+    },
+    "external_dependencies": [],
+    "total_estimate": {
+      "min_hours": 1.0,
+      "max_hours": 2.0
+    },
+    "disclaimer": [
+      "任务之间有重叠",
+      "估算是粗的，不构成承诺",
+      "不含等待外部依赖的时间"
+    ],
+    "dropped": [],
+    "review": {
+      "rounds": 1,
+      "status": "通过，附修改"
+    },
+    "coverage": {
+      "scopes": [
+        {
+          "id": "A",
+          "title": "在 WBP_FpsHUD 左下角血条左侧 10 像素处新增可配置图片的头像框",
+          "count": 1,
+          "runnable": 1,
+          "actions": [
+            "solve"
+          ],
+          "declared": 1,
+          "rescued": 0,
+          "gap": false,
+          "blocked": false,
+          "external_dep": "",
+          "uncovered": [
+            "头像框内新增图片控件，并把图片源（纹理/材质参数）暴露为可在设计器中直接配置的公开参数",
+            "头像框锚定左下角、与现有血条垂直对齐，尺寸与间距按 10 像素落地，且不遮挡 txt_RocketAmmo 等现有元素",
+            "上述控件树结构、图片参数暴露与绑定关系尚未完成，也未做任何编译与运行期验证"
+          ]
+        }
+      ],
+      "total": 1,
+      "gaps": [],
+      "dry_run": true
+    },
+    "stamp": "20261118-152713",
+    "json_path": "E:\\UEProject\\AIWork\\RAG\\ue-rag\\data\\briefs\\20261118-152713-UI-10-Game-UI-WBP_FpsHU.json",
+    "manual_edits": 1
+  },
+  "scopes": [
+    {
+      "id": "A",
+      "title": "在 WBP_FpsHUD 左下角血条左侧 10 像素处新增可配置图片的头像框",
+      "window_ids": [
+        "W1",
+        "W2",
+        "S1"
+      ],
+      "external_dep": "",
+      "blocked": false,
+      "deliverables": [
+        "在 /Game/UI/WBP_FpsHUD 的控件树中，血条控件左侧间隔 10 像素处新增头像框容器节点",
+        "头像框内新增图片控件，并把图片源（纹理/材质参数）暴露为可在设计器中直接配置的公开参数",
+        "头像框锚定左下角、与现有血条垂直对齐，尺寸与间距按 10 像素落地，且不遮挡 txt_RocketAmmo 等现有元素",
+        "上述控件树结构、图片参数暴露与绑定关系尚未完成，也未做任何编译与运行期验证"
+      ],
+      "pending_note": "受控求解方案：打开编辑器，给UI左下角血条左边隔10像素，添加一个头像框，里面可以配置图片。参考资产：/Game/UI/WBP_FpsHUD；现状：头像框控件尚未在控件树中创建，图片配置参数尚未暴露与绑定，左侧 10 像素间距与遮挡情况未验证。",
+      "criteria": [
+        {
+          "id": "c-automation",
+          "text": "Automation 过滤器失败数为 0",
+          "evidence_kind": "automation",
+          "passed": true,
+          "windows": [
+            "W1",
+            "W2"
+          ],
+          "evidence_sha1": "e1d91e6ebdd0fcc1838381901130ef503e6df63f"
+        }
+      ]
+    },
+    {
+      "id": "INT",
+      "title": "累计集成、验证与交付",
+      "window_ids": [
+        "W3"
+      ],
+      "external_dep": "",
+      "blocked": false,
+      "deliverables": [
+        "对头像框改动做一次只读复验：确认头像框位于血条左侧 10 像素、图片参数可配置且已绑定、未遮挡 txt_RocketAmmo 等现有控件"
+      ],
+      "pending_note": "",
+      "kind": "integration",
+      "criteria": []
+    }
+  ],
+  "windows": {
+    "W1": {
+      "id": "W1",
+      "title": "受控求解：打开编辑器，给UI左下角血条左边隔10像素，添加一个头像框，里面可以配置图片。参考资产：/Game/UI/WBP_FpsHUD",
+      "action": "solve",
+      "depends_on": [
+        "S1"
+      ],
+      "state": "done",
+      "ok": true,
+      "result": {
+        "id": "W1",
+        "ok": true,
+        "summary": "求解收口：AIAgent.Fps.Hit 失败数 0（编辑器 0 次、编译 1 轮）"
+      },
+      "detail": {
+        "id": "W1",
+        "ok": true,
+        "retry_count": 0,
+        "tool_calls": 0,
+        "elapsed": 0,
+        "index_note": "求解收口：AIAgent.Fps.Hit 失败数 0（编辑器 0 次、编译 1 轮）",
+        "summary": "求解收口：AIAgent.Fps.Hit 失败数 0（编辑器 0 次、编译 1 轮）",
+        "thread_id": "task_20261118_152908_f8441b",
+        "trace": "",
+        "build": {
+          "ok": true,
+          "kind": "cpp_build",
+          "summary": "编译通过",
+          "build_rounds": 1
+        },
+        "test": {
+          "ok": true,
+          "kind": "automation",
+          "filter": "AIAgent.Fps.Hit",
+          "summary": "求解收口：AIAgent.Fps.Hit 失败数 0（编辑器 0 次、编译 1 轮）",
+          "errors": []
+        },
+        "judge_kind": "automation",
+        "retries": 0
+      },
+      "thread_id": "task_20261118_152908_f8441b",
+      "elapsed": 0,
+      "retries": 0,
+      "summary": "求解收口：AIAgent.Fps.Hit 失败数 0（编辑器 0 次、编译 1 轮）",
+      "snapshot": null,
+      "realizable": true,
+      "error": "",
+      "external_dep": "",
+      "window": {
+        "id": "W1",
+        "title": "受控求解：打开编辑器，给UI左下角血条左边隔10像素，添加一个头像框，里面可以配置图片。参考资产：/Game/UI/WBP_FpsHUD",
+        "action": "solve",
+        "slots": {},
+        "depends_on": [
+          "S1"
+        ],
+        "max_retries": 0,
+        "realizable": true,
+        "ok": true,
+        "blocked": false,
+        "goal": true,
+        "scope_text": "打开编辑器，给UI左下角血条左边隔10像素，添加一个头像框，里面可以配置图片。参考资产：/Game/UI/WBP_FpsHUD",
+        "task": {
+          "id": "SBW-A-SOLVE",
+          "action": "solve",
+          "title": "受控求解：打开编辑器，给UI左下角血条左边隔10像素，添加一个头像框，里面可以配置图片。参考资产：/Game/UI/WBP_FpsHUD",
+          "query": "打开编辑器，给UI左下角血条左边隔10像素，添加一个头像框，里面可以配置图片。参考资产：/Game/UI/WBP_FpsHUD",
+          "slots": {},
+          "allow_writes": [],
+          "max_retries": 0
+        },
+        "solver_plan": ""
+      },
+      "task": {
+        "id": "W1",
+        "action": "solve",
+        "title": "受控求解：打开编辑器，给UI左下角血条左边隔10像素，添加一个头像框，里面可以配置图片。参考资产：/Game/UI/WBP_FpsHUD",
+        "allow_writes": [],
+        "save": true,
+        "pie": true,
+        "max_retries": 0,
+        "verify": []
+      },
+      "stop_reason": "ok",
+      "stitch_model_requeue": 1
+    },
+    "W2": {
+      "id": "W2",
+      "title": "受控求解：在 WBP_FpsHUD 左下角血条左侧 10 像素处新增可配置图片的头像框",
+      "action": "solve",
+      "depends_on": [
+        "W1"
+      ],
+      "state": "failed",
+      "ok": false,
+      "result": {
+        "id": "W2",
+        "ok": false,
+        "summary": "求解执行完了但没有收口判据（没有 automation 过滤器），不算成功，不编证据"
+      },
+      "detail": {
+        "id": "W2",
+        "ok": false,
+        "retry_count": 0,
+        "tool_calls": 0,
+        "elapsed": 0,
+        "index_note": "求解执行完了但没有收口判据（没有 automation 过滤器），不算成功，不编证据",
+        "summary": "求解执行完了但没有收口判据（没有 automation 过滤器），不算成功，不编证据",
+        "thread_id": "task_20261118_153051_43983f",
+        "trace": "",
+        "error": "求解执行完了但没有收口判据（没有 automation 过滤器），不算成功，不编证据",
+        "retries": 0
+      },
+      "thread_id": "task_20261118_153051_43983f",
+      "elapsed": 0,
+      "retries": 0,
+      "summary": "求解执行完了但没有收口判据（没有 automation 过滤器），不算成功，不编证据",
+      "snapshot": null,
+      "realizable": true,
+      "error": "",
+      "external_dep": "",
+      "window": {
+        "id": "W2",
+        "title": "受控求解：在 WBP_FpsHUD 左下角血条左侧 10 像素处新增可配置图片的头像框",
+        "action": "solve",
+        "slots": {},
+        "depends_on": [
+          "W1"
+        ],
+        "max_retries": 0,
+        "realizable": true,
+        "ok": true,
+        "blocked": false,
+        "goal": true,
+        "scope_text": "在 WBP_FpsHUD 左下角血条左侧 10 像素处新增可配置图片的头像框；以下交付项没有窗口接住，交给受控求解（全部合并为一扇，只写一套代码）；头像框内新增图片控件，并把图片源（纹理/材质参数）暴露为可在设计器中直接配置的公开参数；头像框锚定左下角、与现有血条垂直对齐，尺寸与间距按 10 像素落地，且不遮挡 txt_RocketAmmo 等现有元素；上述控件树结构、图片参数暴露与绑定关系尚未完成，也未做任何编译与运行期验证",
+        "task": {
+          "id": "SBW-Acov-SOLVE",
+          "action": "solve",
+          "title": "受控求解：在 WBP_FpsHUD 左下角血条左侧 10 像素处新增可配置图片的头像框",
+          "query": "在 WBP_FpsHUD 左下角血条左侧 10 像素处新增可配置图片的头像框；以下交付项没有窗口接住，交给受控求解（全部合并为一扇，只写一套代码）；头像框内新增图片控件，并把图片源（纹理/材质参数）暴露为可在设计器中直接配置的公开参数；头像框锚定左下角、与现有血条垂直对齐，尺寸与间距按 10 像素落地，且不遮挡 txt_RocketAmmo 等现有元素；上述控件树结构、图片参数暴露与绑定关系尚未完成，也未做任何编译与运行期验证",
+          "slots": {},
+          "allow_writes": [],
+          "max_retries": 0
+        }
+      },
+      "task": {
+        "id": "W2",
+        "action": "solve",
+        "title": "受控求解：在 WBP_FpsHUD 左下角血条左侧 10 像素处新增可配置图片的头像框",
+        "allow_writes": [],
+        "save": true,
+        "pie": true,
+        "max_retries": 0,
+        "verify": []
+      },
+      "stop_reason": "judge_failed"
+    },
+    "W3": {
+      "id": "W3",
+      "title": "累计集成、验证与交付",
+      "action": "integrate_verify",
+      "depends_on": [
+        "W1",
+        "W2",
+        "S1"
+      ],
+      "state": "failed",
+      "ok": false,
+      "result": {
+        "id": "W3",
+        "ok": false,
+        "summary": "矩阵未全过：有窗口失败：W2（求解执行完了但没有收口判据（没有 automation 过滤器），不算成功，不编证据）；0 项通过口径、6 项不适用；触及文件 0 个；归档 E:\\UEProject\\AIWork\\RAG\\ue-rag\\data\\archive\\20261118-152628"
+      },
+      "detail": {
+        "id": "W3",
+        "ok": false,
+        "verdict": "",
+        "item_verdicts": {
+          "重复请求幂等": "not_applicable",
+          "拒答路径": "not_applicable",
+          "延迟窗口": "not_applicable",
+          "断线重连": "not_applicable",
+          "未知态恢复": "not_applicable",
+          "交付验收": "not_applicable"
+        },
+        "no_evidence_items": [],
+        "evidence_total": 0,
+        "summary": "矩阵未全过：有窗口失败：W2（求解执行完了但没有收口判据（没有 automation 过滤器），不算成功，不编证据）；0 项通过口径、6 项不适用；触及文件 0 个；归档 E:\\UEProject\\AIWork\\RAG\\ue-rag\\data\\archive\\20261118-152628",
+        "matrix": [
+          {
+            "item": "重复请求幂等",
+            "ok": null,
+            "note": "没有可复验的只读裁决，本次不适用",
+            "evidence_count": 0,
+            "scope_ids": [],
+            "verdict": "not_applicable"
+          },
+          {
+            "item": "拒答路径",
+            "ok": null,
+            "note": "本次没有拒答窗口，不适用",
+            "evidence_count": 0,
+            "scope_ids": [],
+            "verdict": "not_applicable"
+          },
+          {
+            "item": "延迟窗口",
+            "ok": null,
+            "note": "本次没有重试，不适用",
+            "evidence_count": 0,
+            "scope_ids": [],
+            "verdict": "not_applicable"
+          },
+          {
+            "item": "断线重连",
+            "ok": null,
+            "note": "本次无断线，不适用",
+            "evidence_count": 0,
+            "scope_ids": [],
+            "verdict": "not_applicable"
+          },
+          {
+            "item": "未知态恢复",
+            "ok": null,
+            "note": "每扇都有明确终态或未开始",
+            "evidence_count": 0,
+            "scope_ids": [],
+            "verdict": "not_applicable"
+          },
+          {
+            "item": "交付验收",
+            "ok": null,
+            "note": "本次没有产出任何条款，交付验收不适用",
+            "evidence_count": 0,
+            "scope_ids": [
+              "A"
+            ],
+            "verdict": "not_applicable"
+          }
+        ],
+        "hashes": [],
+        "totals": {
+          "elapsed": 11.3,
+          "retries": 0,
+          "prompt_tokens": 0,
+          "completion_tokens": 0
+        },
+        "archive": "E:\\UEProject\\AIWork\\RAG\\ue-rag\\data\\archive\\20261118-152628"
+      },
+      "thread_id": null,
+      "elapsed": null,
+      "retries": 0,
+      "summary": "矩阵未全过：有窗口失败：W2（求解执行完了但没有收口判据（没有 automation 过滤器），不算成功，不编证据）；0 项通过口径、6 项不适用；触及文件 0 个；归档 E:\\UEProject\\AIWork\\RAG\\ue-rag\\data\\archive\\20261118-152628",
+      "snapshot": null,
+      "realizable": true,
+      "error": "",
+      "external_dep": "",
+      "window": {
+        "id": "W3",
+        "title": "累计集成、验证与交付",
+        "action": "integrate_verify",
+        "slots": {},
+        "depends_on": [
+          "W1",
+          "W2",
+          "S1"
+        ],
+        "max_retries": 1,
+        "realizable": true,
+        "ok": true,
+        "blocked": false,
+        "save": true,
+        "pie": true
+      },
+      "stop_reason": "judge_failed"
+    },
+    "S1": {
+      "id": "S1",
+      "title": "edit_widget_blueprint",
+      "action": "edit_widget_blueprint",
+      "depends_on": [],
+      "state": "done",
+      "ok": true,
+      "result": {
+        "id": "S1",
+        "ok": true,
+        "summary": "/Game/UI/WBP_FpsHUD.WBP_FpsHUD 合同控件齐（新增 无，原本就在；图形血条（底条+填充条+数值）已就位），父类 FpsHUDWidget，已编译并保存这份资产。"
+      },
+      "detail": {
+        "ok": true,
+        "attempts": 1,
+        "exec_count": 17,
+        "tools": [
+          "GetWidgets",
+          "get_parent",
+          "set_anchor_preset",
+          "set_slot_property",
+          "set_anchor_preset",
+          "set_widget_property",
+          "set_slot_property",
+          "set_anchor_preset",
+          "set_widget_property",
+          "set_widget_property",
+          "set_slot_property",
+          "set_widget_property",
+          "set_slot_property",
+          "set_text",
+          "CompileWidgetBlueprint",
+          "save_assets",
+          "GetWidgets"
+        ],
+        "summary": "/Game/UI/WBP_FpsHUD.WBP_FpsHUD 合同控件齐（新增 无，原本就在；图形血条（底条+填充条+数值）已就位），父类 FpsHUDWidget，已编译并保存这份资产。",
+        "index_note": "/Game/UI/WBP_FpsHUD.WBP_FpsHUD 合同控件齐（新增 无，原本就在；图形血条（底条+填充条+数值）已就位），父类 FpsHUDWidget，已编译并保存这份资产。",
+        "ref": "/Game/UI/WBP_FpsHUD.WBP_FpsHUD",
+        "judge_kind": "widget_graph",
+        "test": {
+          "ok": true,
+          "kind": "widget_graph",
+          "summary": "/Game/UI/WBP_FpsHUD.WBP_FpsHUD 合同控件齐（新增 无，原本就在；图形血条（底条+填充条+数值）已就位），父类 FpsHUDWidget，已编译并保存这份资产。",
+          "errors": []
+        },
+        "id": "S1",
+        "elapsed": 11.318,
+        "retries": 0,
+        "widget_written": true
+      },
+      "thread_id": null,
+      "elapsed": 11.318,
+      "retries": 0,
+      "summary": "/Game/UI/WBP_FpsHUD.WBP_FpsHUD 合同控件齐（新增 无，原本就在；图形血条（底条+填充条+数值）已就位），父类 FpsHUDWidget，已编译并保存这份资产。",
+      "snapshot": null,
+      "realizable": true,
+      "error": "",
+      "external_dep": "",
+      "window": {
+        "id": "S1",
+        "title": "edit_widget_blueprint",
+        "action": "edit_widget_blueprint",
+        "slots": {},
+        "depends_on": [],
+        "max_retries": 1,
+        "realizable": true,
+        "supplement": true
+      },
+      "supplement": true,
+      "stop_reason": "ok"
+    }
+  },
+  "artifacts": {
+    "by_name": {
+      "S1": {
+        "ref": "/Game/UI/WBP_FpsHUD.WBP_FpsHUD",
+        "in_level": true
+      }
+    },
+    "target": {
+      "ref": "/Game/UI/WBP_FpsHUD.WBP_FpsHUD",
+      "in_level": true
+    }
+  },
+  "integration": {
+    "ok": false,
+    "status": "部分完成",
+    "summary": "完成 W1、S1；失败 W2、W3（无下游依赖，不阻塞别的范围）。有范围没完成：A（窗口没跑完：W2）、INT（窗口没跑完：W3）；有窗口失败：W2（求解执行完了但没有收口判据（没有 automation 过滤器），不算成功，不编证据）。集成不调用模型。",
+    "sentence": "failed"
+  },
+  "criteria": [],
+  "stitch_script": true,
+  "stitch_note": "模型补上一扇 S1 edit_widget_blueprint",
+  "stitch_model": true,
+  "stitch_tokens": {
+    "prompt_tokens": 302,
+    "completion_tokens": 376
+  },
+  "undelivered": [
+    {
+      "scope": "A",
+      "title": "在 WBP_FpsHUD 左下角血条左侧 10 像素处新增可配置图片的头像框",
+      "deliverables": [
+        "在 /Game/UI/WBP_FpsHUD 的控件树中，血条控件左侧间隔 10 像素处新增头像框容器节点",
+        "头像框内新增图片控件，并把图片源（纹理/材质参数）暴露为可在设计器中直接配置的公开参数",
+        "头像框锚定左下角、与现有血条垂直对齐，尺寸与间距按 10 像素落地，且不遮挡 txt_RocketAmmo 等现有元素",
+        "上述控件树结构、图片参数暴露与绑定关系尚未完成，也未做任何编译与运行期验证"
+      ],
+      "reason": "窗口没跑完：W2",
+      "gap": false,
+      "windows": [
+        {
+          "id": "W2",
+          "note": "求解执行完了但没有收口判据（没有 automation 过滤器），不算成功，不编证据"
+        }
+      ]
+    },
+    {
+      "scope": "INT",
+      "title": "累计集成、验证与交付",
+      "deliverables": [
+        "对头像框改动做一次只读复验：确认头像框位于血条左侧 10 像素、图片参数可配置且已绑定、未遮挡 txt_RocketAmmo 等现有控件"
+      ],
+      "reason": "窗口没跑完：W3",
+      "gap": false,
+      "windows": []
+    }
+  ],
+  "stale_candidates": [
+    {
+      "name": "open_marketplace",
+      "age_days": 22,
+      "hits": 2
+    },
+    {
+      "name": "建关卡",
+      "age_days": 21,
+      "hits": 122
+    }
+  ],
+  "sentence": "failed"
+}

@@ -57,6 +57,12 @@ _HB_FILL_COLOR = {"R": 0.12, "G": 0.80, "B": 0.25, "A": 1.0}
 # 句子里出现这些词，才认为它在要这些读数里的东西。
 _HUD_TOKENS = ("血条", "血量", "子弹", "弹药", "手雷", "载具", "时速", "上下车", "HUD")
 
+# 非合同控件：用户明确要加/改的、但 FPS HUD 合同（七个文本读数 + 血条图形）里没有的控件类型。
+# 出现它们说明这句不是「HUD 读数」请求（20261118-152628：「血条左边加头像框、里面配置图片」被
+# 「血条」+ 资产名里的 HUD 字面量判成 HUD 请求，build_fps_hud 便拿合同控件「原本就在」报成功——
+# 头像框一个字都没加，却记成成功）。返回 False 交回通用控件编辑路径 / 诚实失败，不再冒充 HUD。
+_EXTRA_WIDGET_RE = re.compile(r"头像框|头像|图片|贴图|缩略图|\bImage\b", re.I)
+
 # 「编译代码/编译工程」——点名要编译。排除「编译蓝图/编译控件」，那是另一扇。
 _CODE_COMPILE_RE = re.compile(r"(?<!图)(?<!蓝图)编译(?!蓝图|控件|图|BP_|WBP_)")
 
@@ -93,6 +99,9 @@ def gameplay_class(text: str) -> str:
 def is_fps_hud_request(text: str) -> bool:
     blob = str(text or "")
     if not any(token in blob for token in _HUD_TOKENS):
+        return False
+    # 要的是合同外的控件（头像框/图片…）就不是「纯 HUD 读数」请求：不能让合同控件冒充完成。
+    if _EXTRA_WIDGET_RE.search(blob):
         return False
     # 点了控件名就更确定：这些名字只有本合同用。
     if any(name in blob for name, *_ in HUD_LAYOUT):

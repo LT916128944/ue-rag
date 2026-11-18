@@ -44,6 +44,17 @@ jobs:
       # 掉进通用受控求解。钉「单读数 → hud-rules 且只落地所需控件，整句 HUD 仍全合同」。全离线。
       - name: check_hud_single_readout
         run: python eval/check_hud_single_readout.py
+      # 20261118-152628：控件需求（给血条左边加头像框、里面配置图片）被判「没盖住」→ 整句掉进
+      # 受控求解（automation 收口，UMG 产不出过滤器，必诚实失败）；stitch 补回的控件扇又被
+      # build_fps_hud 拿 FPS HUD 合同「原本就在」冒充成功。钉「控件需求走控件图路线、不被 HUD
+      # 合同冒充、真 HUD 不回归」。全离线（理解器替身 + 空检索标题）。
+      - name: check_widget_route
+        run: python eval/check_widget_route.py
+      # 20261118-152628 续修：把已建好的 UMG Spec 内核接进 run —— 非 FPS HUD 的控件图扇执行前
+      # 让模型按 SPEC_HINT 产 Spec，交给 umg_spec 内核确定性建 + 只读复核；产不出/HUD 链/开关关都
+      # 原样交回旧路径。全离线（模型替身 + 假 call）。
+      - name: check_umg_spec_produce
+        run: python eval/check_umg_spec_produce.py
       # FPS HUD 与 UMG 桥后续升级（Plan/20261029-1240）的四条护栏。全离线、不连编辑器：
       # 控件事件绑定走 blueprint.add_node(ComponentBoundEvent) 而非「无 action」；
       # NamedSlot/类级查询如实留在人工清单；AddWidget 的 childIndex 不再静默丢弃；
@@ -194,6 +205,10 @@ jobs:
       # 20261116「输入指令卡死」修复的配套断言（空壳 run + 空答案语义）。
       - name: check_entry_brief_confirm
         run: python eval/check_entry_brief_confirm.py
+      # 20261118 用户反馈：任务书只在后台日志里出一张截断的 ASCII 表，读不全也改不了。
+      # 钉弹窗方案：question(kind=brief) 带 brief → 网页可编辑表单 → @@brief@@ 一行结构化编辑/确认。
+      - name: check_entry_brief_modal
+        run: python eval/check_entry_brief_modal.py
       # 结构修复：run 记录必须在「规划 + 任务书人审」之前落盘，且 execute_windows 复用同一 run_id。
       - name: check_entry_run_scaffold
         run: python eval/check_entry_run_scaffold.py

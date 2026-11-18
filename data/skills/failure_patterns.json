@@ -92,19 +92,6 @@
       "conflicts": []
     },
     {
-      "id": "solver-fail-302466f1",
-      "symptom": "allow_python 未写，拒绝 run_python",
-      "symptom_detail": "",
-      "note": "求解 exec_failed：上一扇交接：\n{\"window\": \"W1\", \"unmet\": [], \"unmet_total\": 0, \"unmet_omitted\": 0, \"evidence\": [{\"kind\": \"editor_assert\", \"ok\": ",
-      "fix_tools": [],
-      "source_runs": [
-        "W2"
-      ],
-      "successes": 0,
-      "status": "shadow",
-      "conflicts": []
-    },
-    {
       "id": "solver-fail-b4cb4442",
       "symptom": "solver-no_criteria",
       "symptom_detail": "",
@@ -183,19 +170,6 @@
       "conflicts": []
     },
     {
-      "id": "solver-fail-caf546e4",
-      "symptom": "exit 6 Unhandled 1 aggregate exceptions\n",
-      "symptom_detail": "",
-      "note": "求解 build_failed：上一扇交接：\n{\"window\": \"W4\", \"unmet\": [], \"unmet_total\": 0, \"unmet_omitted\": 0, \"evidence\": [{\"kind\": \"cpp_build\", \"ok\": true",
-      "fix_tools": [],
-      "source_runs": [
-        "W5"
-      ],
-      "successes": 0,
-      "status": "shadow",
-      "conflicts": []
-    },
-    {
       "id": "solver-fail-484adff6",
       "symptom": "solver-no_criteria",
       "symptom_detail": "",
@@ -209,10 +183,23 @@
       "conflicts": []
     },
     {
-      "id": "solver-fail-97d170e1",
-      "symptom": "方案里没有可执行的步骤",
+      "id": "solver-fail-8ce76833",
+      "symptom": "solver-no_criteria",
       "symptom_detail": "",
-      "note": "求解 plan_failed：给 BP_TestEnemy 接上 OnPatrol、OnChase、OnMeleeAttack 的表现",
+      "note": "求解 no_criteria：打开编辑器，在关卡中世界原点添加一个点光源。参考关卡：/Game/Maps/L_NewTest",
+      "fix_tools": [],
+      "source_runs": [
+        "W1"
+      ],
+      "successes": 0,
+      "status": "shadow",
+      "conflicts": []
+    },
+    {
+      "id": "solver-plan-call-failed",
+      "symptom": "solver-plan-call-failed",
+      "symptom_detail": "",
+      "note": "求解方案层解析失败（call_failed）：模型调用失败：RuntimeError: BadRequestError: Error code: 400 - {'error': {'message': 'The supported API model names are deepseek-flash, deepseek-v4-pro, but you passed",
       "fix_tools": [],
       "source_runs": [
         "SBW-A-SOLVE"
@@ -222,13 +209,39 @@
       "conflicts": []
     },
     {
-      "id": "solver-fail-8ce76833",
+      "id": "solver-fail-97d170e1",
+      "symptom": "模型调用失败：RuntimeError: BadRequestError: Er",
+      "symptom_detail": "",
+      "note": "求解 plan_failed：打开编辑器，给UI左下角血条左边隔10像素，添加一个头像框，里面可以配置图片。参考资产：/Game/UI/WBP_FpsHUD",
+      "fix_tools": [],
+      "source_runs": [
+        "SBW-A-SOLVE"
+      ],
+      "successes": 0,
+      "status": "shadow",
+      "conflicts": []
+    },
+    {
+      "id": "solver-fail-302466f1",
       "symptom": "solver-no_criteria",
       "symptom_detail": "",
-      "note": "求解 no_criteria：打开编辑器，在关卡中世界原点添加一个点光源。参考关卡：/Game/Maps/L_NewTest",
+      "note": "求解 no_criteria：打开编辑器，给UI左下角血条左边隔10像素，添加一个头像框，里面可以配置图片。参考资产：/Game/UI/WBP_FpsHUD",
       "fix_tools": [],
       "source_runs": [
         "W1"
+      ],
+      "successes": 0,
+      "status": "shadow",
+      "conflicts": []
+    },
+    {
+      "id": "solver-fail-caf546e4",
+      "symptom": "solver-no_criteria",
+      "symptom_detail": "",
+      "note": "求解 no_criteria：。参考资产：/Game/UI/WBP_FpsHUD",
+      "fix_tools": [],
+      "source_runs": [
+        "SBW-A-SOLVE"
       ],
       "successes": 0,
       "status": "shadow",

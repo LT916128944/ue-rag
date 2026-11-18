@@ -56,6 +56,7 @@ OPS: dict[str, dict[str, dict]] = {
         "set_anchor": {"ns": "ui", "action": "set_anchor_preset", "note": "锚点"},
         "set_slot": {"ns": "ui", "action": "set_slot_property", "note": "槽位/位置尺寸"},
         "set_property": {"ns": "ui", "action": "set_widget_property", "note": "通用属性"},
+        "set_variable": {"ns": "ui", "action": "set_widget_is_variable", "note": "暴露成命名变量（bIsVariable）"},
         "set_brush": {"ns": "ui", "action": "set_brush", "note": "画刷"},
         "compile": {"ns": "ui", "action": "compile_widget", "note": "编译控件图"},
         "list_props": {"ns": "ui", "action": "list_widget_properties", "note": "抽读属性"},
